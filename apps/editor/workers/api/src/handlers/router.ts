@@ -39,7 +39,9 @@ import {
   deletePropertyImpl,
   deleteRowImpl,
   deleteViewImpl,
+  listDatabasesImpl,
   propertyDatabaseImpl,
+  relatedRowsImpl,
   rowDatabaseImpl,
   updatePropertyImpl,
   updateRowImpl,
@@ -293,6 +295,8 @@ const propertyType = z.enum([
   'phone',
   'person',
   'files',
+  'relation',
+  'rollup',
   'created_time',
   'created_by',
   'last_edited_time',
@@ -338,6 +342,37 @@ v1Router.post('/db/schema', async (c) => {
   const schema = await dbSchemaImpl(c.get('db'), parsed.data.databaseId);
   if (!schema) return c.json({ error: 'not found' }, 404);
   return c.json(schema, 200);
+});
+
+// Phase 6: list the workspace's databases (for the relation target picker).
+const dbListSchema = z.object({ workspaceId: z.string().uuid() });
+v1Router.post('/db/list', async (c) => {
+  const user = c.get('user');
+  const parsed = dbListSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const member = await isMemberImpl(c.get('db'), user.userId, parsed.data.workspaceId);
+  if (!member) return c.json({ error: 'not found' }, 404);
+  const databases = await listDatabasesImpl(c.get('db'), parsed.data.workspaceId);
+  return c.json(databases, 200);
+});
+
+// Phase 6: search a target database's rows for the relation cell picker.
+const relatedRowsSchema = z.object({
+  databaseId: z.string().uuid(),
+  q: z.string().max(255).optional(),
+});
+v1Router.post('/db/related-rows', async (c) => {
+  const user = c.get('user');
+  const parsed = relatedRowsSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.databaseId);
+  if (!can) return c.json({ error: 'not found' }, 404);
+  const rows = await relatedRowsImpl(c.get('db'), parsed.data.databaseId, parsed.data.q);
+  return c.json(rows, 200);
 });
 
 const propAddSchema = z.object({

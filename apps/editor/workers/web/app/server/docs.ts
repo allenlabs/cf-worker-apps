@@ -128,6 +128,8 @@ export type PropertyType =
   | 'phone'
   | 'person'
   | 'files'
+  | 'relation'
+  | 'rollup'
   | 'created_time'
   | 'created_by'
   | 'last_edited_time'
@@ -201,11 +203,29 @@ export interface DbRowMeta {
   createdByName: string | null;
 }
 
+/** A relation target resolved to a renderable chip (Phase 6). */
+export interface RelationChip {
+  id: string;
+  title: string;
+  icon?: string | null;
+}
+
+/** A workspace database (kind='database' page), for relation target pickers. */
+export interface DatabaseListItem {
+  id: string;
+  title: string;
+}
+
 export interface DbRow {
   id: string;
   title: string;
   props: Record<string, JsonValue>;
   meta: DbRowMeta;
+  // Phase 6: relation prop id → resolved chips (parallel to props, which holds
+  // the raw string[] of ids). Only present for relation props.
+  relations?: Record<string, RelationChip[]>;
+  // Phase 6: rollup prop id → read-only computed value.
+  rollups?: Record<string, JsonValue>;
 }
 
 // ---------- page version history (Phase 5) ----------
@@ -488,6 +508,28 @@ export function rowDeleteImpl(
   deps?: ApiClientDeps,
 ): Promise<{ ok: boolean }> {
   return apiPostImpl<{ ok: boolean }>(env, '/v1/db/row/delete', userBody(user, { id }), deps);
+}
+
+// ---------- relation / rollup impls (Phase 6) ----------
+
+/** List the workspace's databases (relation target picker). */
+export function dbListImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  workspaceId: string,
+  deps?: ApiClientDeps,
+): Promise<DatabaseListItem[]> {
+  return apiPostImpl<DatabaseListItem[]>(env, '/v1/db/list', userBody(user, { workspaceId }), deps);
+}
+
+/** Search a target database's rows for the relation cell picker. */
+export function relatedRowsImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { databaseId: string; q?: string },
+  deps?: ApiClientDeps,
+): Promise<RelationChip[]> {
+  return apiPostImpl<RelationChip[]>(env, '/v1/db/related-rows', userBody(user, input), deps);
 }
 
 // ---------- collaboration impls (Phase 4) ----------
@@ -819,6 +861,8 @@ const propertyTypeSchema = z.enum([
   'phone',
   'person',
   'files',
+  'relation',
+  'rollup',
   'created_time',
   'created_by',
   'last_edited_time',
@@ -968,6 +1012,24 @@ export const rowDelete = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
     const user = await requireUser();
     return rowDeleteImpl(getEnv(), user, data.id);
+  });
+
+// ---------- relation / rollup wrappers (Phase 6) ----------
+
+export const dbList = createServerFn({ method: 'GET' })
+  .inputValidator((d: unknown) => z.object({ workspaceId: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return dbListImpl(getEnv(), user, data.workspaceId);
+  });
+
+export const relatedRows = createServerFn({ method: 'GET' })
+  .inputValidator((d: unknown) =>
+    z.object({ databaseId: z.string().uuid(), q: z.string().max(255).optional() }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return relatedRowsImpl(getEnv(), user, data);
   });
 
 // ---------- collaboration wrappers (Phase 4) ----------

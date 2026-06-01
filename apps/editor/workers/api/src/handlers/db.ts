@@ -25,6 +25,14 @@ function jsonb(sql: Sql, value: Record<string, unknown>) {
   return sql.json(value as Parameters<Sql['json']>[0]);
 }
 
+/**
+ * As `jsonb`, but for any JSON value (arrays, primitives) — used by the
+ * dual-relation sync which writes a bare id string / id array into jsonb.
+ */
+function jsonbAny(sql: Sql, value: unknown) {
+  return sql.json(value as Parameters<Sql['json']>[0]);
+}
+
 // ---------- shapes ----------
 
 export type PropertyType =
@@ -40,6 +48,9 @@ export type PropertyType =
   | 'phone'
   | 'person'
   | 'files'
+  // Phase 6: cross-database linking + aggregation.
+  | 'relation'
+  | 'rollup'
   // AUTO / read-only — derived from the row page, never stored in db_props.
   | 'created_time'
   | 'created_by'
@@ -89,11 +100,23 @@ export interface DbRowMeta {
   createdByName: string | null;
 }
 
+/** A relation target resolved to a renderable chip. */
+export interface RelationChip {
+  id: string;
+  title: string;
+  icon?: string | null;
+}
+
 export interface DbRow {
   id: string;
   title: string;
   props: Record<string, unknown>;
   meta: DbRowMeta;
+  // Phase 6: relation prop id → resolved target chips (parallel to props, which
+  // still holds the raw string[] of ids). Only present for relation props.
+  relations?: Record<string, RelationChip[]>;
+  // Phase 6: rollup prop id → computed read-only value.
+  rollups?: Record<string, unknown>;
 }
 
 interface ViewConfig {
@@ -135,6 +158,54 @@ export async function rowDatabaseImpl(sql: Sql, rowId: string): Promise<string |
     SELECT database_id AS "databaseId" FROM editor.pages WHERE id = ${rowId} LIMIT 1
   `;
   return row?.databaseId ?? null;
+}
+
+// ---------- relation / rollup support (Phase 6) ----------
+
+/** A workspace database (a page with kind='database'), for relation pickers. */
+export interface DatabaseListItem {
+  id: string;
+  title: string;
+}
+
+/** List non-archived databases in a workspace (for the relation target picker). */
+export async function listDatabasesImpl(
+  sql: Sql,
+  workspaceId: string,
+): Promise<DatabaseListItem[]> {
+  const rows = await sql<{ id: string; title: string }[]>`
+    SELECT id, title FROM editor.pages
+    WHERE workspace_id = ${workspaceId} AND kind = 'database' AND archived = false
+    ORDER BY title ASC, created_at ASC
+  `;
+  return rows.map((r) => ({ id: r.id, title: r.title }));
+}
+
+/**
+ * Search a database's rows (pages with database_id set, not archived) by title.
+ * Returns up to 20 lightweight chips for the relation cell picker. With no `q`
+ * the most recent rows are returned.
+ */
+export async function relatedRowsImpl(
+  sql: Sql,
+  databaseId: string,
+  q?: string,
+): Promise<RelationChip[]> {
+  const term = q && q.trim() ? `%${q.trim()}%` : null;
+  const rows = term
+    ? await sql<{ id: string; title: string; icon: string | null }[]>`
+        SELECT id, title, icon FROM editor.pages
+        WHERE database_id = ${databaseId} AND archived = false AND title ILIKE ${term}
+        ORDER BY title ASC
+        LIMIT 20
+      `
+    : await sql<{ id: string; title: string; icon: string | null }[]>`
+        SELECT id, title, icon FROM editor.pages
+        WHERE database_id = ${databaseId} AND archived = false
+        ORDER BY created_at DESC
+        LIMIT 20
+      `;
+  return rows.map((r) => ({ id: r.id, title: r.title, icon: r.icon }));
 }
 
 // ---------- create database ----------
@@ -362,6 +433,86 @@ export async function deleteViewImpl(sql: Sql, id: string): Promise<boolean> {
 
 // ---------- rows ----------
 
+/** Coerce a cell value to a finite number (for numeric rollup fns), or null. */
+function toNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'boolean') return value ? 1 : 0;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+/** Coerce a cell value to an epoch-ms timestamp (for date rollup fns), or null. */
+function toTime(value: unknown): number | null {
+  if (typeof value !== 'string' || !value) return null;
+  const t = new Date(value.length === 10 ? `${value}T00:00:00` : value).getTime();
+  return Number.isNaN(t) ? null : t;
+}
+
+/**
+ * Apply a rollup aggregation `fn` to the list of source values pulled from the
+ * related rows' `targetPropId`. Returns a JSON-serializable computed value.
+ * Supports a solid core and degrades gracefully (unknown fns → count).
+ */
+export function computeRollup(fn: string, values: unknown[]): unknown {
+  const present = values.filter((v) => v !== null && v !== undefined && v !== '');
+  switch (fn) {
+    case 'count':
+      return values.length;
+    case 'count_values':
+      return present.length;
+    case 'show_unique':
+      return new Set(present.map((v) => JSON.stringify(v))).size;
+    case 'sum': {
+      const nums = present.map(toNumber).filter((n): n is number => n !== null);
+      return nums.reduce((a, b) => a + b, 0);
+    }
+    case 'average': {
+      const nums = present.map(toNumber).filter((n): n is number => n !== null);
+      return nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : null;
+    }
+    case 'median': {
+      const nums = present.map(toNumber).filter((n): n is number => n !== null).sort((a, b) => a - b);
+      if (!nums.length) return null;
+      const mid = Math.floor(nums.length / 2);
+      return nums.length % 2 ? nums[mid] : (nums[mid - 1]! + nums[mid]!) / 2;
+    }
+    case 'min': {
+      const nums = present.map(toNumber).filter((n): n is number => n !== null);
+      return nums.length ? Math.min(...nums) : null;
+    }
+    case 'max': {
+      const nums = present.map(toNumber).filter((n): n is number => n !== null);
+      return nums.length ? Math.max(...nums) : null;
+    }
+    case 'range': {
+      const nums = present.map(toNumber).filter((n): n is number => n !== null);
+      return nums.length ? Math.max(...nums) - Math.min(...nums) : null;
+    }
+    case 'earliest_date': {
+      const times = present.map(toTime).filter((t): t is number => t !== null);
+      return times.length ? new Date(Math.min(...times)).toISOString() : null;
+    }
+    case 'latest_date': {
+      const times = present.map(toTime).filter((t): t is number => t !== null);
+      return times.length ? new Date(Math.max(...times)).toISOString() : null;
+    }
+    case 'checked':
+      return values.filter((v) => v === true).length;
+    case 'unchecked':
+      return values.filter((v) => v !== true).length;
+    case 'percent_checked':
+      return values.length ? values.filter((v) => v === true).length / values.length : null;
+    case 'percent_unchecked':
+      return values.length ? values.filter((v) => v !== true).length / values.length : null;
+    default:
+      // Unknown/unsupported fn → degrade to a count so the cell still renders.
+      return values.length;
+  }
+}
+
 /** Compare two cell values for sorting; null/undefined sort last. */
 function compareValues(a: unknown, b: unknown): number {
   const an = a === null || a === undefined || a === '';
@@ -380,6 +531,140 @@ function passesFilter(row: DbRow, clause: { propId: string; value?: unknown }): 
   if (Array.isArray(cell)) return cell.map(String).includes(String(clause.value));
   if (typeof cell === 'boolean') return cell === Boolean(clause.value);
   return String(cell ?? '').toLowerCase().includes(String(clause.value).toLowerCase());
+}
+
+/**
+ * A target row's fields, as needed to resolve a rollup's source value across
+ * the supported `targetPropId` kinds (a stored prop, the title, or a meta date).
+ */
+interface TargetRowData {
+  title: string;
+  icon: string | null;
+  props: Record<string, unknown>;
+  createdTime: string;
+  lastEditedTime: string;
+}
+
+/**
+ * Resolve relation chips + compute rollups for a page of rows, using BATCHED
+ * queries (one query for all referenced target ids — no N+1).
+ *
+ * - For each `relation` prop, `props[propId]` is a string[] of target row ids;
+ *   we attach `row.relations[propId]` = resolved [{id,title,icon}] chips.
+ * - For each `rollup` prop, we follow `config.relationPropId` → ids → read each
+ *   target row's `config.targetPropId` value (a stored prop, 'title', or a
+ *   created/last-edited meta date) and apply `config.fn`; result lands in
+ *   `row.rollups[propId]`.
+ */
+async function resolveRelationsAndRollups(
+  sql: Sql,
+  databaseId: string,
+  rows: DbRow[],
+): Promise<void> {
+  const properties = await listPropertiesImpl(sql, databaseId);
+  const relationProps = properties.filter((p) => p.type === 'relation');
+  const rollupProps = properties.filter((p) => p.type === 'rollup');
+  if (relationProps.length === 0 && rollupProps.length === 0) return;
+
+  // Map each relation prop id → its config (for the relationPropId lookup), so
+  // a rollup can find the relation it rolls up. Build a quick prop index too.
+  const propById = new Map(properties.map((p) => [p.id, p]));
+
+  // Collect every target row id referenced across the whole page, from both
+  // relation props directly and from the relations that rollups depend on.
+  const relevantRelationIds = new Set<string>(relationProps.map((p) => p.id));
+  for (const rp of rollupProps) {
+    const relId = typeof rp.config.relationPropId === 'string' ? rp.config.relationPropId : '';
+    if (relId) relevantRelationIds.add(relId);
+  }
+
+  const allTargetIds = new Set<string>();
+  for (const row of rows) {
+    for (const relPropId of relevantRelationIds) {
+      const v = row.props[relPropId];
+      if (Array.isArray(v)) {
+        for (const id of v) if (typeof id === 'string') allTargetIds.add(id);
+      }
+    }
+  }
+
+  // Single batched fetch of every referenced target row (title/icon/props/meta).
+  const targets = new Map<string, TargetRowData>();
+  if (allTargetIds.size > 0) {
+    const fetched = await sql<
+      {
+        id: string;
+        title: string;
+        icon: string | null;
+        props: Record<string, unknown> | null;
+        createdTime: string;
+        lastEditedTime: string;
+      }[]
+    >`
+      SELECT id, title, icon, db_props AS props,
+             created_at AS "createdTime", updated_at AS "lastEditedTime"
+      FROM editor.pages
+      WHERE id IN ${sql([...allTargetIds])} AND archived = false
+    `;
+    for (const t of fetched) {
+      targets.set(t.id, {
+        title: t.title,
+        icon: t.icon,
+        props: t.props ?? {},
+        createdTime: String(t.createdTime),
+        lastEditedTime: String(t.lastEditedTime),
+      });
+    }
+  }
+
+  /** Read a target row's value for a rollup's `targetPropId`. */
+  function targetValue(target: TargetRowData, targetPropId: string): unknown {
+    if (targetPropId === 'title') return target.title;
+    if (targetPropId === 'created_time') return target.createdTime;
+    if (targetPropId === 'last_edited_time') return target.lastEditedTime;
+    return target.props[targetPropId] ?? null;
+  }
+
+  for (const row of rows) {
+    // Attach resolved chips for each relation prop (drop dangling ids).
+    if (relationProps.length > 0) {
+      const relations: Record<string, RelationChip[]> = {};
+      for (const rp of relationProps) {
+        const v = row.props[rp.id];
+        const ids = Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+        const chips: RelationChip[] = [];
+        for (const id of ids) {
+          const t = targets.get(id);
+          if (t) chips.push({ id, title: t.title, icon: t.icon });
+        }
+        relations[rp.id] = chips;
+      }
+      row.relations = relations;
+    }
+
+    // Compute each rollup from its relation's target rows.
+    if (rollupProps.length > 0) {
+      const rollups: Record<string, unknown> = {};
+      for (const rp of rollupProps) {
+        const relId = typeof rp.config.relationPropId === 'string' ? rp.config.relationPropId : '';
+        const targetPropId =
+          typeof rp.config.targetPropId === 'string' ? rp.config.targetPropId : '';
+        const fn = typeof rp.config.fn === 'string' ? rp.config.fn : 'count';
+        if (!relId || !propById.has(relId)) {
+          rollups[rp.id] = null;
+          continue;
+        }
+        const v = row.props[relId];
+        const ids = Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+        const values = ids
+          .map((id) => targets.get(id))
+          .filter((t): t is TargetRowData => t !== undefined)
+          .map((t) => targetValue(t, targetPropId));
+        rollups[rp.id] = computeRollup(fn, values);
+      }
+      row.rollups = rollups;
+    }
+  }
 }
 
 /**
@@ -425,6 +710,9 @@ export async function dbRowsImpl(
       createdByName: r.ownerName || r.ownerId || null,
     },
   }));
+
+  // Phase 6: resolve relation chips + compute rollups with BATCHED queries.
+  await resolveRelationsAndRollups(sql, databaseId, rows);
 
   if (!viewId) return rows;
   const [view] = await sql<{ config: ViewConfig | null }[]>`
@@ -478,6 +766,71 @@ export async function addRowImpl(
   };
 }
 
+/**
+ * Dual (two-way) relation sync. For each relation prop in `patch` that declares
+ * a `dualPropertyId`, diff the added/removed target ids and mirror this row's id
+ * into / out of each target row's reverse relation array. Best-effort: a missing
+ * dualPropertyId or non-array value is simply skipped, so single-direction
+ * relations behave exactly as before.
+ */
+async function syncDualRelations(
+  sql: Sql,
+  rowId: string,
+  databaseId: string,
+  beforeProps: Record<string, unknown>,
+  patchProps: Record<string, unknown>,
+): Promise<void> {
+  const properties = await listPropertiesImpl(sql, databaseId);
+  const relById = new Map(properties.filter((p) => p.type === 'relation').map((p) => [p.id, p]));
+
+  for (const [propId, rawNext] of Object.entries(patchProps)) {
+    const prop = relById.get(propId);
+    if (!prop) continue;
+    const dualPropId = typeof prop.config.dualPropertyId === 'string' ? prop.config.dualPropertyId : '';
+    if (!dualPropId) continue;
+
+    const asIds = (v: unknown): string[] =>
+      Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+    const before = new Set(asIds(beforeProps[propId]));
+    const after = new Set(asIds(rawNext));
+    const added = [...after].filter((x) => !before.has(x));
+    const removed = [...before].filter((x) => !after.has(x));
+
+    for (const targetId of added) {
+      // Append rowId to target.db_props[dualPropId] if not already present.
+      await sql`
+        UPDATE editor.pages
+        SET db_props = jsonb_set(
+              db_props,
+              ARRAY[${dualPropId}],
+              COALESCE(db_props -> ${dualPropId}, '[]'::jsonb) || ${jsonbAny(sql, [rowId])},
+              true
+            )
+        WHERE id = ${targetId} AND archived = false
+          AND NOT (COALESCE(db_props -> ${dualPropId}, '[]'::jsonb) ? ${rowId})
+      `;
+    }
+    for (const targetId of removed) {
+      // Remove rowId from target.db_props[dualPropId].
+      await sql`
+        UPDATE editor.pages
+        SET db_props = jsonb_set(
+              db_props,
+              ARRAY[${dualPropId}],
+              COALESCE(
+                (SELECT jsonb_agg(e) FROM jsonb_array_elements(db_props -> ${dualPropId}) e
+                 WHERE e <> ${jsonbAny(sql, rowId)}),
+                '[]'::jsonb
+              ),
+              true
+            )
+        WHERE id = ${targetId} AND archived = false
+          AND db_props ? ${dualPropId}
+      `;
+    }
+  }
+}
+
 export async function updateRowImpl(
   sql: Sql,
   id: string,
@@ -493,6 +846,12 @@ export async function updateRowImpl(
     if (rows.length > 0) touched = true;
   }
   if (patch.props !== undefined) {
+    // Read the prior props + the owning database first, so we can both merge
+    // and (for dual relations) diff added/removed target ids.
+    const [before] = await sql<{ props: Record<string, unknown> | null; databaseId: string | null }[]>`
+      SELECT db_props AS props, database_id AS "databaseId" FROM editor.pages
+      WHERE id = ${id} AND database_id IS NOT NULL AND archived = false LIMIT 1
+    `;
     // Merge the patch into the existing jsonb map (shallow merge by key).
     const rows = await sql`
       UPDATE editor.pages
@@ -500,7 +859,12 @@ export async function updateRowImpl(
       WHERE id = ${id} AND database_id IS NOT NULL AND archived = false
       RETURNING id
     `;
-    if (rows.length > 0) touched = true;
+    if (rows.length > 0) {
+      touched = true;
+      if (before?.databaseId) {
+        await syncDualRelations(sql, id, before.databaseId, before.props ?? {}, patch.props);
+      }
+    }
   }
   if (!touched && patch.title === undefined && patch.props === undefined) {
     // No-op patch: succeed iff the row exists.

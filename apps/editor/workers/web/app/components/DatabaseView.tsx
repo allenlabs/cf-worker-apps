@@ -11,9 +11,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   AUTO_PROPERTY_TYPES,
+  dbList as dbListFn,
   dbRows as dbRowsFn,
   dbSchema as dbSchemaFn,
   propAdd as propAddFn,
+  relatedRows as relatedRowsFn,
   rowAdd as rowAddFn,
   rowDelete as rowDeleteFn,
   rowUpdate as rowUpdateFn,
@@ -21,6 +23,7 @@ import {
   uploadFile as uploadFileFn,
   viewAdd as viewAddFn,
   viewUpdate as viewUpdateFn,
+  type DatabaseListItem,
   type DbProperty,
   type DbRow,
   type DbSchema,
@@ -28,6 +31,7 @@ import {
   type FileRef,
   type JsonValue,
   type PropertyType,
+  type RelationChip,
   type SelectOption,
   type ViewType,
 } from '~/server/docs';
@@ -45,6 +49,8 @@ const PROPERTY_TYPES: { value: PropertyType; label: string }[] = [
   { value: 'phone', label: 'Phone' },
   { value: 'person', label: 'Person' },
   { value: 'files', label: 'Files & media' },
+  { value: 'relation', label: 'Relation' },
+  { value: 'rollup', label: 'Rollup' },
   { value: 'created_time', label: 'Created time' },
   { value: 'created_by', label: 'Created by' },
   { value: 'last_edited_time', label: 'Last edited time' },
@@ -83,8 +89,33 @@ function readPropValue(row: DbRow, property: DbProperty): JsonValue {
   }
 }
 
+/** Format a rollup's computed value for display (percent/date/number aware). */
+function formatRollup(fn: string, value: JsonValue): string {
+  if (value === null || value === undefined) return '';
+  if (fn === 'percent_checked' || fn === 'percent_unchecked') {
+    return typeof value === 'number' ? `${Math.round(value * 100)}%` : String(value);
+  }
+  if (fn === 'latest_date' || fn === 'earliest_date') {
+    return typeof value === 'string' ? new Date(value).toLocaleDateString() : String(value);
+  }
+  if (typeof value === 'number') {
+    return Number.isInteger(value) ? String(value) : value.toFixed(2);
+  }
+  return String(value);
+}
+
 /** Human-friendly read-only text for any value (used by list/gallery/cards). */
 function renderValueText(row: DbRow, property: DbProperty): string {
+  // Relation + rollup read from their resolved/computed side-maps, not props.
+  if (property.type === 'relation') {
+    const chips = row.relations?.[property.id] ?? [];
+    return chips.map((c) => c.title || 'Untitled').join(', ');
+  }
+  if (property.type === 'rollup') {
+    const fn = typeof property.config.fn === 'string' ? property.config.fn : 'count';
+    const value = row.rollups?.[property.id] ?? null;
+    return formatRollup(fn, value);
+  }
   const value = readPropValue(row, property);
   if (value === null || value === undefined || value === '') return '';
   switch (property.type) {
@@ -139,10 +170,11 @@ function fileToBase64(file: File): Promise<string> {
 
 interface DatabaseViewProps {
   databaseId: string;
+  workspaceId: string;
   initialSchema: DbSchema;
 }
 
-export function DatabaseView({ databaseId, initialSchema }: DatabaseViewProps) {
+export function DatabaseView({ databaseId, workspaceId, initialSchema }: DatabaseViewProps) {
   const [schema, setSchema] = useState<DbSchema>(initialSchema);
   const [activeViewId, setActiveViewId] = useState<string>(
     initialSchema.views[0]?.id ?? '',
@@ -205,9 +237,16 @@ export function DatabaseView({ databaseId, initialSchema }: DatabaseViewProps) {
     setRows((prev) => prev.filter((r) => r.id !== id));
   }
 
-  async function handleAddProperty(name: string, type: PropertyType) {
-    const config =
-      SELECT_TYPES.has(type) || type === 'multi_select' ? { options: [] as SelectOption[] } : {};
+  async function handleAddProperty(
+    name: string,
+    type: PropertyType,
+    extraConfig?: Record<string, JsonValue>,
+  ) {
+    const config: Record<string, JsonValue> =
+      SELECT_TYPES.has(type) || type === 'multi_select'
+        ? { options: [] as unknown as JsonValue }
+        : {};
+    Object.assign(config, extraConfig ?? {});
     await propAddFn({ data: { databaseId, name, type, config } });
     await refreshSchema();
   }
@@ -341,12 +380,13 @@ export function DatabaseView({ databaseId, initialSchema }: DatabaseViewProps) {
         />
       ) : (
         <TableView
+          workspaceId={workspaceId}
           properties={schema.properties}
           rows={rows}
           onAddRow={() => void handleAddRow()}
           onPatchRow={(id, patch) => void handleRowPatch(id, patch)}
           onDeleteRow={(id) => void handleDeleteRow(id)}
-          onAddProperty={(name, type) => void handleAddProperty(name, type)}
+          onAddProperty={(name, type, config) => void handleAddProperty(name, type, config)}
           onAddOption={handleAddOption}
         />
       )}
@@ -363,16 +403,18 @@ async function propAddOptionViaUpdate(propertyId: string, options: SelectOption[
 // ---------- Table view ----------
 
 interface TableViewProps {
+  workspaceId: string;
   properties: DbProperty[];
   rows: DbRow[];
   onAddRow: () => void;
   onPatchRow: (id: string, patch: { title?: string; props?: Record<string, JsonValue> }) => void;
   onDeleteRow: (id: string) => void;
-  onAddProperty: (name: string, type: PropertyType) => void;
+  onAddProperty: (name: string, type: PropertyType, config?: Record<string, JsonValue>) => void;
   onAddOption: (property: DbProperty, name: string) => Promise<SelectOption>;
 }
 
 function TableView({
+  workspaceId,
   properties,
   rows,
   onAddRow,
@@ -385,14 +427,17 @@ function TableView({
   const [newPropName, setNewPropName] = useState('');
   const [newPropType, setNewPropType] = useState<PropertyType>('text');
 
-  function submitNewProp() {
+  function submitNewProp(config?: Record<string, JsonValue>) {
     const name = newPropName.trim();
     if (!name) return;
-    onAddProperty(name, newPropType);
+    onAddProperty(name, newPropType, config);
     setNewPropName('');
     setNewPropType('text');
     setAddingProp(false);
   }
+
+  // relation/rollup need extra config collected before the property is created.
+  const needsConfig = newPropType === 'relation' || newPropType === 'rollup';
 
   return (
     <div className="overflow-x-auto">
@@ -405,7 +450,7 @@ function TableView({
                 {p.name}
               </th>
             ))}
-            <th className="py-1.5 px-2 font-medium">
+            <th className="py-1.5 px-2 font-medium relative">
               {addingProp ? (
                 <span className="flex items-center gap-1">
                   <input
@@ -414,7 +459,7 @@ function TableView({
                     placeholder="Name"
                     value={newPropName}
                     onChange={(e) => setNewPropName(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && submitNewProp()}
+                    onKeyDown={(e) => e.key === 'Enter' && !needsConfig && submitNewProp()}
                   />
                   <select
                     className="border border-gray-300 rounded px-1 py-0.5 text-gray-800"
@@ -427,15 +472,33 @@ function TableView({
                       </option>
                     ))}
                   </select>
-                  <button className="text-gray-700 hover:text-gray-900" onClick={submitNewProp}>
-                    ✓
-                  </button>
+                  {needsConfig ? null : (
+                    <button
+                      className="text-gray-700 hover:text-gray-900"
+                      onClick={() => submitNewProp()}
+                    >
+                      ✓
+                    </button>
+                  )}
                   <button
                     className="text-gray-400 hover:text-gray-700"
                     onClick={() => setAddingProp(false)}
                   >
                     ✕
                   </button>
+                  {newPropType === 'relation' ? (
+                    <RelationConfigPanel
+                      workspaceId={workspaceId}
+                      onCancel={() => setAddingProp(false)}
+                      onConfirm={(config) => submitNewProp(config)}
+                    />
+                  ) : newPropType === 'rollup' ? (
+                    <RollupConfigPanel
+                      properties={properties}
+                      onCancel={() => setAddingProp(false)}
+                      onConfirm={(config) => submitNewProp(config)}
+                    />
+                  ) : null}
                 </span>
               ) : (
                 <button
@@ -471,8 +534,15 @@ function TableView({
               </td>
               {properties.map((p) => (
                 <td key={p.id} className="py-1 px-2">
-                  {AUTO_PROPERTY_TYPES.has(p.type) ? (
+                  {AUTO_PROPERTY_TYPES.has(p.type) || p.type === 'rollup' ? (
                     <span className="text-gray-500">{renderValueText(row, p) || '—'}</span>
+                  ) : p.type === 'relation' ? (
+                    <RelationCell
+                      property={p}
+                      chips={row.relations?.[p.id] ?? []}
+                      value={Array.isArray(row.props[p.id]) ? (row.props[p.id] as string[]) : []}
+                      onChange={(ids) => onPatchRow(row.id, { props: { [p.id]: ids } })}
+                    />
                   ) : (
                     <CellEditor
                       property={p}
@@ -713,6 +783,279 @@ function MultiSelectCell({ options, value, onChange, onAddOption }: MultiSelectC
           </div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+// ---------- Relation cell (search target DB via /v1/db/related-rows) ----------
+
+interface RelationCellProps {
+  property: DbProperty;
+  chips: RelationChip[];
+  value: string[];
+  onChange: (ids: string[]) => void;
+}
+
+function RelationCell({ property, chips, value, onChange }: RelationCellProps) {
+  const targetDatabaseId =
+    typeof property.config.targetDatabaseId === 'string' ? property.config.targetDatabaseId : '';
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const [results, setResults] = useState<RelationChip[]>([]);
+  // Remember labels for chosen ids so chips render even before a refetch.
+  const [labels, setLabels] = useState<Record<string, string>>(() =>
+    Object.fromEntries(chips.map((c) => [c.id, c.title])),
+  );
+
+  useEffect(() => {
+    setLabels((prev) => {
+      const next = { ...prev };
+      for (const c of chips) next[c.id] = c.title;
+      return next;
+    });
+  }, [chips]);
+
+  useEffect(() => {
+    if (!open || !targetDatabaseId) return;
+    let cancelled = false;
+    void relatedRowsFn({ data: { databaseId: targetDatabaseId, q } }).then((r) => {
+      if (!cancelled) setResults(r);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [q, open, targetDatabaseId]);
+
+  function toggle(chip: RelationChip) {
+    setLabels((prev) => ({ ...prev, [chip.id]: chip.title }));
+    onChange(value.includes(chip.id) ? value.filter((v) => v !== chip.id) : [...value, chip.id]);
+  }
+
+  if (!targetDatabaseId) {
+    return <span className="text-gray-300 text-xs">No target DB</span>;
+  }
+
+  return (
+    <div className="relative">
+      <button
+        className="flex flex-wrap gap-1 w-full text-left min-h-[1.25rem]"
+        onClick={() => setOpen((v) => !v)}
+        aria-label={property.name}
+      >
+        {value.length === 0 ? (
+          <span className="text-gray-300">—</span>
+        ) : (
+          value.map((id) => (
+            <a
+              key={id}
+              href={`/p/${id}`}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-blue-50 text-blue-700 rounded px-1 text-xs no-underline hover:underline"
+            >
+              {labels[id] ?? 'Untitled'}
+            </a>
+          ))
+        )}
+      </button>
+      {open ? (
+        <div className="absolute z-10 mt-1 bg-white border border-gray-200 rounded shadow p-1 min-w-[12rem]">
+          <input
+            autoFocus
+            className="border border-gray-300 rounded px-1 py-0.5 w-full text-xs mb-1"
+            placeholder="Search rows…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+          {results.map((r) => (
+            <label key={r.id} className="flex items-center gap-1 px-1 py-0.5 hover:bg-gray-50">
+              <input
+                type="checkbox"
+                checked={value.includes(r.id)}
+                onChange={() => toggle(r)}
+              />
+              <span className="text-xs truncate">
+                {r.icon ? `${r.icon} ` : ''}
+                {r.title || 'Untitled'}
+              </span>
+            </label>
+          ))}
+          {results.length === 0 ? (
+            <div className="text-xs text-gray-400 px-1 py-0.5">No matches</div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// ---------- Relation property config panel (pick the target database) ----------
+
+interface RelationConfigPanelProps {
+  workspaceId: string;
+  onCancel: () => void;
+  onConfirm: (config: Record<string, JsonValue>) => void;
+}
+
+function RelationConfigPanel({ workspaceId, onCancel, onConfirm }: RelationConfigPanelProps) {
+  const [databases, setDatabases] = useState<DatabaseListItem[]>([]);
+  const [targetId, setTargetId] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    void dbListFn({ data: { workspaceId } }).then((d) => {
+      if (!cancelled) setDatabases(d);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId]);
+
+  return (
+    <div className="absolute z-20 top-9 right-0 bg-white border border-gray-200 rounded shadow-lg p-2 min-w-[14rem] text-left font-normal">
+      <div className="text-xs text-gray-500 mb-1">Related to</div>
+      <select
+        className="border border-gray-300 rounded px-1 py-0.5 w-full text-sm text-gray-800 mb-2"
+        value={targetId}
+        onChange={(e) => setTargetId(e.target.value)}
+      >
+        <option value="">Choose a database…</option>
+        {databases.map((d) => (
+          <option key={d.id} value={d.id}>
+            {d.title || 'Untitled database'}
+          </option>
+        ))}
+      </select>
+      <div className="flex items-center justify-end gap-2">
+        <button className="text-xs text-gray-400 hover:text-gray-700" onClick={onCancel}>
+          Cancel
+        </button>
+        <button
+          className="text-xs text-blue-600 hover:text-blue-800 disabled:text-gray-300"
+          disabled={!targetId}
+          onClick={() => onConfirm({ targetDatabaseId: targetId })}
+        >
+          Add
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------- Rollup property config panel (relation → target prop → fn) ----------
+
+const ROLLUP_FNS: { value: string; label: string }[] = [
+  { value: 'count', label: 'Count all' },
+  { value: 'count_values', label: 'Count values' },
+  { value: 'show_unique', label: 'Count unique' },
+  { value: 'sum', label: 'Sum' },
+  { value: 'average', label: 'Average' },
+  { value: 'median', label: 'Median' },
+  { value: 'min', label: 'Min' },
+  { value: 'max', label: 'Max' },
+  { value: 'range', label: 'Range' },
+  { value: 'earliest_date', label: 'Earliest date' },
+  { value: 'latest_date', label: 'Latest date' },
+  { value: 'percent_checked', label: 'Percent checked' },
+  { value: 'percent_unchecked', label: 'Percent unchecked' },
+];
+
+interface RollupConfigPanelProps {
+  properties: DbProperty[];
+  onCancel: () => void;
+  onConfirm: (config: Record<string, JsonValue>) => void;
+}
+
+function RollupConfigPanel({ properties, onCancel, onConfirm }: RollupConfigPanelProps) {
+  const relationProps = properties.filter((p) => p.type === 'relation');
+  const [relationPropId, setRelationPropId] = useState('');
+  const [targetPropId, setTargetPropId] = useState('title');
+  const [fn, setFn] = useState('count');
+  const [targetProps, setTargetProps] = useState<DbProperty[]>([]);
+
+  // When the chosen relation changes, fetch its target DB schema for the
+  // target-property dropdown (reuses dbSchema).
+  useEffect(() => {
+    const rel = relationProps.find((p) => p.id === relationPropId);
+    const targetDbId =
+      rel && typeof rel.config.targetDatabaseId === 'string' ? rel.config.targetDatabaseId : '';
+    if (!targetDbId) {
+      setTargetProps([]);
+      return;
+    }
+    let cancelled = false;
+    void dbSchemaFn({ data: { databaseId: targetDbId } }).then((s) => {
+      if (!cancelled) setTargetProps(s.properties);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [relationPropId, relationProps]);
+
+  if (relationProps.length === 0) {
+    return (
+      <div className="absolute z-20 top-9 right-0 bg-white border border-gray-200 rounded shadow-lg p-2 min-w-[14rem] text-left font-normal text-xs text-gray-600">
+        Add a relation property first, then a rollup can aggregate it.
+        <div className="flex justify-end mt-1">
+          <button className="text-gray-400 hover:text-gray-700" onClick={onCancel}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="absolute z-20 top-9 right-0 bg-white border border-gray-200 rounded shadow-lg p-2 min-w-[15rem] text-left font-normal">
+      <div className="text-xs text-gray-500 mb-1">Relation</div>
+      <select
+        className="border border-gray-300 rounded px-1 py-0.5 w-full text-sm text-gray-800 mb-2"
+        value={relationPropId}
+        onChange={(e) => setRelationPropId(e.target.value)}
+      >
+        <option value="">Choose a relation…</option>
+        {relationProps.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name}
+          </option>
+        ))}
+      </select>
+      <div className="text-xs text-gray-500 mb-1">Property</div>
+      <select
+        className="border border-gray-300 rounded px-1 py-0.5 w-full text-sm text-gray-800 mb-2"
+        value={targetPropId}
+        onChange={(e) => setTargetPropId(e.target.value)}
+      >
+        <option value="title">Name (title)</option>
+        {targetProps.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name}
+          </option>
+        ))}
+      </select>
+      <div className="text-xs text-gray-500 mb-1">Calculate</div>
+      <select
+        className="border border-gray-300 rounded px-1 py-0.5 w-full text-sm text-gray-800 mb-2"
+        value={fn}
+        onChange={(e) => setFn(e.target.value)}
+      >
+        {ROLLUP_FNS.map((f) => (
+          <option key={f.value} value={f.value}>
+            {f.label}
+          </option>
+        ))}
+      </select>
+      <div className="flex items-center justify-end gap-2">
+        <button className="text-xs text-gray-400 hover:text-gray-700" onClick={onCancel}>
+          Cancel
+        </button>
+        <button
+          className="text-xs text-blue-600 hover:text-blue-800 disabled:text-gray-300"
+          disabled={!relationPropId}
+          onClick={() => onConfirm({ relationPropId, targetPropId, fn })}
+        >
+          Add
+        </button>
+      </div>
     </div>
   );
 }

@@ -319,7 +319,7 @@ function PageView() {
           </div>
 
           {isDatabase && schema ? (
-            <DatabaseView databaseId={pageId} initialSchema={schema} />
+            <DatabaseView databaseId={pageId} workspaceId={workspaceId} initialSchema={schema} />
           ) : mounted && token ? (
             <CollaborativeEditor
               value={page.snapshotHtml}
