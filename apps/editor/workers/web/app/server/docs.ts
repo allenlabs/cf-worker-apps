@@ -36,6 +36,30 @@ export interface CollabToken {
   docId: string;
 }
 
+// ---------- workspaces + page tree (Phase 1) ----------
+
+export interface Workspace {
+  id: string;
+  name: string;
+}
+
+export interface PageNode {
+  id: string;
+  title: string;
+  icon: string | null;
+  parentId: string | null;
+  position: number;
+}
+
+export interface PageFull {
+  id: string;
+  workspaceId: string;
+  parentId: string | null;
+  title: string;
+  icon: string | null;
+  snapshotHtml: string;
+}
+
 /** Fields the backend's HMAC layer trusts after verifying the signature. */
 function userBody(user: CurrentUser, extra: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -115,6 +139,73 @@ export function collabTokenImpl(
   return apiPostImpl<CollabToken>(env, '/v1/collab-token', userBody(user, { docId }), deps);
 }
 
+export function listWorkspacesImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  deps?: ApiClientDeps,
+): Promise<Workspace[]> {
+  return apiPostImpl<Workspace[]>(env, '/v1/workspaces/list', userBody(user), deps);
+}
+
+export function getTreeImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  workspaceId: string,
+  deps?: ApiClientDeps,
+): Promise<PageNode[]> {
+  return apiPostImpl<PageNode[]>(env, '/v1/pages/tree', userBody(user, { workspaceId }), deps);
+}
+
+export function createPageImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { workspaceId: string; parentId?: string | null; title?: string; icon?: string | null },
+  deps?: ApiClientDeps,
+): Promise<{ id: string; title: string; parentId: string | null }> {
+  return apiPostImpl<{ id: string; title: string; parentId: string | null }>(
+    env,
+    '/v1/pages/create',
+    userBody(user, input),
+    deps,
+  );
+}
+
+export function getPageImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  id: string,
+  deps?: ApiClientDeps,
+): Promise<PageFull> {
+  return apiPostImpl<PageFull>(env, '/v1/pages/get', userBody(user, { id }), deps);
+}
+
+export function updatePageImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { id: string; title?: string; icon?: string | null; snapshotHtml?: string },
+  deps?: ApiClientDeps,
+): Promise<{ ok: boolean }> {
+  return apiPostImpl<{ ok: boolean }>(env, '/v1/pages/update', userBody(user, input), deps);
+}
+
+export function movePageImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { id: string; parentId?: string | null; position?: number },
+  deps?: ApiClientDeps,
+): Promise<{ ok: boolean }> {
+  return apiPostImpl<{ ok: boolean }>(env, '/v1/pages/move', userBody(user, input), deps);
+}
+
+export function archivePageImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  id: string,
+  deps?: ApiClientDeps,
+): Promise<{ ok: boolean }> {
+  return apiPostImpl<{ ok: boolean }>(env, '/v1/pages/archive', userBody(user, { id }), deps);
+}
+
 // ---------- createServerFn wrappers ----------
 /* v8 ignore start */
 
@@ -171,6 +262,95 @@ export const collabToken = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
       const user = await requireUser();
     return collabTokenImpl(getEnv(), user, data.docId);
+  });
+
+// ---------- workspaces + page tree wrappers (Phase 1) ----------
+
+export const listWorkspaces = createServerFn({ method: 'GET' }).handler(async () => {
+  const user = await requireUser();
+  return listWorkspacesImpl(getEnv(), user);
+});
+
+export const getTree = createServerFn({ method: 'GET' })
+  .inputValidator((d: unknown) => z.object({ workspaceId: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return getTreeImpl(getEnv(), user, data.workspaceId);
+  });
+
+export const createPage = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        workspaceId: z.string().uuid(),
+        parentId: z.string().uuid().nullish(),
+        title: z.string().max(255).optional(),
+        icon: z.string().max(32).nullish(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return createPageImpl(getEnv(), user, {
+      workspaceId: data.workspaceId,
+      parentId: data.parentId ?? null,
+      title: data.title,
+      icon: data.icon ?? null,
+    });
+  });
+
+export const getPage = createServerFn({ method: 'GET' })
+  .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return getPageImpl(getEnv(), user, data.id);
+  });
+
+export const updatePage = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        id: z.string().uuid(),
+        title: z.string().max(255).optional(),
+        icon: z.string().max(32).nullish(),
+        snapshotHtml: z.string().optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return updatePageImpl(getEnv(), user, {
+      id: data.id,
+      title: data.title,
+      icon: data.icon === undefined ? undefined : data.icon ?? null,
+      snapshotHtml: data.snapshotHtml,
+    });
+  });
+
+export const movePage = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        id: z.string().uuid(),
+        parentId: z.string().uuid().nullish(),
+        position: z.number().optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return movePageImpl(getEnv(), user, {
+      id: data.id,
+      parentId: data.parentId === undefined ? undefined : data.parentId ?? null,
+      position: data.position,
+    });
+  });
+
+export const archivePage = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return archivePageImpl(getEnv(), user, data.id);
   });
 
 /* v8 ignore stop */
