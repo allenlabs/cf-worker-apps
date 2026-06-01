@@ -11,6 +11,7 @@
 // (docId === pageId), so ids are never re-issued — only re-parented/re-ordered.
 
 import type { Sql } from '../lib/db';
+import { captureVersionImpl } from './versions';
 
 export interface Workspace {
   id: string;
@@ -199,11 +200,17 @@ export interface UpdatePageInput {
   title?: string;
   icon?: string | null;
   snapshotHtml?: string;
+  /** Attribution for any version row captured when snapshot_html changes. */
+  author?: { id: string | null; name: string | null };
 }
 
 /**
  * Patch title/icon/snapshot on a page; bumps updated_at. Returns false if the
  * page doesn't exist (or is archived).
+ *
+ * When the patch carries a snapshot_html that DIFFERS from the page's current
+ * one, the PREVIOUS snapshot is first captured as a version row (Phase 5) —
+ * throttled + retention-capped inside captureVersionImpl.
  *
  * postgres.js expands a plain object passed to `sql(obj)` into `col = $n` pairs,
  * so we assemble only the columns present in the patch and append `updated_at`
@@ -217,7 +224,20 @@ export async function updatePageImpl(
   const assign: Record<string, unknown> = {};
   if (typeof patch.title === 'string') assign.title = patch.title.trim() || 'Untitled';
   if (patch.icon !== undefined) assign.icon = patch.icon;
-  if (typeof patch.snapshotHtml === 'string') assign.snapshot_html = patch.snapshotHtml;
+  if (typeof patch.snapshotHtml === 'string') {
+    // Capture the previous snapshot as a version BEFORE overwriting it, but
+    // only when the new html is genuinely different.
+    const existing = await getPageImpl(sql, id);
+    if (existing && existing.snapshotHtml !== patch.snapshotHtml) {
+      await captureVersionImpl(sql, {
+        pageId: id,
+        previousHtml: existing.snapshotHtml,
+        authorId: patch.author?.id ?? null,
+        authorName: patch.author?.name ?? null,
+      });
+    }
+    assign.snapshot_html = patch.snapshotHtml;
+  }
   if (Object.keys(assign).length === 0) {
     // No-op: succeed iff the page exists.
     return (await getPageImpl(sql, id)) !== null;

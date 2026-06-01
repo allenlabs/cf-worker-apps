@@ -37,7 +37,22 @@ export type PropertyType =
   | 'date'
   | 'url'
   | 'email'
-  | 'phone';
+  | 'phone'
+  | 'person'
+  | 'files'
+  // AUTO / read-only — derived from the row page, never stored in db_props.
+  | 'created_time'
+  | 'created_by'
+  | 'last_edited_time'
+  | 'last_edited_by';
+
+/** Auto property types are computed from the row page, not from db_props. */
+export const AUTO_PROPERTY_TYPES = new Set<string>([
+  'created_time',
+  'created_by',
+  'last_edited_time',
+  'last_edited_by',
+]);
 
 export interface DbProperty {
   id: string;
@@ -63,10 +78,22 @@ export interface DbSchema {
   views: DbView[];
 }
 
+/**
+ * Auto/meta fields derived from the row's page (not stored in db_props). Read
+ * by created_time / created_by / last_edited_time / last_edited_by cells.
+ */
+export interface DbRowMeta {
+  createdTime: string;
+  lastEditedTime: string;
+  createdById: string | null;
+  createdByName: string | null;
+}
+
 export interface DbRow {
   id: string;
   title: string;
   props: Record<string, unknown>;
+  meta: DbRowMeta;
 }
 
 interface ViewConfig {
@@ -281,8 +308,17 @@ export async function addViewImpl(
     SELECT MAX(position) AS "maxPos" FROM editor.db_views WHERE database_id = ${input.databaseId}
   `;
   const position = Number(maxRow?.maxPos ?? -1) + 1;
-  const type = input.type === 'board' ? 'board' : 'table';
-  const name = input.name?.trim() || (type === 'board' ? 'Board' : 'Table');
+  const KNOWN_VIEW_TYPES = new Set(['table', 'board', 'list', 'gallery', 'calendar', 'timeline']);
+  const type = KNOWN_VIEW_TYPES.has(input.type) ? input.type : 'table';
+  const DEFAULT_NAMES: Record<string, string> = {
+    table: 'Table',
+    board: 'Board',
+    list: 'List',
+    gallery: 'Gallery',
+    calendar: 'Calendar',
+    timeline: 'Timeline',
+  };
+  const name = input.name?.trim() || DEFAULT_NAMES[type] || 'View';
   const [row] = await sql<
     {
       id: string;
@@ -356,13 +392,39 @@ export async function dbRowsImpl(
   databaseId: string,
   viewId?: string,
 ): Promise<DbRow[]> {
-  const raw = await sql<{ id: string; title: string; props: Record<string, unknown> }[]>`
-    SELECT id, title, db_props AS props
-    FROM editor.pages
-    WHERE database_id = ${databaseId} AND archived = false
-    ORDER BY position ASC, created_at ASC
+  // Join the user directory so created_by / last_edited_by auto cells can show
+  // a name. Pages don't track a separate editor, so created_by and
+  // last_edited_by both resolve to the page owner (best available signal).
+  const raw = await sql<
+    {
+      id: string;
+      title: string;
+      props: Record<string, unknown>;
+      createdTime: string;
+      lastEditedTime: string;
+      ownerId: string;
+      ownerName: string | null;
+    }[]
+  >`
+    SELECT p.id, p.title, p.db_props AS props,
+           p.created_at AS "createdTime", p.updated_at AS "lastEditedTime",
+           p.owner_id AS "ownerId", u.name AS "ownerName"
+    FROM editor.pages p
+    LEFT JOIN editor.users u ON u.user_id = p.owner_id
+    WHERE p.database_id = ${databaseId} AND p.archived = false
+    ORDER BY p.position ASC, p.created_at ASC
   `;
-  let rows: DbRow[] = raw.map((r) => ({ id: r.id, title: r.title, props: r.props ?? {} }));
+  let rows: DbRow[] = raw.map((r) => ({
+    id: r.id,
+    title: r.title,
+    props: r.props ?? {},
+    meta: {
+      createdTime: String(r.createdTime),
+      lastEditedTime: String(r.lastEditedTime),
+      createdById: r.ownerId ?? null,
+      createdByName: r.ownerName || r.ownerId || null,
+    },
+  }));
 
   if (!viewId) return rows;
   const [view] = await sql<{ config: ViewConfig | null }[]>`
@@ -405,7 +467,15 @@ export async function addRowImpl(
     title: input.title?.trim() || 'Untitled',
   });
   await sql`UPDATE editor.pages SET database_id = ${input.databaseId} WHERE id = ${created.id}`;
-  return { id: created.id, title: created.title, props: {} };
+  // Freshly-created row: meta is filled on the next /db/rows read; return a
+  // best-effort placeholder so the shape stays consistent.
+  const nowIso = new Date().toISOString();
+  return {
+    id: created.id,
+    title: created.title,
+    props: {},
+    meta: { createdTime: nowIso, lastEditedTime: nowIso, createdById: ownerId, createdByName: null },
+  };
 }
 
 export async function updateRowImpl(

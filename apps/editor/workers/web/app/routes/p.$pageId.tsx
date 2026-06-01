@@ -5,6 +5,7 @@ import '@allenlabs/editor/styles.css';
 import { Sidebar } from '~/components/Sidebar';
 import { DatabaseView } from '~/components/DatabaseView';
 import { CommentsPanel } from '~/components/CommentsPanel';
+import { VersionHistoryPanel } from '~/components/VersionHistoryPanel';
 import {
   collabToken,
   createPage,
@@ -125,6 +126,7 @@ function PageView() {
   const [isPublic, setIsPublic] = useState(page?.public ?? false);
   const [shareOpen, setShareOpen] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const shareUrl = `${SHARE_BASE}${pageId}`;
 
@@ -230,6 +232,18 @@ function PageView() {
             >
               💬
             </button>
+            {isDatabase ? null : (
+              <button
+                className={`px-2 py-1 rounded text-sm hover:bg-gray-100 ${
+                  historyOpen ? 'text-gray-900' : 'text-gray-500'
+                }`}
+                onClick={() => setHistoryOpen((v) => !v)}
+                title="Version history"
+                aria-label="Toggle version history"
+              >
+                History
+              </button>
+            )}
 
             {shareOpen ? (
               <div className="absolute right-0 top-9 z-20 w-72 bg-white border border-gray-200 rounded shadow-lg p-3 text-sm">
@@ -339,6 +353,9 @@ function PageView() {
       </div>
       {commentsOpen ? (
         <CommentsPanel pageId={pageId} onClose={() => setCommentsOpen(false)} />
+      ) : null}
+      {historyOpen && !isDatabase ? (
+        <VersionHistoryPanel pageId={pageId} onClose={() => setHistoryOpen(false)} />
       ) : null}
     </div>
   );

@@ -62,6 +62,12 @@ import {
   setPublicImpl,
   trashListImpl,
 } from './collab';
+import {
+  restoreVersionImpl,
+  versionGetImpl,
+  versionPageImpl,
+  versionsListImpl,
+} from './versions';
 import { mintCollabToken } from '../lib/hmac';
 import type { AppBindings } from '../context';
 
@@ -154,6 +160,7 @@ v1Router.post('/pages/update', async (c) => {
     title: parsed.data.title,
     icon: parsed.data.icon === undefined ? undefined : parsed.data.icon ?? null,
     snapshotHtml: parsed.data.snapshotHtml,
+    author: { id: user.userId, name: user.userName },
   });
   if (!ok) return c.json({ error: 'not found' }, 404);
   return c.json({ ok: true }, 200);
@@ -284,6 +291,12 @@ const propertyType = z.enum([
   'url',
   'email',
   'phone',
+  'person',
+  'files',
+  'created_time',
+  'created_by',
+  'last_edited_time',
+  'last_edited_by',
 ]);
 
 const dbCreateSchema = z.object({
@@ -390,9 +403,11 @@ v1Router.post('/db/property/delete', async (c) => {
   return c.json({ ok: true }, 200);
 });
 
+const viewType = z.enum(['table', 'board', 'list', 'gallery', 'calendar', 'timeline']);
+
 const viewAddSchema = z.object({
   databaseId: z.string().uuid(),
-  type: z.enum(['table', 'board']),
+  type: viewType,
   name: z.string().max(120).optional(),
   config: z.record(z.string(), z.unknown()).optional(),
 });
@@ -682,6 +697,59 @@ v1Router.post('/comments/delete', async (c) => {
   const can = await canAccessPageImpl(c.get('db'), user.userId, pageId);
   if (!can) return c.json({ error: 'not found' }, 404);
   const ok = await commentDeleteImpl(c.get('db'), parsed.data.id);
+  if (!ok) return c.json({ error: 'not found' }, 404);
+  return c.json({ ok: true }, 200);
+});
+
+// ---------- page version history (Phase 5) ----------
+//
+// Versions are captured automatically on the snapshot-write path (see
+// updatePageImpl). These routes list/read/restore them; all membership-gated
+// via the page's workspace (canAccessPageImpl).
+
+const versionsListSchema = z.object({ pageId: z.string().uuid() });
+v1Router.post('/pages/versions', async (c) => {
+  const user = c.get('user');
+  const parsed = versionsListSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.pageId);
+  if (!can) return c.json({ error: 'not found' }, 404);
+  const versions = await versionsListImpl(c.get('db'), parsed.data.pageId);
+  return c.json(versions, 200);
+});
+
+v1Router.post('/pages/versions/get', async (c) => {
+  const user = c.get('user');
+  const parsed = idSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  // Resolve the version → its page → the page's workspace for the access gate.
+  const pageId = await versionPageImpl(c.get('db'), parsed.data.id);
+  if (!pageId) return c.json({ error: 'not found' }, 404);
+  const can = await canAccessPageImpl(c.get('db'), user.userId, pageId);
+  if (!can) return c.json({ error: 'not found' }, 404);
+  const content = await versionGetImpl(c.get('db'), parsed.data.id);
+  if (!content) return c.json({ error: 'not found' }, 404);
+  return c.json(content, 200);
+});
+
+v1Router.post('/pages/versions/restore', async (c) => {
+  const user = c.get('user');
+  const parsed = idSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const pageId = await versionPageImpl(c.get('db'), parsed.data.id);
+  if (!pageId) return c.json({ error: 'not found' }, 404);
+  const can = await canAccessPageImpl(c.get('db'), user.userId, pageId);
+  if (!can) return c.json({ error: 'not found' }, 404);
+  const ok = await restoreVersionImpl(c.get('db'), parsed.data.id, {
+    authorId: user.userId,
+    authorName: user.userName,
+  });
   if (!ok) return c.json({ error: 'not found' }, 404);
   return c.json({ ok: true }, 200);
 });

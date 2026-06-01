@@ -125,7 +125,29 @@ export type PropertyType =
   | 'date'
   | 'url'
   | 'email'
-  | 'phone';
+  | 'phone'
+  | 'person'
+  | 'files'
+  | 'created_time'
+  | 'created_by'
+  | 'last_edited_time'
+  | 'last_edited_by';
+
+/** Read-only property types derived from the row page (not stored in props). */
+export const AUTO_PROPERTY_TYPES = new Set<string>([
+  'created_time',
+  'created_by',
+  'last_edited_time',
+  'last_edited_by',
+]);
+
+export type ViewType = 'table' | 'board' | 'list' | 'gallery' | 'calendar' | 'timeline';
+
+/** A {url,name} entry for a `files` property value. */
+export interface FileRef {
+  url: string;
+  name: string;
+}
 
 export interface SelectOption {
   id: string;
@@ -150,7 +172,9 @@ export interface DbProperty {
 export interface DbViewConfig {
   filters?: { propId: string; value?: JsonValue }[];
   sorts?: { propId: string; dir?: 'asc' | 'desc' }[];
-  groupBy?: string;
+  groupBy?: string; // board: select/status prop to column by
+  datePropId?: string; // calendar/timeline: date prop to place rows by
+  cardPropId?: string; // gallery: prop shown as the card preview
   visible?: string[];
 }
 
@@ -169,10 +193,31 @@ export interface DbSchema {
   views: DbView[];
 }
 
+/** Auto/meta fields derived from the row page (created/last-edited cells). */
+export interface DbRowMeta {
+  createdTime: string;
+  lastEditedTime: string;
+  createdById: string | null;
+  createdByName: string | null;
+}
+
 export interface DbRow {
   id: string;
   title: string;
   props: Record<string, JsonValue>;
+  meta: DbRowMeta;
+}
+
+// ---------- page version history (Phase 5) ----------
+
+export interface VersionMeta {
+  id: string;
+  authorName: string | null;
+  createdAt: string;
+}
+
+export interface VersionContent {
+  snapshotHtml: string;
 }
 
 /** Fields the backend's HMAC layer trusts after verifying the signature. */
@@ -385,7 +430,7 @@ export function propDeleteImpl(
 export function viewAddImpl(
   env: ApiClientEnv,
   user: CurrentUser,
-  input: { databaseId: string; type: 'table' | 'board'; name?: string; config?: Record<string, unknown> },
+  input: { databaseId: string; type: ViewType; name?: string; config?: Record<string, unknown> },
   deps?: ApiClientDeps,
 ): Promise<DbView> {
   return apiPostImpl<DbView>(env, '/v1/db/view/add', userBody(user, input), deps);
@@ -566,6 +611,35 @@ export function commentDeleteImpl(
   return apiPostImpl<{ ok: boolean }>(env, '/v1/comments/delete', userBody(user, { id }), deps);
 }
 
+// ---------- version history impls (Phase 5) ----------
+
+export function versionsListImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  pageId: string,
+  deps?: ApiClientDeps,
+): Promise<VersionMeta[]> {
+  return apiPostImpl<VersionMeta[]>(env, '/v1/pages/versions', userBody(user, { pageId }), deps);
+}
+
+export function versionGetImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  id: string,
+  deps?: ApiClientDeps,
+): Promise<VersionContent> {
+  return apiPostImpl<VersionContent>(env, '/v1/pages/versions/get', userBody(user, { id }), deps);
+}
+
+export function versionRestoreImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  id: string,
+  deps?: ApiClientDeps,
+): Promise<{ ok: boolean }> {
+  return apiPostImpl<{ ok: boolean }>(env, '/v1/pages/versions/restore', userBody(user, { id }), deps);
+}
+
 // ---------- createServerFn wrappers ----------
 /* v8 ignore start */
 
@@ -743,7 +817,15 @@ const propertyTypeSchema = z.enum([
   'url',
   'email',
   'phone',
+  'person',
+  'files',
+  'created_time',
+  'created_by',
+  'last_edited_time',
+  'last_edited_by',
 ]);
+
+const viewTypeSchema = z.enum(['table', 'board', 'list', 'gallery', 'calendar', 'timeline']);
 
 export const dbCreate = createServerFn({ method: 'POST' })
   .inputValidator((d: unknown) =>
@@ -815,7 +897,7 @@ export const viewAdd = createServerFn({ method: 'POST' })
     z
       .object({
         databaseId: z.string().uuid(),
-        type: z.enum(['table', 'board']),
+        type: viewTypeSchema,
         name: z.string().max(120).optional(),
         config: z.record(z.string(), z.unknown()).optional(),
       })
@@ -977,6 +1059,29 @@ export const commentDelete = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
     const user = await requireUser();
     return commentDeleteImpl(getEnv(), user, data.id);
+  });
+
+// ---------- version history wrappers (Phase 5) ----------
+
+export const versionsList = createServerFn({ method: 'GET' })
+  .inputValidator((d: unknown) => z.object({ pageId: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return versionsListImpl(getEnv(), user, data.pageId);
+  });
+
+export const versionGet = createServerFn({ method: 'GET' })
+  .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return versionGetImpl(getEnv(), user, data.id);
+  });
+
+export const versionRestore = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return versionRestoreImpl(getEnv(), user, data.id);
   });
 
 /* v8 ignore stop */
