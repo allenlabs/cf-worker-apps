@@ -1,11 +1,26 @@
 // Persistent left rail: workspace header (switcher when >1) + the recursive,
-// collapsible page tree. All page navigation is a full-page load — the client
-// root loader returns user:null on client nav, so we use window.location to let
-// SSR re-read the cookie and re-populate the user. (Established repo lesson.)
+// collapsible page tree. Phase 9 adds:
+//   • a "Shared with me" section (pages shared directly to the user that live
+//     in a workspace they're not a member of),
+//   • teamspace grouping of ROOT pages (collapsible sections; pages with no
+//     teamspaceId fall under a default "Private" section),
+//   • a "+ New teamspace" affordance.
+//
+// All page navigation is a full-page load — the client root loader returns
+// user:null on client nav, so we use window.location to let SSR re-read the
+// cookie and re-populate the user. (Established repo lesson.)
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { FavoriteItem, PageNode, SearchResult, Workspace } from '~/server/docs';
-import { createPage, dbCreate, search as searchFn } from '~/server/docs';
+import { useT } from '@allenlabs/i18n/react';
+import type {
+  FavoriteItem,
+  PageNode,
+  SearchResult,
+  SharedWithMeItem,
+  Teamspace,
+  Workspace,
+} from '~/server/docs';
+import { createPage, dbCreate, search as searchFn, teamspaceCreate } from '~/server/docs';
 
 interface TreeNode extends PageNode {
   children: TreeNode[];
@@ -31,12 +46,46 @@ export function buildTree(pages: PageNode[]): TreeNode[] {
   return roots;
 }
 
+/** A teamspace section: the teamspace (null == default/Private) + its root nodes. */
+export interface TeamspaceGroup {
+  teamspace: Teamspace | null;
+  roots: TreeNode[];
+}
+
+/**
+ * Group root nodes by teamspaceId. Ungrouped roots (teamspaceId == null, or a
+ * teamspaceId with no matching teamspace) fall under the default section. The
+ * default section comes first, then teamspaces in their listed order.
+ */
+export function groupByTeamspace(roots: TreeNode[], teamspaces: Teamspace[]): TeamspaceGroup[] {
+  const tsById = new Map(teamspaces.map((t) => [t.id, t]));
+  const defaultRoots: TreeNode[] = [];
+  const byTs = new Map<string, TreeNode[]>();
+  for (const r of roots) {
+    const tsId = r.teamspaceId && tsById.has(r.teamspaceId) ? r.teamspaceId : null;
+    if (tsId === null) {
+      defaultRoots.push(r);
+    } else {
+      const arr = byTs.get(tsId) ?? [];
+      arr.push(r);
+      byTs.set(tsId, arr);
+    }
+  }
+  const groups: TeamspaceGroup[] = [{ teamspace: null, roots: defaultRoots }];
+  for (const ts of teamspaces) {
+    groups.push({ teamspace: ts, roots: byTs.get(ts.id) ?? [] });
+  }
+  return groups;
+}
+
 interface SidebarProps {
   workspaces: Workspace[];
   workspaceId: string;
   pages: PageNode[];
   activePageId?: string;
   favorites?: FavoriteItem[];
+  teamspaces?: Teamspace[];
+  sharedWithMe?: SharedWithMeItem[];
 }
 
 export function Sidebar({
@@ -45,8 +94,12 @@ export function Sidebar({
   pages,
   activePageId,
   favorites = [],
+  teamspaces = [],
+  sharedWithMe = [],
 }: SidebarProps) {
+  const { t } = useT();
   const tree = useMemo(() => buildTree(pages), [pages]);
+  const groups = useMemo(() => groupByTeamspace(tree, teamspaces), [tree, teamspaces]);
   const [busy, setBusy] = useState(false);
 
   const current = workspaces.find((w) => w.id === workspaceId) ?? workspaces[0];
@@ -74,6 +127,20 @@ export function Sidebar({
     }
   }
 
+  async function handleNewTeamspace() {
+    if (busy) return;
+    const name = window.prompt(t('sidebar.newTeamspacePrompt'), t('sidebar.newTeamspaceDefault'));
+    if (name === null) return;
+    setBusy(true);
+    try {
+      await teamspaceCreate({ data: { workspaceId, name: name.trim() || undefined } });
+      // Full-page nav so SSR re-reads the cookie + the new teamspace section.
+      window.location.href = `/?ws=${workspaceId}`;
+    } catch {
+      setBusy(false);
+    }
+  }
+
   function switchWorkspace(id: string) {
     if (id === workspaceId) return;
     window.location.href = `/?ws=${id}`;
@@ -95,7 +162,9 @@ export function Sidebar({
             ))}
           </select>
         ) : (
-          <span className="text-sm font-semibold text-gray-900">{current?.name ?? 'Workspace'}</span>
+          <span className="text-sm font-semibold text-gray-900">
+            {current?.name ?? t('sidebar.workspace')}
+          </span>
         )}
       </div>
 
@@ -107,7 +176,7 @@ export function Sidebar({
         {favorites.length > 0 ? (
           <div className="mb-2">
             <p className="px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
-              Favorites
+              {t('sidebar.favorites')}
             </p>
             <ul className="text-sm">
               {favorites.map((f) => (
@@ -119,7 +188,7 @@ export function Sidebar({
                     }`}
                   >
                     <span className="shrink-0">{f.icon ?? '★'}</span>
-                    <span className="truncate">{f.title || 'Untitled'}</span>
+                    <span className="truncate">{f.title || t('sidebar.untitled')}</span>
                   </a>
                 </li>
               ))}
@@ -128,10 +197,105 @@ export function Sidebar({
         ) : null}
 
         {tree.length === 0 ? (
-          <p className="px-3 py-2 text-xs text-gray-400">No pages yet.</p>
+          <p className="px-3 py-2 text-xs text-gray-400">{t('sidebar.noPages')}</p>
+        ) : (
+          groups.map((g) => (
+            <TeamspaceSection
+              key={g.teamspace?.id ?? '__default'}
+              group={g}
+              workspaceId={workspaceId}
+              activePageId={activePageId}
+            />
+          ))
+        )}
+
+        {sharedWithMe.length > 0 ? (
+          <div className="mt-2">
+            <p className="px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+              {t('sidebar.sharedWithMe')}
+            </p>
+            <ul className="text-sm">
+              {sharedWithMe.map((s) => (
+                <li key={s.id}>
+                  <a
+                    href={`/p/${s.id}`}
+                    className={`flex items-center gap-1 px-3 py-1 rounded no-underline text-gray-800 hover:bg-gray-100 ${
+                      s.id === activePageId ? 'bg-gray-200 font-medium' : ''
+                    }`}
+                  >
+                    <span className="shrink-0">{s.icon ?? '📄'}</span>
+                    <span className="truncate">{s.title || t('sidebar.untitled')}</span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </nav>
+
+      <div className="px-2 py-2 border-t border-gray-200 space-y-0.5">
+        <button
+          className="w-full text-left px-2 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded"
+          onClick={handleNewRoot}
+          disabled={busy}
+        >
+          {t('sidebar.newPage')}
+        </button>
+        <button
+          className="w-full text-left px-2 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded"
+          onClick={handleNewDatabase}
+          disabled={busy}
+        >
+          {t('sidebar.newDatabase')}
+        </button>
+        <button
+          className="w-full text-left px-2 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded"
+          onClick={handleNewTeamspace}
+          disabled={busy}
+        >
+          {t('sidebar.newTeamspace')}
+        </button>
+        <a
+          href={`/trash?ws=${workspaceId}`}
+          className="block px-2 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded no-underline"
+        >
+          {t('sidebar.trash')}
+        </a>
+      </div>
+    </aside>
+  );
+}
+
+interface TeamspaceSectionProps {
+  group: TeamspaceGroup;
+  workspaceId: string;
+  activePageId?: string;
+}
+
+/** A collapsible teamspace section. The default (null) section shows "Private". */
+function TeamspaceSection({ group, workspaceId, activePageId }: TeamspaceSectionProps) {
+  const { t } = useT();
+  const [open, setOpen] = useState(true);
+  const label = group.teamspace ? group.teamspace.name : t('sidebar.private');
+  // Hide an empty default section so a brand-new workspace isn't cluttered, but
+  // always show named teamspaces (so the user can find the place to add pages).
+  if (group.teamspace === null && group.roots.length === 0) return null;
+  return (
+    <div className="mb-1">
+      <button
+        className="w-full flex items-center gap-1 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400 hover:text-gray-600"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        <span className="w-3 inline-flex justify-center">{open ? '▾' : '▸'}</span>
+        <span className="truncate">{label}</span>
+      </button>
+      {open ? (
+        group.roots.length === 0 ? (
+          <p className="px-6 py-1 text-xs text-gray-300">{t('sidebar.noPages')}</p>
         ) : (
           <ul className="text-sm">
-            {tree.map((node) => (
+            {group.roots.map((node) => (
               <TreeRow
                 key={node.id}
                 node={node}
@@ -141,37 +305,15 @@ export function Sidebar({
               />
             ))}
           </ul>
-        )}
-      </nav>
-
-      <div className="px-2 py-2 border-t border-gray-200 space-y-0.5">
-        <button
-          className="w-full text-left px-2 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded"
-          onClick={handleNewRoot}
-          disabled={busy}
-        >
-          ＋ New page
-        </button>
-        <button
-          className="w-full text-left px-2 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded"
-          onClick={handleNewDatabase}
-          disabled={busy}
-        >
-          ⊞ New database
-        </button>
-        <a
-          href={`/trash?ws=${workspaceId}`}
-          className="block px-2 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded no-underline"
-        >
-          🗑 Trash
-        </a>
-      </div>
-    </aside>
+        )
+      ) : null}
+    </div>
   );
 }
 
 /** Debounced search box with a results dropdown; clicking a result navigates. */
 function SearchBox() {
+  const { t } = useT();
   const [q, setQ] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [open, setOpen] = useState(false);
@@ -204,19 +346,19 @@ function SearchBox() {
     <div className="relative">
       <input
         className="w-full text-sm bg-white border border-gray-200 rounded px-2 py-1 outline-none focus:border-gray-400"
-        placeholder="Search…"
+        placeholder={t('sidebar.searchPlaceholder')}
         value={q}
         onChange={(e) => setQ(e.target.value)}
         onFocus={() => {
           if (results.length > 0) setOpen(true);
         }}
         onBlur={() => setTimeout(() => setOpen(false), 150)}
-        aria-label="Search pages"
+        aria-label={t('sidebar.searchAria')}
       />
       {open ? (
         <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-gray-200 rounded shadow-md max-h-72 overflow-y-auto">
           {results.length === 0 ? (
-            <p className="px-3 py-2 text-xs text-gray-400">No results.</p>
+            <p className="px-3 py-2 text-xs text-gray-400">{t('sidebar.noResults')}</p>
           ) : (
             <ul className="text-sm">
               {results.map((r) => (
@@ -226,7 +368,7 @@ function SearchBox() {
                     className="flex items-center gap-1 px-3 py-1.5 no-underline text-gray-800 hover:bg-gray-100"
                   >
                     <span className="shrink-0">{r.icon ?? '📄'}</span>
-                    <span className="truncate">{r.title || 'Untitled'}</span>
+                    <span className="truncate">{r.title || t('sidebar.untitled')}</span>
                   </a>
                 </li>
               ))}
@@ -246,6 +388,7 @@ interface TreeRowProps {
 }
 
 function TreeRow({ node, depth, workspaceId, activePageId }: TreeRowProps) {
+  const { t } = useT();
   const [open, setOpen] = useState(true);
   const [busy, setBusy] = useState(false);
   const hasChildren = node.children.length > 0;
@@ -280,7 +423,7 @@ function TreeRow({ node, depth, workspaceId, activePageId }: TreeRowProps) {
             e.stopPropagation();
             if (hasChildren) setOpen((v) => !v);
           }}
-          aria-label={hasChildren ? (open ? 'Collapse' : 'Expand') : undefined}
+          aria-label={hasChildren ? (open ? t('sidebar.collapse') : t('sidebar.expand')) : undefined}
         >
           {hasChildren ? (open ? '▾' : '▸') : '·'}
         </button>
@@ -291,14 +434,14 @@ function TreeRow({ node, depth, workspaceId, activePageId }: TreeRowProps) {
           <span className="shrink-0">
             {node.icon ?? (node.kind === 'database' ? '⊞' : '📄')}
           </span>
-          <span className="truncate">{node.title || 'Untitled'}</span>
+          <span className="truncate">{node.title || t('sidebar.untitled')}</span>
         </a>
         <button
           className="opacity-0 group-hover:opacity-100 w-4 h-4 text-gray-400 hover:text-gray-700"
           onClick={handleAddSub}
           disabled={busy}
-          aria-label="Add sub-page"
-          title="Add sub-page"
+          aria-label={t('sidebar.addSubPage')}
+          title={t('sidebar.addSubPage')}
         >
           ＋
         </button>

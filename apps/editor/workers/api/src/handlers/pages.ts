@@ -25,6 +25,7 @@ export interface PageNode {
   parentId: string | null;
   position: number;
   kind: string; // 'page' | 'database'
+  teamspaceId: string | null; // Phase 9 — null == default "Private" section
 }
 
 export interface PageFull {
@@ -64,15 +65,69 @@ export async function pageWorkspaceImpl(sql: Sql, pageId: string): Promise<strin
   return row?.workspaceId ?? null;
 }
 
-/** True iff the user is a member of the workspace owning `pageId`. */
+// Phase 9: a page can be shared directly to a single user (editor.page_shares),
+// and that share PROPAGATES to descendant pages — opening a shared root grants
+// access to its whole subtree. The depth cap matches isAncestorImpl's guard
+// against accidentally-corrupt parent loops.
+const SHARE_ANCESTOR_DEPTH = 1000;
+
+/** Highest role ('owner'|'edit'|'view') the user holds over `pageId`, or null. */
+export type PageRole = 'owner' | 'edit' | 'view';
+
+/**
+ * The user's effective role on `pageId`:
+ *   - workspace member  → 'owner' (full read/write, matches the historic gate)
+ *   - shared (self or via an ANCESTOR) → that share's role ('edit'|'view')
+ *   - otherwise          → null (no access)
+ *
+ * The ancestor share walk is a single recursive CTE climbing parent_id, joined
+ * to page_shares at each level; we take the strongest role found ('edit' beats
+ * 'view'). Membership is checked first since it's the common, cheapest path.
+ */
+export async function pageRoleImpl(
+  sql: Sql,
+  userId: string,
+  pageId: string,
+): Promise<PageRole | null> {
+  const workspaceId = await pageWorkspaceImpl(sql, pageId);
+  if (!workspaceId) return null;
+  if (await isMemberImpl(sql, userId, workspaceId)) return 'owner';
+  // Walk this page + its ancestors, capped, and pick the best share role.
+  const rows = await sql<{ role: string }[]>`
+    WITH RECURSIVE chain AS (
+      SELECT id, parent_id, 0 AS depth
+      FROM editor.pages WHERE id = ${pageId}
+      UNION ALL
+      SELECT p.id, p.parent_id, c.depth + 1
+      FROM editor.pages p
+      JOIN chain c ON p.id = c.parent_id
+      WHERE c.depth < ${SHARE_ANCESTOR_DEPTH}
+    )
+    SELECT s.role
+    FROM editor.page_shares s
+    JOIN chain c ON c.id = s.page_id
+    WHERE s.user_id = ${userId}
+    ORDER BY CASE s.role WHEN 'edit' THEN 0 ELSE 1 END
+    LIMIT 1
+  `;
+  const role = rows[0]?.role;
+  if (role === 'edit') return 'edit';
+  if (role === 'view') return 'view';
+  return null;
+}
+
+/**
+ * True iff the user can access `pageId` — a workspace member OR the page (or any
+ * ancestor) is shared to them. Read-level gate used by every membership-gated
+ * route; write routes that must respect 'view' shares should consult
+ * pageRoleImpl directly.
+ */
 export async function canAccessPageImpl(
   sql: Sql,
   userId: string,
   pageId: string,
 ): Promise<boolean> {
-  const workspaceId = await pageWorkspaceImpl(sql, pageId);
-  if (!workspaceId) return false;
-  return isMemberImpl(sql, userId, workspaceId);
+  return (await pageRoleImpl(sql, userId, pageId)) !== null;
 }
 
 // ---------- workspaces ----------
@@ -135,9 +190,11 @@ export async function pageTreeImpl(sql: Sql, workspaceId: string): Promise<PageN
       parentId: string | null;
       position: number;
       kind: string;
+      teamspaceId: string | null;
     }[]
   >`
-    SELECT id, title, icon, parent_id AS "parentId", position, kind
+    SELECT id, title, icon, parent_id AS "parentId", position, kind,
+           teamspace_id AS "teamspaceId"
     FROM editor.pages
     WHERE workspace_id = ${workspaceId} AND archived = false
       AND database_id IS NULL
@@ -150,6 +207,7 @@ export async function pageTreeImpl(sql: Sql, workspaceId: string): Promise<PageN
     parentId: r.parentId,
     position: Number(r.position),
     kind: r.kind,
+    teamspaceId: r.teamspaceId,
   }));
 }
 
@@ -158,6 +216,8 @@ export interface CreatePageInput {
   parentId?: string | null;
   title?: string;
   icon?: string | null;
+  /** Phase 9 — optional grouping for ROOT pages (ignored for nested pages). */
+  teamspaceId?: string | null;
 }
 
 export async function createPageImpl(
@@ -167,6 +227,9 @@ export async function createPageImpl(
 ): Promise<{ id: string; title: string; parentId: string | null }> {
   const safeTitle = (input.title ?? '').trim() || 'Untitled';
   const parentId = input.parentId ?? null;
+  // A teamspace only groups ROOT pages; a nested page inherits its parent's
+  // section, so never carry a teamspace id when a parent is set.
+  const teamspaceId = parentId ? null : input.teamspaceId ?? null;
   // position = max sibling + 1 (siblings share the same parent within the ws).
   const [maxRow] = await sql<{ maxPos: number | null }[]>`
     SELECT MAX(position) AS "maxPos"
@@ -176,8 +239,8 @@ export async function createPageImpl(
   `;
   const position = (Number(maxRow?.maxPos ?? -1)) + 1;
   const [row] = await sql<{ id: string; title: string; parentId: string | null }[]>`
-    INSERT INTO editor.pages (workspace_id, parent_id, owner_id, title, icon, position)
-    VALUES (${input.workspaceId}, ${parentId}, ${ownerId}, ${safeTitle}, ${input.icon ?? null}, ${position})
+    INSERT INTO editor.pages (workspace_id, parent_id, owner_id, title, icon, position, teamspace_id)
+    VALUES (${input.workspaceId}, ${parentId}, ${ownerId}, ${safeTitle}, ${input.icon ?? null}, ${position}, ${teamspaceId})
     RETURNING id, title, parent_id AS "parentId"
   `;
   if (!row) throw new Error('createPageImpl: insert returned no row');
@@ -278,11 +341,14 @@ export interface MovePageInput {
   id: string;
   parentId?: string | null;
   position?: number;
+  /** Phase 9 — reassign a ROOT page's teamspace section (null clears it). */
+  teamspaceId?: string | null;
 }
 
 /**
- * Reparent and/or reorder a page. Guards against cycles: a page can't become
- * its own descendant's child. Returns false if not found; throws on a cycle.
+ * Reparent and/or reorder a page (and optionally restamp its teamspace section).
+ * Guards against cycles: a page can't become its own descendant's child. Returns
+ * false if not found; throws on a cycle.
  */
 export async function movePageImpl(sql: Sql, input: MovePageInput): Promise<boolean> {
   const page = await getPageImpl(sql, input.id);
@@ -290,6 +356,7 @@ export async function movePageImpl(sql: Sql, input: MovePageInput): Promise<bool
 
   const reparent = input.parentId !== undefined;
   const reorder = typeof input.position === 'number';
+  const reteam = input.teamspaceId !== undefined;
   if (reparent && typeof input.parentId === 'string') {
     const newParent: string = input.parentId;
     if (newParent === input.id) throw new Error('movePageImpl: cannot parent a page to itself');
@@ -300,30 +367,26 @@ export async function movePageImpl(sql: Sql, input: MovePageInput): Promise<bool
     }
   }
 
-  if (!reparent && !reorder) return true; // nothing to change
+  if (!reparent && !reorder && !reteam) return true; // nothing to change
 
-  const newParent = input.parentId ?? null;
-  const rows =
-    reparent && reorder
-      ? await sql`
-          UPDATE editor.pages
-          SET parent_id = ${newParent}, position = ${input.position!}, updated_at = now()
-          WHERE id = ${input.id}
-          RETURNING id
-        `
-      : reparent
-        ? await sql`
-            UPDATE editor.pages
-            SET parent_id = ${newParent}, updated_at = now()
-            WHERE id = ${input.id}
-            RETURNING id
-          `
-        : await sql`
-            UPDATE editor.pages
-            SET position = ${input.position!}, updated_at = now()
-            WHERE id = ${input.id}
-            RETURNING id
-          `;
+  // Build the SET clause from only the present fields. A nested page never
+  // carries a teamspace; reparenting under a parent clears any prior section.
+  const assign: Record<string, unknown> = {};
+  if (reparent) {
+    assign.parent_id = input.parentId ?? null;
+    if (input.parentId) assign.teamspace_id = null;
+  }
+  if (reorder) assign.position = input.position!;
+  if (reteam && !(reparent && input.parentId)) {
+    assign.teamspace_id = input.teamspaceId ?? null;
+  }
+  const cols = Object.keys(assign);
+  const rows = await sql`
+    UPDATE editor.pages
+    SET ${sql(assign, ...cols)}, updated_at = now()
+    WHERE id = ${input.id}
+    RETURNING id
+  `;
   return rows.length > 0;
 }
 

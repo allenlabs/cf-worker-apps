@@ -11,6 +11,7 @@
 // mutation (v1 keeps it simple + correct, no optimism).
 
 import { useEffect, useMemo, useState } from 'react';
+import { useT } from '@allenlabs/i18n/react';
 import {
   commentAdd as commentAddFn,
   commentDelete as commentDeleteFn,
@@ -52,6 +53,7 @@ export function CommentsPanel({
   onThreadResolved,
   onSelectThread,
 }: CommentsPanelProps) {
+  const { t } = useT();
   const [comments, setComments] = useState<CommentItem[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -136,11 +138,11 @@ export function CommentsPanel({
   return (
     <aside className="w-80 shrink-0 border-l border-gray-200 bg-white flex flex-col h-full">
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
-        <span className="text-sm font-semibold text-gray-900">Comments</span>
+        <span className="text-sm font-semibold text-gray-900">{t('comments.title')}</span>
         <button
           className="text-gray-400 hover:text-gray-700 text-sm"
           onClick={onClose}
-          aria-label="Close comments"
+          aria-label={t('comments.close')}
         >
           ✕
         </button>
@@ -148,14 +150,14 @@ export function CommentsPanel({
 
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
         {loading ? (
-          <p className="text-xs text-gray-400">Loading…</p>
+          <p className="text-xs text-gray-400">{t('comments.loading')}</p>
         ) : (
           <>
             {/* Inline threads */}
             {(threads.length > 0 || showPending) && (
               <section data-testid="inline-threads">
                 <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">
-                  Inline threads
+                  {t('comments.inlineThreads')}
                 </h3>
                 <div className="space-y-3">
                   {showPending && pendingThread ? (
@@ -190,10 +192,10 @@ export function CommentsPanel({
             {/* Page comments */}
             <section data-testid="page-comments">
               <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">
-                Page comments
+                {t('comments.pageComments')}
               </h3>
               {pageComments.length === 0 ? (
-                <p className="text-xs text-gray-400">No page comments yet.</p>
+                <p className="text-xs text-gray-400">{t('comments.noPageComments')}</p>
               ) : (
                 <div className="space-y-3">
                   {pageComments.map((c) => (
@@ -210,20 +212,20 @@ export function CommentsPanel({
                           className="text-gray-500 hover:text-gray-800"
                           onClick={() => void resolvePageComment(c)}
                         >
-                          {c.resolved ? 'Reopen' : 'Resolve'}
+                          {c.resolved ? t('comments.reopen') : t('comments.resolve')}
                         </button>
                         <button
                           className="text-red-600 hover:text-red-800"
                           onClick={() => void deleteComment(c)}
                         >
-                          Delete
+                          {t('comments.delete')}
                         </button>
                       </div>
                     </div>
                   ))}
                 </div>
               )}
-              <NewCommentBox placeholder="Add a page comment…" onSubmit={addPageComment} />
+              <NewCommentBox placeholder={t('comments.addPlaceholder')} onSubmit={addPageComment} />
             </section>
           </>
         )}
@@ -233,9 +235,12 @@ export function CommentsPanel({
 }
 
 function CommentHeader({ comment }: { comment: CommentItem }) {
+  const { t } = useT();
   return (
     <div className="flex items-center justify-between gap-2 mb-1">
-      <span className="font-medium text-gray-800 truncate">{comment.authorName || 'Someone'}</span>
+      <span className="font-medium text-gray-800 truncate">
+        {comment.authorName || t('comments.someone')}
+      </span>
       <span className="text-[10px] text-gray-400 shrink-0">
         {new Date(comment.createdAt).toLocaleString()}
       </span>
@@ -263,6 +268,7 @@ function ThreadCard({
   onResolve,
   onDelete,
 }: ThreadCardProps) {
+  const { t } = useT();
   // The anchored snippet: the explicit pending context, else the first comment's
   // body isn't the anchor text — so we only show context when we have it.
   return (
@@ -289,12 +295,14 @@ function ThreadCard({
               onDelete(c);
             }}
           >
-            Delete
+            {t('comments.delete')}
           </button>
         </div>
       ))}
       <NewCommentBox
-        placeholder={comments.length === 0 ? 'Comment…' : 'Reply…'}
+        placeholder={
+          comments.length === 0 ? t('comments.commentPlaceholder') : t('comments.replyPlaceholder')
+        }
         onSubmit={onReply}
       />
       {comments.length > 0 ? (
@@ -305,7 +313,7 @@ function ThreadCard({
             onResolve();
           }}
         >
-          Resolve thread
+          {t('comments.resolveThread')}
         </button>
       ) : null}
     </div>
@@ -319,6 +327,7 @@ function NewCommentBox({
   placeholder: string;
   onSubmit: (body: string) => Promise<void>;
 }) {
+  const { t } = useT();
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -356,7 +365,7 @@ function NewCommentBox({
         onClick={() => void submit()}
         disabled={busy || !draft.trim()}
       >
-        {busy ? 'Posting…' : 'Comment'}
+        {busy ? t('comments.posting') : t('comments.comment')}
       </button>
     </div>
   );

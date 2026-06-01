@@ -50,7 +50,10 @@ export interface PageNode {
   parentId: string | null;
   position: number;
   kind: string; // 'page' | 'database'
+  teamspaceId: string | null; // Phase 9 — grouping; null == "Private"
 }
+
+export type PageRole = 'owner' | 'edit' | 'view';
 
 export interface PageFull {
   id: string;
@@ -63,6 +66,28 @@ export interface PageFull {
   databaseId: string | null;
   public: boolean; // Phase 4 — public share toggle state
   favorited: boolean; // Phase 4 — starred by the requesting user
+  role: PageRole; // Phase 9 — requesting user's effective role on this page
+}
+
+// ---------- per-user sharing + teamspaces (Phase 9) ----------
+
+export type ShareRole = 'view' | 'edit';
+
+export interface SharedUser {
+  userId: string;
+  name: string;
+  role: ShareRole;
+}
+
+export interface SharedWithMeItem {
+  id: string;
+  title: string;
+  icon: string | null;
+}
+
+export interface Teamspace {
+  id: string;
+  name: string;
 }
 
 // ---------- collaboration (Phase 4) ----------
@@ -350,7 +375,13 @@ export function getTreeImpl(
 export function createPageImpl(
   env: ApiClientEnv,
   user: CurrentUser,
-  input: { workspaceId: string; parentId?: string | null; title?: string; icon?: string | null },
+  input: {
+    workspaceId: string;
+    parentId?: string | null;
+    title?: string;
+    icon?: string | null;
+    teamspaceId?: string | null;
+  },
   deps?: ApiClientDeps,
 ): Promise<{ id: string; title: string; parentId: string | null }> {
   return apiPostImpl<{ id: string; title: string; parentId: string | null }>(
@@ -705,6 +736,79 @@ export function versionRestoreImpl(
   return apiPostImpl<{ ok: boolean }>(env, '/v1/pages/versions/restore', userBody(user, { id }), deps);
 }
 
+// ---------- per-user sharing + teamspaces impls (Phase 9) ----------
+
+export function shareePageImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { pageId: string; query: string; role: ShareRole },
+  deps?: ApiClientDeps,
+): Promise<SharedUser> {
+  return apiPostImpl<SharedUser>(env, '/v1/pages/share', userBody(user, input), deps);
+}
+
+export function unsharePageImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { pageId: string; userId: string },
+  deps?: ApiClientDeps,
+): Promise<{ ok: boolean }> {
+  return apiPostImpl<{ ok: boolean }>(env, '/v1/pages/unshare', userBody(user, input), deps);
+}
+
+export function pageSharesImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  pageId: string,
+  deps?: ApiClientDeps,
+): Promise<SharedUser[]> {
+  return apiPostImpl<SharedUser[]>(env, '/v1/pages/shares', userBody(user, { pageId }), deps);
+}
+
+export function sharedWithMeImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  deps?: ApiClientDeps,
+): Promise<SharedWithMeItem[]> {
+  return apiPostImpl<SharedWithMeItem[]>(env, '/v1/pages/shared-with-me', userBody(user), deps);
+}
+
+export function teamspacesListImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  workspaceId: string,
+  deps?: ApiClientDeps,
+): Promise<Teamspace[]> {
+  return apiPostImpl<Teamspace[]>(env, '/v1/teamspaces/list', userBody(user, { workspaceId }), deps);
+}
+
+export function teamspaceCreateImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { workspaceId: string; name?: string },
+  deps?: ApiClientDeps,
+): Promise<Teamspace> {
+  return apiPostImpl<Teamspace>(env, '/v1/teamspaces/create', userBody(user, input), deps);
+}
+
+export function teamspaceRenameImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { id: string; name: string },
+  deps?: ApiClientDeps,
+): Promise<{ ok: boolean }> {
+  return apiPostImpl<{ ok: boolean }>(env, '/v1/teamspaces/rename', userBody(user, input), deps);
+}
+
+export function teamspaceDeleteImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  id: string,
+  deps?: ApiClientDeps,
+): Promise<{ ok: boolean }> {
+  return apiPostImpl<{ ok: boolean }>(env, '/v1/teamspaces/delete', userBody(user, { id }), deps);
+}
+
 // ---------- createServerFn wrappers ----------
 /* v8 ignore start */
 
@@ -785,6 +889,7 @@ export const createPage = createServerFn({ method: 'POST' })
         parentId: z.string().uuid().nullish(),
         title: z.string().max(255).optional(),
         icon: z.string().max(32).nullish(),
+        teamspaceId: z.string().uuid().nullish(),
       })
       .parse(d),
   )
@@ -795,6 +900,7 @@ export const createPage = createServerFn({ method: 'POST' })
       parentId: data.parentId ?? null,
       title: data.title,
       icon: data.icon ?? null,
+      teamspaceId: data.teamspaceId ?? null,
     });
   });
 
@@ -1192,6 +1298,76 @@ export const versionRestore = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
     const user = await requireUser();
     return versionRestoreImpl(getEnv(), user, data.id);
+  });
+
+// ---------- per-user sharing + teamspaces wrappers (Phase 9) ----------
+
+export const sharePage = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        pageId: z.string().uuid(),
+        query: z.string().min(1).max(255),
+        role: z.enum(['view', 'edit']).default('view'),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return shareePageImpl(getEnv(), user, data);
+  });
+
+export const unsharePage = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z.object({ pageId: z.string().uuid(), userId: z.string().min(1) }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return unsharePageImpl(getEnv(), user, data);
+  });
+
+export const pageShares = createServerFn({ method: 'GET' })
+  .inputValidator((d: unknown) => z.object({ pageId: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return pageSharesImpl(getEnv(), user, data.pageId);
+  });
+
+export const sharedWithMe = createServerFn({ method: 'GET' }).handler(async () => {
+  const user = await requireUser();
+  return sharedWithMeImpl(getEnv(), user);
+});
+
+export const teamspacesList = createServerFn({ method: 'GET' })
+  .inputValidator((d: unknown) => z.object({ workspaceId: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return teamspacesListImpl(getEnv(), user, data.workspaceId);
+  });
+
+export const teamspaceCreate = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z.object({ workspaceId: z.string().uuid(), name: z.string().max(120).optional() }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return teamspaceCreateImpl(getEnv(), user, data);
+  });
+
+export const teamspaceRename = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z.object({ id: z.string().uuid(), name: z.string().min(1).max(120) }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return teamspaceRenameImpl(getEnv(), user, data);
+  });
+
+export const teamspaceDelete = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return teamspaceDeleteImpl(getEnv(), user, data.id);
   });
 
 /* v8 ignore stop */

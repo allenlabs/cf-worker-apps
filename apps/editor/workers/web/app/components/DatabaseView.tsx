@@ -9,6 +9,7 @@
 // state local + optimistic-free for correctness.
 
 import { useEffect, useMemo, useState } from 'react';
+import { useT } from '@allenlabs/i18n/react';
 import {
   AUTO_PROPERTY_TYPES,
   dbList as dbListFn,
@@ -61,15 +62,6 @@ const PROPERTY_TYPES: { value: PropertyType; label: string }[] = [
 const SELECT_TYPES = new Set(['select', 'status']);
 const DATE_TYPES = new Set(['date']);
 const FILE_TYPES = new Set(['files']);
-
-const VIEW_TYPE_LABELS: Record<ViewType, string> = {
-  table: 'Table',
-  board: 'Board',
-  list: 'List',
-  gallery: 'Gallery',
-  calendar: 'Calendar',
-  timeline: 'Timeline',
-};
 
 const ADDABLE_VIEW_TYPES: ViewType[] = ['table', 'board', 'list', 'gallery', 'calendar', 'timeline'];
 
@@ -200,7 +192,18 @@ interface DatabaseViewProps {
   initialSchema: DbSchema;
 }
 
+/** View-type → i18n key for its display label (chrome, not user data). */
+const VIEW_TYPE_LABEL_KEYS: Record<ViewType, string> = {
+  table: 'db.viewTable',
+  board: 'db.viewBoard',
+  list: 'db.viewList',
+  gallery: 'db.viewGallery',
+  calendar: 'db.viewCalendar',
+  timeline: 'db.viewTimeline',
+};
+
 export function DatabaseView({ databaseId, workspaceId, initialSchema }: DatabaseViewProps) {
+  const { t } = useT();
   const [schema, setSchema] = useState<DbSchema>(initialSchema);
   const [activeViewId, setActiveViewId] = useState<string>(
     initialSchema.views[0]?.id ?? '',
@@ -329,7 +332,7 @@ export function DatabaseView({ databaseId, workspaceId, initialSchema }: Databas
   }
 
   if (!activeView) {
-    return <div className="text-sm text-gray-400">No views.</div>;
+    return <div className="text-sm text-gray-400">{t('db.noViews')}</div>;
   }
 
   return (
@@ -358,12 +361,12 @@ export function DatabaseView({ databaseId, workspaceId, initialSchema }: Databas
               if (t) void handleAddView(t);
               e.target.value = '';
             }}
-            aria-label="Add view"
+            aria-label={t('db.addViewAria')}
           >
-            <option value="">＋ Add view…</option>
-            {ADDABLE_VIEW_TYPES.map((t) => (
-              <option key={t} value={t}>
-                {VIEW_TYPE_LABELS[t]}
+            <option value="">{t('db.addView')}</option>
+            {ADDABLE_VIEW_TYPES.map((vt) => (
+              <option key={vt} value={vt}>
+                {t(VIEW_TYPE_LABEL_KEYS[vt])}
               </option>
             ))}
           </select>
@@ -371,7 +374,7 @@ export function DatabaseView({ databaseId, workspaceId, initialSchema }: Databas
       </div>
 
       {loading ? (
-        <div className="text-sm text-gray-400 py-4">Loading rows…</div>
+        <div className="text-sm text-gray-400 py-4">{t('db.loadingRows')}</div>
       ) : activeView.type === 'board' ? (
         <BoardView
           view={activeView}

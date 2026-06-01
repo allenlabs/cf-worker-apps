@@ -1,5 +1,6 @@
 import { createFileRoute, redirect } from '@tanstack/react-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useT } from '@allenlabs/i18n/react';
 import { CollaborativeEditor } from '@allenlabs/editor';
 import '@allenlabs/editor/styles.css';
 import { Sidebar } from '~/components/Sidebar';
@@ -15,8 +16,13 @@ import {
   getPage,
   getTree,
   listWorkspaces,
+  pageShares as pageSharesFn,
   searchMentions,
   setPublic as setPublicFn,
+  sharePage as sharePageFn,
+  sharedWithMe as sharedWithMeFn,
+  teamspacesList,
+  unsharePage as unsharePageFn,
   updatePage,
   uploadFile,
   type CollabToken,
@@ -24,6 +30,10 @@ import {
   type FavoriteItem,
   type PageFull,
   type PageNode,
+  type ShareRole,
+  type SharedUser,
+  type SharedWithMeItem,
+  type Teamspace,
   type Workspace,
 } from '~/server/docs';
 
@@ -67,6 +77,9 @@ export const Route = createFileRoute('/p/$pageId')({
         pages: [] as PageNode[],
         schema: null as DbSchema | null,
         favorites: [] as FavoriteItem[],
+        teamspaces: [] as Teamspace[],
+        sharedWithMe: [] as SharedWithMeItem[],
+        shares: [] as SharedUser[],
         userName: '',
       };
     }
@@ -76,18 +89,33 @@ export const Route = createFileRoute('/p/$pageId')({
     const isDatabase = page.kind === 'database';
     // Database pages have no editor → skip the collab token; fetch the schema
     // (a row page is a normal page and still gets a collab editor).
-    const [token, workspaces, pages, schema, favorites] = await Promise.all([
-      isDatabase
-        ? Promise.resolve(null as CollabToken | null)
-        : collabToken({ data: { docId: params.pageId } }),
-      listWorkspaces(),
-      getTree({ data: { workspaceId: page.workspaceId } }),
-      isDatabase
-        ? dbSchemaFn({ data: { databaseId: params.pageId } })
-        : Promise.resolve(null as DbSchema | null),
-      favList(),
-    ]);
-    return { page, token, workspaces, pages, schema, favorites, userName: user?.name ?? 'user' };
+    const [token, workspaces, pages, schema, favorites, teamspaces, shared, shares] =
+      await Promise.all([
+        isDatabase
+          ? Promise.resolve(null as CollabToken | null)
+          : collabToken({ data: { docId: params.pageId } }),
+        listWorkspaces(),
+        getTree({ data: { workspaceId: page.workspaceId } }),
+        isDatabase
+          ? dbSchemaFn({ data: { databaseId: params.pageId } })
+          : Promise.resolve(null as DbSchema | null),
+        favList(),
+        teamspacesList({ data: { workspaceId: page.workspaceId } }),
+        sharedWithMeFn(),
+        pageSharesFn({ data: { pageId: params.pageId } }),
+      ]);
+    return {
+      page,
+      token,
+      workspaces,
+      pages,
+      schema,
+      favorites,
+      teamspaces,
+      sharedWithMe: shared,
+      shares,
+      userName: user?.name ?? 'user',
+    };
   },
   component: PageView,
 });
@@ -108,9 +136,23 @@ function ancestorsOf(pages: PageNode[], pageId: string): PageNode[] {
 }
 
 function PageView() {
-  const { page, token, workspaces, pages, schema, favorites, userName } = Route.useLoaderData();
+  const {
+    page,
+    token,
+    workspaces,
+    pages,
+    schema,
+    favorites,
+    teamspaces,
+    sharedWithMe,
+    shares: initialShares,
+    userName,
+  } = Route.useLoaderData();
+  const { t } = useT();
   const { pageId } = Route.useParams();
   const isDatabase = page?.kind === 'database';
+  // Phase 9: a viewer-only share resolves the page but the editor is read-only.
+  const readOnly = page?.role === 'view';
 
   // TipTap touches the DOM — render the editor ONLY after mount (never on the
   // server). Until then show a skeleton.
@@ -134,6 +176,40 @@ function PageView() {
   const [resolvedThreadIds, setResolvedThreadIds] = useState<string[]>([]);
   const [copied, setCopied] = useState(false);
   const shareUrl = `${SHARE_BASE}${pageId}`;
+  // Phase 9 invite state: the per-user shares list, the invite query + role.
+  const [shares, setShares] = useState<SharedUser[]>(initialShares ?? []);
+  const [inviteQuery, setInviteQuery] = useState('');
+  const [inviteRole, setInviteRole] = useState<ShareRole>('view');
+  const [inviting, setInviting] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+
+  async function handleInvite() {
+    const query = inviteQuery.trim();
+    if (!query || inviting) return;
+    setInviting(true);
+    setInviteError(null);
+    try {
+      const added = await sharePageFn({ data: { pageId, query, role: inviteRole } });
+      setShares((prev) => {
+        const without = prev.filter((s) => s.userId !== added.userId);
+        return [...without, added];
+      });
+      setInviteQuery('');
+    } catch {
+      setInviteError(t('share.noUser'));
+    } finally {
+      setInviting(false);
+    }
+  }
+
+  async function handleUnshare(userId: string) {
+    try {
+      await unsharePageFn({ data: { pageId, userId } });
+      setShares((prev) => prev.filter((s) => s.userId !== userId));
+    } catch {
+      /* ignore */
+    }
+  }
 
   async function handleToggleFav() {
     try {
@@ -215,7 +291,7 @@ function PageView() {
 
   // A database page has no collab token (no editor); a normal page needs one.
   if (!page || (!isDatabase && !token)) {
-    return <div className="card p-8 text-gray-500">Loading…</div>;
+    return <div className="card p-8 text-gray-500">{t('page.loading')}</div>;
   }
 
   return (
@@ -226,6 +302,8 @@ function PageView() {
         pages={pages}
         activePageId={pageId}
         favorites={favorites}
+        teamspaces={teamspaces}
+        sharedWithMe={sharedWithMe}
       />
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-3xl mx-auto px-8 py-6">
@@ -235,25 +313,25 @@ function PageView() {
                 favorited ? 'text-yellow-500' : 'text-gray-400'
               }`}
               onClick={() => void handleToggleFav()}
-              title={favorited ? 'Remove from favorites' : 'Add to favorites'}
-              aria-label="Toggle favorite"
+              title={favorited ? t('page.favoriteRemove') : t('page.favoriteAdd')}
+              aria-label={t('page.toggleFavorite')}
             >
               {favorited ? '★' : '☆'}
             </button>
             <button
               className="px-2 py-1 rounded text-sm text-gray-500 hover:bg-gray-100"
               onClick={() => setShareOpen((v) => !v)}
-              aria-label="Share"
+              aria-label={t('page.share')}
             >
-              Share
+              {t('page.share')}
             </button>
             <button
               className={`px-2 py-1 rounded text-sm hover:bg-gray-100 ${
                 commentsOpen ? 'text-gray-900' : 'text-gray-500'
               }`}
               onClick={() => setCommentsOpen((v) => !v)}
-              title="Comments"
-              aria-label="Toggle comments"
+              title={t('page.comments')}
+              aria-label={t('page.toggleComments')}
             >
               💬
             </button>
@@ -263,47 +341,109 @@ function PageView() {
                   historyOpen ? 'text-gray-900' : 'text-gray-500'
                 }`}
                 onClick={() => setHistoryOpen((v) => !v)}
-                title="Version history"
-                aria-label="Toggle version history"
+                title={t('page.history')}
+                aria-label={t('page.toggleHistory')}
               >
-                History
+                {t('page.history')}
               </button>
             )}
 
             {shareOpen ? (
-              <div className="absolute right-0 top-9 z-20 w-72 bg-white border border-gray-200 rounded shadow-lg p-3 text-sm">
-                <label className="flex items-center justify-between gap-2 mb-2">
-                  <span className="text-gray-800">Share to web</span>
+              <div className="absolute right-0 top-9 z-20 w-80 bg-white border border-gray-200 rounded shadow-lg p-3 text-sm">
+                {/* Invite people (per-user sharing) */}
+                <p className="text-gray-800 font-medium mb-1.5">{t('share.invitePeople')}</p>
+                <div className="flex items-center gap-1 mb-1">
                   <input
-                    type="checkbox"
-                    checked={isPublic}
-                    onChange={() => void handleTogglePublic()}
-                    aria-label="Share to web"
+                    className="flex-1 text-xs border border-gray-200 rounded px-2 py-1 outline-none focus:border-gray-400"
+                    placeholder={t('share.invitePlaceholder')}
+                    value={inviteQuery}
+                    onChange={(e) => setInviteQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        void handleInvite();
+                      }
+                    }}
+                    aria-label={t('share.invitePeople')}
                   />
-                </label>
-                {isPublic ? (
-                  <div className="space-y-2">
-                    <p className="text-xs text-gray-500">
-                      Anyone with the link can view this page.
+                  <select
+                    className="text-xs border border-gray-200 rounded px-1 py-1 bg-white outline-none"
+                    value={inviteRole}
+                    onChange={(e) => setInviteRole(e.target.value as ShareRole)}
+                    aria-label={t('share.invitePeople')}
+                  >
+                    <option value="view">{t('share.roleView')}</option>
+                    <option value="edit">{t('share.roleEdit')}</option>
+                  </select>
+                  <button
+                    className="text-xs px-2 py-1 border border-gray-200 rounded hover:bg-gray-100 disabled:opacity-50"
+                    onClick={() => void handleInvite()}
+                    disabled={inviting || !inviteQuery.trim()}
+                  >
+                    {inviting ? t('share.inviting') : t('share.invite')}
+                  </button>
+                </div>
+                {inviteError ? (
+                  <p className="text-xs text-red-600 mb-1">{inviteError}</p>
+                ) : null}
+
+                {shares.length > 0 ? (
+                  <div className="mb-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mt-2 mb-1">
+                      {t('share.peopleWithAccess')}
                     </p>
-                    <div className="flex items-center gap-1">
-                      <input
-                        readOnly
-                        className="flex-1 text-xs border border-gray-200 rounded px-2 py-1 bg-gray-50"
-                        value={shareUrl}
-                        onFocus={(e) => e.currentTarget.select()}
-                      />
-                      <button
-                        className="text-xs px-2 py-1 border border-gray-200 rounded hover:bg-gray-100"
-                        onClick={() => void handleCopyLink()}
-                      >
-                        {copied ? 'Copied' : 'Copy'}
-                      </button>
-                    </div>
+                    <ul className="space-y-1">
+                      {shares.map((s) => (
+                        <li key={s.userId} className="flex items-center gap-2 text-xs">
+                          <span className="flex-1 truncate text-gray-800">{s.name}</span>
+                          <span className="text-gray-400">
+                            {s.role === 'edit' ? t('share.roleEdit') : t('share.roleView')}
+                          </span>
+                          <button
+                            className="text-red-600 hover:text-red-800"
+                            onClick={() => void handleUnshare(s.userId)}
+                            aria-label={t('share.removeAria')}
+                          >
+                            {t('share.remove')}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
                   </div>
-                ) : (
-                  <p className="text-xs text-gray-400">Off — only workspace members can view.</p>
-                )}
+                ) : null}
+
+                <div className="border-t border-gray-100 pt-2">
+                  <label className="flex items-center justify-between gap-2 mb-2">
+                    <span className="text-gray-800">{t('share.toWeb')}</span>
+                    <input
+                      type="checkbox"
+                      checked={isPublic}
+                      onChange={() => void handleTogglePublic()}
+                      aria-label={t('share.toWeb')}
+                    />
+                  </label>
+                  {isPublic ? (
+                    <div className="space-y-2">
+                      <p className="text-xs text-gray-500">{t('share.anyoneCanView')}</p>
+                      <div className="flex items-center gap-1">
+                        <input
+                          readOnly
+                          className="flex-1 text-xs border border-gray-200 rounded px-2 py-1 bg-gray-50"
+                          value={shareUrl}
+                          onFocus={(e) => e.currentTarget.select()}
+                        />
+                        <button
+                          className="text-xs px-2 py-1 border border-gray-200 rounded hover:bg-gray-100"
+                          onClick={() => void handleCopyLink()}
+                        >
+                          {copied ? t('share.copied') : t('share.copy')}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-gray-400">{t('share.off')}</p>
+                  )}
+                </div>
               </div>
             ) : null}
           </div>
@@ -314,13 +454,19 @@ function PageView() {
                 <span key={a.id} className="flex items-center gap-1">
                   <a href={`/p/${a.id}`} className="no-underline hover:text-gray-600 hover:underline">
                     {a.icon ? `${a.icon} ` : ''}
-                    {a.title || 'Untitled'}
+                    {a.title || t('page.untitled')}
                   </a>
                   <span>/</span>
                 </span>
               ))}
-              <span className="text-gray-500">{title || 'Untitled'}</span>
+              <span className="text-gray-500">{title || t('page.untitled')}</span>
             </nav>
+          ) : null}
+
+          {readOnly ? (
+            <p className="mb-3 px-3 py-1.5 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded">
+              {t('page.readOnly')}
+            </p>
           ) : null}
 
           <div className="flex items-start gap-2 mb-2">
@@ -332,14 +478,16 @@ function PageView() {
               placeholder="📄"
               maxLength={8}
               aria-label="Page icon"
+              readOnly={readOnly}
             />
             <input
               className="flex-1 text-3xl font-bold outline-none border-0 bg-transparent"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               onBlur={handleTitleBlur}
-              placeholder="Untitled"
+              placeholder={t('page.untitled')}
               aria-label="Page title"
+              readOnly={readOnly}
             />
           </div>
 
@@ -348,7 +496,8 @@ function PageView() {
           ) : mounted && token ? (
             <CollaborativeEditor
               value={page.snapshotHtml}
-              placeholder='Type "/" for commands…'
+              editable={!readOnly}
+              placeholder={t('page.editorPlaceholder')}
               collab={{
                 url: token.url,
                 docId: pageId,
@@ -369,15 +518,15 @@ function PageView() {
               }}
             />
           ) : (
-            <div className="text-gray-400 text-sm">Loading editor…</div>
+            <div className="text-gray-400 text-sm">{t('page.loadingEditor')}</div>
           )}
 
-          {isDatabase ? null : (
+          {isDatabase || readOnly ? null : (
             <button
               className="mt-6 text-sm text-gray-500 hover:text-gray-800"
               onClick={handleNewSub}
             >
-              ＋ Add sub-page
+              {t('page.addSubPage')}
             </button>
           )}
         </div>

@@ -26,9 +26,21 @@ import {
   isMemberImpl,
   listOrProvisionWorkspacesImpl,
   movePageImpl,
+  pageRoleImpl,
   pageTreeImpl,
   updatePageImpl,
 } from './pages';
+import {
+  pageSharesImpl,
+  shareePageImpl,
+  sharedWithMeImpl,
+  teamspaceCreateImpl,
+  teamspaceDeleteImpl,
+  teamspaceRenameImpl,
+  teamspaceWorkspaceImpl,
+  teamspacesListImpl,
+  unsharePageImpl,
+} from './sharing';
 import {
   addPropertyImpl,
   addRowImpl,
@@ -107,6 +119,7 @@ const createPageSchema = z.object({
   parentId: z.string().uuid().nullish(),
   title: z.string().max(255).optional(),
   icon: z.string().max(32).nullish(),
+  teamspaceId: z.string().uuid().nullish(),
 });
 v1Router.post('/pages/create', async (c) => {
   const user = c.get('user');
@@ -123,11 +136,17 @@ v1Router.post('/pages/create', async (c) => {
       return c.json({ error: 'not found' }, 404);
     }
   }
+  // If a teamspace is given, it must live in the same workspace.
+  if (parsed.data.teamspaceId) {
+    const tws = await teamspaceWorkspaceImpl(c.get('db'), parsed.data.teamspaceId);
+    if (tws !== parsed.data.workspaceId) return c.json({ error: 'not found' }, 404);
+  }
   const created = await createPageImpl(c.get('db'), user.userId, {
     workspaceId: parsed.data.workspaceId,
     parentId: parsed.data.parentId ?? null,
     title: parsed.data.title,
     icon: parsed.data.icon ?? null,
+    teamspaceId: parsed.data.teamspaceId ?? null,
   });
   return c.json(created, 200);
 });
@@ -140,10 +159,12 @@ v1Router.post('/pages/get', async (c) => {
   }
   const page = await getPageImpl(c.get('db'), parsed.data.id);
   if (!page) return c.json({ error: 'not found' }, 404);
-  const member = await isMemberImpl(c.get('db'), user.userId, page.workspaceId);
-  if (!member) return c.json({ error: 'not found' }, 404);
+  // Phase 9: members get 'owner'; otherwise a direct/ancestor share role gates
+  // access. A viewer-only share still resolves the page (read-only on the web).
+  const role = await pageRoleImpl(c.get('db'), user.userId, page.id);
+  if (!role) return c.json({ error: 'not found' }, 404);
   const favorited = await isFavoritedImpl(c.get('db'), user.userId, page.id);
-  return c.json({ ...page, favorited }, 200);
+  return c.json({ ...page, favorited, role }, 200);
 });
 
 const updatePageSchema = z.object({
@@ -174,6 +195,7 @@ const movePageSchema = z.object({
   id: z.string().uuid(),
   parentId: z.string().uuid().nullish(),
   position: z.number().optional(),
+  teamspaceId: z.string().uuid().nullish(),
 });
 v1Router.post('/pages/move', async (c) => {
   const user = c.get('user');
@@ -188,12 +210,19 @@ v1Router.post('/pages/move', async (c) => {
     const can2 = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.parentId);
     if (!can2) return c.json({ error: 'not found' }, 404);
   }
+  // A target teamspace (when given) must belong to the page's workspace.
+  if (parsed.data.teamspaceId) {
+    const page = await getPageImpl(c.get('db'), parsed.data.id);
+    const tws = await teamspaceWorkspaceImpl(c.get('db'), parsed.data.teamspaceId);
+    if (!page || tws !== page.workspaceId) return c.json({ error: 'not found' }, 404);
+  }
   let ok: boolean;
   try {
     ok = await movePageImpl(c.get('db'), {
       id: parsed.data.id,
       parentId: parsed.data.parentId === undefined ? undefined : parsed.data.parentId ?? null,
       position: parsed.data.position,
+      teamspaceId: parsed.data.teamspaceId === undefined ? undefined : parsed.data.teamspaceId ?? null,
     });
   } catch {
     return c.json({ error: 'cycle' }, 400);
@@ -671,6 +700,132 @@ v1Router.post('/pages/setPublic', async (c) => {
   const result = await setPublicImpl(c.get('db'), parsed.data.id, parsed.data.public);
   if (!result) return c.json({ error: 'not found' }, 404);
   return c.json(result, 200);
+});
+
+// ---------- per-user sharing (Phase 9) ----------
+//
+// A page can be shared directly to a single suite user (view|edit). The share
+// PROPAGATES to descendants (pageRoleImpl walks ancestors). All write routes
+// are gated on access to the page being shared.
+
+const shareSchema = z.object({
+  pageId: z.string().uuid(),
+  query: z.string().min(1).max(255),
+  role: z.enum(['view', 'edit']).default('view'),
+});
+v1Router.post('/pages/share', async (c) => {
+  const user = c.get('user');
+  const parsed = shareSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.pageId);
+  if (!can) return c.json({ error: 'not found' }, 404);
+  const shared = await shareePageImpl(c.get('db'), {
+    pageId: parsed.data.pageId,
+    query: parsed.data.query,
+    role: parsed.data.role,
+  });
+  if (!shared) return c.json({ error: 'no user' }, 404);
+  return c.json(shared, 200);
+});
+
+const unshareSchema = z.object({ pageId: z.string().uuid(), userId: z.string().min(1) });
+v1Router.post('/pages/unshare', async (c) => {
+  const user = c.get('user');
+  const parsed = unshareSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.pageId);
+  if (!can) return c.json({ error: 'not found' }, 404);
+  const ok = await unsharePageImpl(c.get('db'), parsed.data.pageId, parsed.data.userId);
+  if (!ok) return c.json({ error: 'not found' }, 404);
+  return c.json({ ok: true }, 200);
+});
+
+const sharesSchema = z.object({ pageId: z.string().uuid() });
+v1Router.post('/pages/shares', async (c) => {
+  const user = c.get('user');
+  const parsed = sharesSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.pageId);
+  if (!can) return c.json({ error: 'not found' }, 404);
+  const shares = await pageSharesImpl(c.get('db'), parsed.data.pageId);
+  return c.json(shares, 200);
+});
+
+v1Router.post('/pages/shared-with-me', async (c) => {
+  const user = c.get('user');
+  const items = await sharedWithMeImpl(c.get('db'), user.userId);
+  return c.json(items, 200);
+});
+
+// ---------- teamspaces (Phase 9) ----------
+//
+// A teamspace is a named group of root pages WITHIN a workspace. v1 access ==
+// workspace membership (no separate per-teamspace ACL yet — follow-up).
+
+const tsListSchema = z.object({ workspaceId: z.string().uuid() });
+v1Router.post('/teamspaces/list', async (c) => {
+  const user = c.get('user');
+  const parsed = tsListSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const member = await isMemberImpl(c.get('db'), user.userId, parsed.data.workspaceId);
+  if (!member) return c.json({ error: 'not found' }, 404);
+  const teamspaces = await teamspacesListImpl(c.get('db'), parsed.data.workspaceId);
+  return c.json(teamspaces, 200);
+});
+
+const tsCreateSchema = z.object({
+  workspaceId: z.string().uuid(),
+  name: z.string().max(120).optional(),
+});
+v1Router.post('/teamspaces/create', async (c) => {
+  const user = c.get('user');
+  const parsed = tsCreateSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const member = await isMemberImpl(c.get('db'), user.userId, parsed.data.workspaceId);
+  if (!member) return c.json({ error: 'not found' }, 404);
+  const ts = await teamspaceCreateImpl(c.get('db'), parsed.data.workspaceId, parsed.data.name ?? 'Teamspace');
+  return c.json(ts, 200);
+});
+
+const tsRenameSchema = z.object({ id: z.string().uuid(), name: z.string().min(1).max(120) });
+v1Router.post('/teamspaces/rename', async (c) => {
+  const user = c.get('user');
+  const parsed = tsRenameSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const wsId = await teamspaceWorkspaceImpl(c.get('db'), parsed.data.id);
+  if (!wsId) return c.json({ error: 'not found' }, 404);
+  const member = await isMemberImpl(c.get('db'), user.userId, wsId);
+  if (!member) return c.json({ error: 'not found' }, 404);
+  const ok = await teamspaceRenameImpl(c.get('db'), parsed.data.id, parsed.data.name);
+  if (!ok) return c.json({ error: 'not found' }, 404);
+  return c.json({ ok: true }, 200);
+});
+
+v1Router.post('/teamspaces/delete', async (c) => {
+  const user = c.get('user');
+  const parsed = idSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const wsId = await teamspaceWorkspaceImpl(c.get('db'), parsed.data.id);
+  if (!wsId) return c.json({ error: 'not found' }, 404);
+  const member = await isMemberImpl(c.get('db'), user.userId, wsId);
+  if (!member) return c.json({ error: 'not found' }, 404);
+  const ok = await teamspaceDeleteImpl(c.get('db'), parsed.data.id);
+  if (!ok) return c.json({ error: 'not found' }, 404);
+  return c.json({ ok: true }, 200);
 });
 
 // ---------- comments (Phase 4) ----------

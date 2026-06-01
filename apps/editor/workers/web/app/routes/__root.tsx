@@ -15,6 +15,10 @@ import {
   verifySessionToken,
 } from '~/server/session.server';
 import appCss from '~/styles/app.css?url';
+import { DEFAULT_LOCALE, type Locale } from '@allenlabs/i18n';
+import { resolveLocale } from '@allenlabs/i18n/server';
+import { I18nProvider } from '@allenlabs/i18n/react';
+import { editorDict } from '~/i18n/dict';
 
 interface AppUser {
   id: string;
@@ -23,6 +27,7 @@ interface AppUser {
 
 interface RouterContext {
   user: AppUser | null;
+  locale: Locale;
 }
 
 /**
@@ -88,21 +93,26 @@ export const Route = createRootRouteWithContext<RouterContext>()({
     // httpOnly JWT. Actions that change the signed-in state use a full-page
     // navigation so SSR re-populates the user. (Mirrors PM.)
     if (typeof document !== 'undefined') {
-      return { user: null, appName: 'Editor' };
+      return { user: null, appName: 'Editor', locale: DEFAULT_LOCALE };
     }
     const req = getRequest();
-    if (!req) return { user: null, appName: 'Editor' };
+    if (!req) return { user: null, appName: 'Editor', locale: DEFAULT_LOCALE };
     const cookie = req.headers.get('cookie') ?? null;
     const token = readSessionToken(cookie);
     const env = getEnv();
     let user: AppUser | null = null;
+    let jwtLocale: string | null = null;
     if (token) {
       const payload = await verifySessionToken(env, token);
       if (payload?.sub) {
         user = { id: payload.sub, name: displayNameOf(payload) };
+        if (typeof payload.locale === 'string') jwtLocale = payload.locale;
       }
     }
-    return { user, appName: env.APP_NAME ?? 'Editor' };
+    // Locale priority: cookie → JWT claim → Accept-Language → 'en'. Resolved
+    // server-side so the first SSR paint is already in the right language.
+    const locale = resolveLocale(req as unknown as Request, jwtLocale);
+    return { user, appName: env.APP_NAME ?? 'Editor', locale };
   },
   head: () => ({
     meta: [
@@ -131,18 +141,21 @@ function RootComponent() {
   const data = Route.useLoaderData();
   const user = data?.user ?? null;
   const appName = data?.appName ?? 'Editor';
+  const locale = data?.locale ?? DEFAULT_LOCALE;
   return (
-    <RootDocument>
-      <Layout user={user} appName={appName}>
-        <Outlet />
-      </Layout>
+    <RootDocument locale={locale}>
+      <I18nProvider locale={locale} dict={editorDict}>
+        <Layout user={user} appName={appName}>
+          <Outlet />
+        </Layout>
+      </I18nProvider>
     </RootDocument>
   );
 }
 
-function RootDocument({ children }: { children: ReactNode }) {
+function RootDocument({ locale, children }: { locale: Locale; children: ReactNode }) {
   return (
-    <html lang="en">
+    <html lang={locale}>
       <head>
         <HeadContent />
       </head>

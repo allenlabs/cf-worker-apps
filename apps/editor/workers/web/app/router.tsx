@@ -1,12 +1,13 @@
 import { Link, createRouter as createTanStackRouter } from '@tanstack/react-router';
 import { routeTree } from './routeTree.gen';
+import { DEFAULT_LOCALE } from '@allenlabs/i18n';
 
 // Plain TanStack Router (no react-query wrapper) — matches PM's working setup
 // after the version-drift bug that broke client-side <Link> navigation.
 export function createRouter() {
   return createTanStackRouter({
     routeTree,
-    context: { user: null },
+    context: { user: null, locale: DEFAULT_LOCALE },
     defaultPreload: 'intent',
     defaultPendingMs: Number.POSITIVE_INFINITY,
     defaultErrorComponent: ({ error }: { error: unknown }) => (
