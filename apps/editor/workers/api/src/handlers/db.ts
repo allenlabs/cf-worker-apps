@@ -14,6 +14,14 @@
 
 import type { Sql } from '../lib/db';
 import { createPageImpl } from './pages';
+import {
+  parseFormula,
+  evaluateFormula,
+  isFormulaError,
+  FormulaError,
+  type Ast,
+  type FormulaValue,
+} from './formula';
 
 /**
  * Wrap a plain object as a jsonb parameter. postgres.js' `sql.json` types its
@@ -51,6 +59,8 @@ export type PropertyType =
   // Phase 6: cross-database linking + aggregation.
   | 'relation'
   | 'rollup'
+  // Phase 7: safe expression engine (computed read-only).
+  | 'formula'
   // AUTO / read-only — derived from the row page, never stored in db_props.
   | 'created_time'
   | 'created_by'
@@ -117,6 +127,8 @@ export interface DbRow {
   relations?: Record<string, RelationChip[]>;
   // Phase 6: rollup prop id → computed read-only value.
   rollups?: Record<string, unknown>;
+  // Phase 7: formula prop id → computed read-only value (or { __error } sentinel).
+  formulas?: Record<string, unknown>;
 }
 
 interface ViewConfig {
@@ -667,6 +679,174 @@ async function resolveRelationsAndRollups(
   }
 }
 
+// ---------- formula support (Phase 7) ----------
+
+/**
+ * Coerce a row's stored value for a property into a `FormulaValue` the engine
+ * can work with. Mirrors the rendering coercions (select→option name,
+ * relation→joined titles, checkbox→bool, etc.). Auto/meta props read from
+ * `row.meta`. Rollups read from the precomputed `row.rollups` map. Formula
+ * props are resolved separately (cycle-guarded) and never reach this helper.
+ */
+function coercePropForFormula(row: DbRow, prop: DbProperty): FormulaValue {
+  switch (prop.type) {
+    case 'created_time':
+      return row.meta.createdTime || null;
+    case 'last_edited_time':
+      return row.meta.lastEditedTime || null;
+    case 'created_by':
+    case 'last_edited_by':
+      return row.meta.createdByName ?? row.meta.createdById ?? null;
+    case 'relation': {
+      // Resolved chip titles joined; fall back to the raw id count.
+      const chips = row.relations?.[prop.id];
+      if (chips) return chips.map((c) => c.title || 'Untitled').join(', ');
+      const raw = row.props[prop.id];
+      return Array.isArray(raw) ? raw.length : 0;
+    }
+    case 'rollup': {
+      const v = row.rollups?.[prop.id] ?? null;
+      return coerceRaw(v);
+    }
+    default:
+      break;
+  }
+
+  const value = row.props[prop.id] ?? null;
+  switch (prop.type) {
+    case 'number': {
+      if (value === null || value === '') return null;
+      const n = Number(value);
+      return Number.isFinite(n) ? n : null;
+    }
+    case 'checkbox':
+      return value === true;
+    case 'select':
+    case 'status': {
+      if (typeof value !== 'string') return null;
+      const options = (prop.config.options as { id: string; name: string }[] | undefined) ?? [];
+      const opt = options.find((o) => o.id === value);
+      return opt?.name ?? value;
+    }
+    case 'multi_select': {
+      const options = (prop.config.options as { id: string; name: string }[] | undefined) ?? [];
+      const ids = Array.isArray(value) ? (value as unknown[]).filter((x): x is string => typeof x === 'string') : [];
+      return ids.map((id) => options.find((o) => o.id === id)?.name ?? id).join(', ');
+    }
+    case 'files': {
+      const files = Array.isArray(value) ? (value as { name?: string }[]) : [];
+      return files.map((f) => f?.name ?? '').join(', ');
+    }
+    default:
+      return coerceRaw(value);
+  }
+}
+
+/** Coerce an arbitrary JSON value to a FormulaValue (booleans/numbers/strings). */
+function coerceRaw(value: unknown): FormulaValue {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map((v) => coerceRaw(v)).join(', ');
+  return String(value);
+}
+
+/**
+ * Parse + evaluate every formula property for a page of rows.
+ *
+ * - Builds a case-insensitive name→property index for the database.
+ * - Parses each distinct expression ONCE (cache keyed by the expression string)
+ *   so re-parsing across N rows is avoided.
+ * - For each row, evaluates each formula against a context that resolves
+ *   `prop("X")` / `{{X}}` by NAME (case-insensitive).
+ * - Cycle handling: a formula MAY reference another formula property; we resolve
+ *   referenced formulas recursively with a per-evaluation visited-set. Any
+ *   cycle (a formula that transitively references itself) yields a typed error
+ *   for that cell instead of looping. Self/forward refs that aren't cyclic
+ *   resolve to their computed value.
+ *
+ * Results land in `row.formulas[propId]` as either the computed value or a
+ * `{ __error }` sentinel; a single bad formula never throws out of here.
+ */
+function resolveFormulas(rows: DbRow[], properties: DbProperty[]): void {
+  const formulaProps = properties.filter((p) => p.type === 'formula');
+  if (formulaProps.length === 0) return;
+
+  // Case-insensitive name → property (last write wins on dup names, matching
+  // how the UI would surface them).
+  const byLowerName = new Map<string, DbProperty>();
+  for (const p of properties) byLowerName.set(p.name.toLowerCase(), p);
+
+  // Parse cache: expression string → AST | FormulaError (parse failure).
+  const astCache = new Map<string, Ast | FormulaError>();
+  const astFor = (expr: string): Ast | FormulaError => {
+    const hit = astCache.get(expr);
+    if (hit !== undefined) return hit;
+    let result: Ast | FormulaError;
+    try {
+      result = parseFormula(expr);
+    } catch (err) {
+      result = err instanceof FormulaError ? err : new FormulaError('Parse error');
+    }
+    astCache.set(expr, result);
+    return result;
+  };
+
+  for (const row of rows) {
+    const out: Record<string, unknown> = {};
+
+    // Resolve a property by name into a FormulaValue, recursing into formula
+    // props with a visited set to break cycles.
+    const resolveByName = (name: string, visiting: Set<string>): FormulaValue => {
+      const prop = byLowerName.get(name.toLowerCase());
+      if (!prop) throw new FormulaError(`Unknown property "${name}"`);
+      if (prop.type !== 'formula') return coercePropForFormula(row, prop);
+
+      // A formula referencing a formula: guard against cycles.
+      if (visiting.has(prop.id)) {
+        throw new FormulaError(`Formula cycle via "${prop.name}"`);
+      }
+      const expr = typeof prop.config.expression === 'string' ? prop.config.expression : '';
+      if (!expr.trim()) throw new FormulaError(`Formula "${prop.name}" is empty`);
+      const ast = astFor(expr);
+      if (ast instanceof FormulaError) throw ast;
+      const nextVisiting = new Set(visiting);
+      nextVisiting.add(prop.id);
+      return evaluateFormula(ast, {
+        resolveProp: (n) => resolveByName(n, nextVisiting),
+      });
+    };
+
+    for (const fp of formulaProps) {
+      const expr = typeof fp.config.expression === 'string' ? fp.config.expression : '';
+      if (!expr.trim()) {
+        out[fp.id] = { __error: 'Empty formula' };
+        continue;
+      }
+      const ast = astFor(expr);
+      if (ast instanceof FormulaError) {
+        out[fp.id] = { __error: ast.message };
+        continue;
+      }
+      try {
+        const visiting = new Set<string>([fp.id]);
+        const value = evaluateFormula(ast, {
+          resolveProp: (n) => resolveByName(n, visiting),
+        });
+        // Dates serialize to ISO strings for JSON transport.
+        out[fp.id] = value instanceof Date ? value.toISOString() : value;
+      } catch (err) {
+        out[fp.id] = { __error: err instanceof FormulaError ? err.message : 'Formula error' };
+      }
+    }
+    row.formulas = out;
+  }
+}
+
+/** Public, test-friendly helper: ensure isFormulaError is exported transitively. */
+export { isFormulaError };
+
 /**
  * Return non-archived rows of a database. Applies the named view's simple
  * filters + sorts in app-space (props live in jsonb; keeping it correct beats
@@ -713,6 +893,11 @@ export async function dbRowsImpl(
 
   // Phase 6: resolve relation chips + compute rollups with BATCHED queries.
   await resolveRelationsAndRollups(sql, databaseId, rows);
+
+  // Phase 7: compute formula properties (after relations/rollups so formulas
+  // can reference their computed values). Reuses the property list once.
+  const properties = await listPropertiesImpl(sql, databaseId);
+  resolveFormulas(rows, properties);
 
   if (!viewId) return rows;
   const [view] = await sql<{ config: ViewConfig | null }[]>`

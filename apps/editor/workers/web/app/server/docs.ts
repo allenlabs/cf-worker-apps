@@ -130,6 +130,7 @@ export type PropertyType =
   | 'files'
   | 'relation'
   | 'rollup'
+  | 'formula'
   | 'created_time'
   | 'created_by'
   | 'last_edited_time'
@@ -226,6 +227,8 @@ export interface DbRow {
   relations?: Record<string, RelationChip[]>;
   // Phase 6: rollup prop id → read-only computed value.
   rollups?: Record<string, JsonValue>;
+  // Phase 7: formula prop id → read-only computed value (or { __error } sentinel).
+  formulas?: Record<string, JsonValue>;
 }
 
 // ---------- page version history (Phase 5) ----------
@@ -863,6 +866,7 @@ const propertyTypeSchema = z.enum([
   'files',
   'relation',
   'rollup',
+  'formula',
   'created_time',
   'created_by',
   'last_edited_time',

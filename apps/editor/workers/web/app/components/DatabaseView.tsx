@@ -51,6 +51,7 @@ const PROPERTY_TYPES: { value: PropertyType; label: string }[] = [
   { value: 'files', label: 'Files & media' },
   { value: 'relation', label: 'Relation' },
   { value: 'rollup', label: 'Rollup' },
+  { value: 'formula', label: 'Formula' },
   { value: 'created_time', label: 'Created time' },
   { value: 'created_by', label: 'Created by' },
   { value: 'last_edited_time', label: 'Last edited time' },
@@ -104,6 +105,25 @@ function formatRollup(fn: string, value: JsonValue): string {
   return String(value);
 }
 
+/** True iff a formula cell holds an `{ __error }` sentinel. */
+function formulaError(value: JsonValue): string | null {
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    const err = (value as { __error?: unknown }).__error;
+    if (typeof err === 'string') return err;
+  }
+  return null;
+}
+
+/** Format a formula's computed value for read-only display. */
+function formatFormula(value: JsonValue): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (typeof value === 'number') {
+    return Number.isInteger(value) ? String(value) : value.toFixed(2);
+  }
+  return String(value);
+}
+
 /** Human-friendly read-only text for any value (used by list/gallery/cards). */
 function renderValueText(row: DbRow, property: DbProperty): string {
   // Relation + rollup read from their resolved/computed side-maps, not props.
@@ -115,6 +135,12 @@ function renderValueText(row: DbRow, property: DbProperty): string {
     const fn = typeof property.config.fn === 'string' ? property.config.fn : 'count';
     const value = row.rollups?.[property.id] ?? null;
     return formatRollup(fn, value);
+  }
+  if (property.type === 'formula') {
+    const value = row.formulas?.[property.id] ?? null;
+    const err = formulaError(value);
+    if (err) return `⚠ ${err}`;
+    return formatFormula(value);
   }
   const value = readPropValue(row, property);
   if (value === null || value === undefined || value === '') return '';
@@ -436,8 +462,9 @@ function TableView({
     setAddingProp(false);
   }
 
-  // relation/rollup need extra config collected before the property is created.
-  const needsConfig = newPropType === 'relation' || newPropType === 'rollup';
+  // relation/rollup/formula need extra config collected before the property is created.
+  const needsConfig =
+    newPropType === 'relation' || newPropType === 'rollup' || newPropType === 'formula';
 
   return (
     <div className="overflow-x-auto">
@@ -498,6 +525,12 @@ function TableView({
                       onCancel={() => setAddingProp(false)}
                       onConfirm={(config) => submitNewProp(config)}
                     />
+                  ) : newPropType === 'formula' ? (
+                    <FormulaConfigPanel
+                      properties={properties}
+                      onCancel={() => setAddingProp(false)}
+                      onConfirm={(config) => submitNewProp(config)}
+                    />
                   ) : null}
                 </span>
               ) : (
@@ -534,7 +567,9 @@ function TableView({
               </td>
               {properties.map((p) => (
                 <td key={p.id} className="py-1 px-2">
-                  {AUTO_PROPERTY_TYPES.has(p.type) || p.type === 'rollup' ? (
+                  {p.type === 'formula' ? (
+                    <FormulaCell property={p} row={row} />
+                  ) : AUTO_PROPERTY_TYPES.has(p.type) || p.type === 'rollup' ? (
                     <span className="text-gray-500">{renderValueText(row, p) || '—'}</span>
                   ) : p.type === 'relation' ? (
                     <RelationCell
@@ -1052,6 +1087,72 @@ function RollupConfigPanel({ properties, onCancel, onConfirm }: RollupConfigPane
           className="text-xs text-blue-600 hover:text-blue-800 disabled:text-gray-300"
           disabled={!relationPropId}
           onClick={() => onConfirm({ relationPropId, targetPropId, fn })}
+        >
+          Add
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------- Formula cell (read-only computed value) ----------
+
+interface FormulaCellProps {
+  property: DbProperty;
+  row: DbRow;
+}
+
+function FormulaCell({ property, row }: FormulaCellProps) {
+  const value = row.formulas?.[property.id] ?? null;
+  const err = formulaError(value);
+  if (err) {
+    return (
+      <span className="text-gray-400 text-xs" title={err}>
+        ⚠ {err}
+      </span>
+    );
+  }
+  const text = formatFormula(value);
+  return <span className="text-gray-500">{text || '—'}</span>;
+}
+
+// ---------- Formula property config panel (expression textarea + prop hint) ----------
+
+interface FormulaConfigPanelProps {
+  properties: DbProperty[];
+  onCancel: () => void;
+  onConfirm: (config: Record<string, JsonValue>) => void;
+}
+
+function FormulaConfigPanel({ properties, onCancel, onConfirm }: FormulaConfigPanelProps) {
+  const [expression, setExpression] = useState('');
+  // The implicit Name (title) column plus every defined property.
+  const names = ['Name', ...properties.map((p) => p.name)];
+
+  return (
+    <div className="absolute z-20 top-9 right-0 bg-white border border-gray-200 rounded shadow-lg p-2 min-w-[20rem] text-left font-normal">
+      <div className="text-xs text-gray-500 mb-1">Expression</div>
+      <textarea
+        autoFocus
+        className="border border-gray-300 rounded px-1.5 py-1 w-full text-sm text-gray-800 font-mono h-20 resize-y"
+        placeholder={'e.g. if({{Done}}, "✓", round({{Price}} * 1.1, 2))'}
+        value={expression}
+        onChange={(e) => setExpression(e.target.value)}
+      />
+      <div className="text-[11px] text-gray-400 mt-1 leading-snug">
+        Reference properties as <code>{'{{Name}}'}</code> or <code>prop(&quot;Name&quot;)</code>.
+        <div className="mt-0.5">
+          Properties: <span className="text-gray-500">{names.join(', ')}</span>
+        </div>
+      </div>
+      <div className="flex items-center justify-end gap-2 mt-2">
+        <button className="text-xs text-gray-400 hover:text-gray-700" onClick={onCancel}>
+          Cancel
+        </button>
+        <button
+          className="text-xs text-blue-600 hover:text-blue-800 disabled:text-gray-300"
+          disabled={!expression.trim()}
+          onClick={() => onConfirm({ expression: expression.trim() })}
         >
           Add
         </button>

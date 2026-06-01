@@ -297,6 +297,7 @@ const propertyType = z.enum([
   'files',
   'relation',
   'rollup',
+  'formula',
   'created_time',
   'created_by',
   'last_edited_time',
