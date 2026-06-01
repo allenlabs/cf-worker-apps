@@ -1,4 +1,4 @@
-import { createFileRoute, redirect, useRouter } from '@tanstack/react-router';
+import { createFileRoute, redirect } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useT } from '@allenlabs/i18n/react';
 import { slugify } from '~/lib/format';
@@ -21,7 +21,6 @@ export const Route = createFileRoute('/projects/new')({
 });
 
 function NewProjectPage() {
-  const router = useRouter();
   const { t } = useT();
   const [form, setForm] = useState({
     name: '',
@@ -40,10 +39,13 @@ function NewProjectPage() {
     try {
       const created = await createProject({ data: form });
       notifySuccess(t('project.createdToast'));
-      // Invalidate cached loaders so /projects re-fetches the new list
-      // when the user navigates back.
-      router.invalidate();
-      router.navigate({ to: '/projects/$identifier', params: { identifier: created.identifier } });
+      // Full-page redirect, NOT router.navigate(). A client-side nav here was
+      // also running router.invalidate(), which re-ran the __root loader on the
+      // client — and that loader can't read the httpOnly cfr_session JWT, so it
+      // returns `user: null`, flipping the header to a signed-out state (looked
+      // like a logout). A full load re-runs SSR, which reads the cookie and
+      // re-populates the user. Matches the new-issue create flow.
+      window.location.href = `/projects/${created.identifier}`;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);

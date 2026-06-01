@@ -43,6 +43,15 @@ async function createProject(page: Page, label: string): Promise<string> {
 test.describe('project-management', () => {
   test('create a project and open its overview', async ({ page }) => {
     const identifier = await createProject(page, 'smoke');
+    // Regression: creating a project used to client-nav + router.invalidate(),
+    // which re-ran the root loader on the client and returned user:null,
+    // flipping the header to a signed-out state (looked like a logout). The
+    // header must still show the signed-in user right after create (no extra
+    // navigation). We assert the sign-out affordance is present and the
+    // sign-in link is absent.
+    await expect(page.getByRole('link', { name: 'Sign out' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Sign in' })).toHaveCount(0);
+
     await page.goto(`${PM}/projects`);
     await expect(page.getByTestId(`project-row-${identifier}`)).toBeVisible();
   });
