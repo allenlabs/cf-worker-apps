@@ -6,6 +6,8 @@ import { hmacMiddleware } from './middleware/hmac';
 import { instrument, otelConfig } from './middleware/telemetry';
 import { v1Router } from './handlers/router';
 import { keyFromPath } from './handlers/files';
+import { publicPageImpl } from './handlers/collab';
+import { makeDb } from './lib/db';
 import type { AppBindings } from './context';
 import type { Env } from './lib/env';
 
@@ -25,6 +27,17 @@ app.get('/files/*', async (c) => {
   headers.set('etag', object.httpEtag);
   headers.set('cache-control', 'public, max-age=31536000, immutable');
   return new Response(object.body, { headers });
+});
+
+// PUBLIC read for shared pages — registered BEFORE the /v1 HMAC gate so the
+// signed-out public share link works. Returns the page only when it exists and
+// public=true (publicPageImpl enforces that); 404 otherwise. No user identity.
+app.get('/public/page/:id', async (c) => {
+  const id = c.req.param('id');
+  const db = makeDb(c.env);
+  const page = await publicPageImpl(db, id);
+  if (!page) return c.json({ error: 'not found' }, 404);
+  return c.json(page, 200);
 });
 
 // Everything under /v1/* is HMAC-gated (single shared EDITOR_HMAC_SECRET).

@@ -34,6 +34,18 @@ interface RouterContext {
  */
 const PUBLIC_PATHS = new Set(['/auth/login', '/auth/callback', '/auth/logout']);
 
+/**
+ * Path prefixes a signed-out visitor must reach. `/share/<id>` backs public
+ * read-only share links, so it (like the auth.* routes) bypasses the SSO
+ * redirect entirely.
+ */
+const PUBLIC_PATH_PREFIXES = ['/share/'];
+
+function isPublicPath(pathname: string): boolean {
+  if (PUBLIC_PATHS.has(pathname)) return true;
+  return PUBLIC_PATH_PREFIXES.some((prefix) => pathname.startsWith(prefix));
+}
+
 export const Route = createRootRouteWithContext<RouterContext>()({
   beforeLoad: async () => {
     // CRITICAL: bail out before touching any *.server.* helper when running on
@@ -62,7 +74,7 @@ export const Route = createRootRouteWithContext<RouterContext>()({
         }
       }
     }
-    const isPublic = pathname ? PUBLIC_PATHS.has(pathname) : false;
+    const isPublic = pathname ? isPublicPath(pathname) : false;
     if (token) {
       const env = getEnv();
       const payload = await verifySessionToken(env, token);

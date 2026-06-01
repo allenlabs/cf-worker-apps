@@ -47,6 +47,21 @@ import {
   viewDatabaseImpl,
 } from './db';
 import { prepareUpload, publicUrlFor } from './files';
+import {
+  commentAddImpl,
+  commentDeleteImpl,
+  commentPageImpl,
+  commentResolveImpl,
+  commentsListImpl,
+  favListImpl,
+  favToggleImpl,
+  isFavoritedImpl,
+  purgePageImpl,
+  restorePageImpl,
+  searchImpl,
+  setPublicImpl,
+  trashListImpl,
+} from './collab';
 import { mintCollabToken } from '../lib/hmac';
 import type { AppBindings } from '../context';
 
@@ -117,7 +132,8 @@ v1Router.post('/pages/get', async (c) => {
   if (!page) return c.json({ error: 'not found' }, 404);
   const member = await isMemberImpl(c.get('db'), user.userId, page.workspaceId);
   if (!member) return c.json({ error: 'not found' }, 404);
-  return c.json(page, 200);
+  const favorited = await isFavoritedImpl(c.get('db'), user.userId, page.id);
+  return c.json({ ...page, favorited }, 200);
 });
 
 const updatePageSchema = z.object({
@@ -507,6 +523,165 @@ v1Router.post('/db/row/delete', async (c) => {
     return c.json({ error: 'not found' }, 404);
   }
   const ok = await deleteRowImpl(c.get('db'), parsed.data.id);
+  if (!ok) return c.json({ error: 'not found' }, 404);
+  return c.json({ ok: true }, 200);
+});
+
+// ---------- favorites (Phase 4) ----------
+
+v1Router.post('/fav/list', async (c) => {
+  const user = c.get('user');
+  const favs = await favListImpl(c.get('db'), user.userId);
+  return c.json(favs, 200);
+});
+
+const favToggleSchema = z.object({ pageId: z.string().uuid() });
+v1Router.post('/fav/toggle', async (c) => {
+  const user = c.get('user');
+  const parsed = favToggleSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  // Membership-gated: the page's workspace must include the user.
+  const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.pageId);
+  if (!can) return c.json({ error: 'not found' }, 404);
+  const result = await favToggleImpl(c.get('db'), user.userId, parsed.data.pageId);
+  return c.json(result, 200);
+});
+
+// ---------- trash (Phase 4) ----------
+
+const trashSchema = z.object({ workspaceId: z.string().uuid() });
+v1Router.post('/pages/trash', async (c) => {
+  const user = c.get('user');
+  const parsed = trashSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const member = await isMemberImpl(c.get('db'), user.userId, parsed.data.workspaceId);
+  if (!member) return c.json({ error: 'not found' }, 404);
+  const pages = await trashListImpl(c.get('db'), parsed.data.workspaceId);
+  return c.json(pages, 200);
+});
+
+v1Router.post('/pages/restore', async (c) => {
+  const user = c.get('user');
+  const parsed = idSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  // canAccessPageImpl resolves the page's workspace even when archived.
+  const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.id);
+  if (!can) return c.json({ error: 'not found' }, 404);
+  const ok = await restorePageImpl(c.get('db'), parsed.data.id);
+  if (!ok) return c.json({ error: 'not found' }, 404);
+  return c.json({ ok: true }, 200);
+});
+
+v1Router.post('/pages/purge', async (c) => {
+  const user = c.get('user');
+  const parsed = idSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.id);
+  if (!can) return c.json({ error: 'not found' }, 404);
+  const ok = await purgePageImpl(c.get('db'), parsed.data.id);
+  if (!ok) return c.json({ error: 'not found' }, 404);
+  return c.json({ ok: true }, 200);
+});
+
+// ---------- search (Phase 4) ----------
+
+const qSchema = z.object({ q: z.string().default('') });
+v1Router.post('/search', async (c) => {
+  const user = c.get('user');
+  const parsed = qSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const results = await searchImpl(c.get('db'), user.userId, parsed.data.q);
+  return c.json(results, 200);
+});
+
+// ---------- public sharing (Phase 4) ----------
+
+const setPublicSchema = z.object({ id: z.string().uuid(), public: z.boolean() });
+v1Router.post('/pages/setPublic', async (c) => {
+  const user = c.get('user');
+  const parsed = setPublicSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.id);
+  if (!can) return c.json({ error: 'not found' }, 404);
+  const result = await setPublicImpl(c.get('db'), parsed.data.id, parsed.data.public);
+  if (!result) return c.json({ error: 'not found' }, 404);
+  return c.json(result, 200);
+});
+
+// ---------- comments (Phase 4) ----------
+
+const commentsListSchema = z.object({ pageId: z.string().uuid() });
+v1Router.post('/comments/list', async (c) => {
+  const user = c.get('user');
+  const parsed = commentsListSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.pageId);
+  if (!can) return c.json({ error: 'not found' }, 404);
+  const comments = await commentsListImpl(c.get('db'), parsed.data.pageId);
+  return c.json(comments, 200);
+});
+
+const commentAddSchema = z.object({ pageId: z.string().uuid(), body: z.string().min(1).max(10000) });
+v1Router.post('/comments/add', async (c) => {
+  const user = c.get('user');
+  const parsed = commentAddSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.pageId);
+  if (!can) return c.json({ error: 'not found' }, 404);
+  const comment = await commentAddImpl(c.get('db'), {
+    pageId: parsed.data.pageId,
+    userId: user.userId,
+    authorName: user.userName,
+    body: parsed.data.body,
+  });
+  return c.json(comment, 200);
+});
+
+const commentResolveSchema = z.object({ id: z.string().uuid(), resolved: z.boolean() });
+v1Router.post('/comments/resolve', async (c) => {
+  const user = c.get('user');
+  const parsed = commentResolveSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const pageId = await commentPageImpl(c.get('db'), parsed.data.id);
+  if (!pageId) return c.json({ error: 'not found' }, 404);
+  const can = await canAccessPageImpl(c.get('db'), user.userId, pageId);
+  if (!can) return c.json({ error: 'not found' }, 404);
+  const ok = await commentResolveImpl(c.get('db'), parsed.data.id, parsed.data.resolved);
+  if (!ok) return c.json({ error: 'not found' }, 404);
+  return c.json({ ok: true }, 200);
+});
+
+v1Router.post('/comments/delete', async (c) => {
+  const user = c.get('user');
+  const parsed = idSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  // Any workspace member may delete (author check is a subset of membership);
+  // we gate on access to the comment's page.
+  const pageId = await commentPageImpl(c.get('db'), parsed.data.id);
+  if (!pageId) return c.json({ error: 'not found' }, 404);
+  const can = await canAccessPageImpl(c.get('db'), user.userId, pageId);
+  if (!can) return c.json({ error: 'not found' }, 404);
+  const ok = await commentDeleteImpl(c.get('db'), parsed.data.id);
   if (!ok) return c.json({ error: 'not found' }, 404);
   return c.json({ ok: true }, 200);
 });

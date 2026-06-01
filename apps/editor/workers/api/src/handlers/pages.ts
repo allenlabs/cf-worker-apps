@@ -35,6 +35,7 @@ export interface PageFull {
   snapshotHtml: string;
   kind: string; // 'page' | 'database'
   databaseId: string | null; // set when this page is a database row
+  public: boolean; // Phase 4 — when true, reachable via the public share link
 }
 
 // ---------- membership helpers ----------
@@ -186,7 +187,7 @@ export async function getPageImpl(sql: Sql, id: string): Promise<PageFull | null
   const [row] = await sql<PageFull[]>`
     SELECT id, workspace_id AS "workspaceId", parent_id AS "parentId",
            title, icon, snapshot_html AS "snapshotHtml",
-           kind, database_id AS "databaseId"
+           kind, database_id AS "databaseId", public
     FROM editor.pages
     WHERE id = ${id} AND archived = false
     LIMIT 1

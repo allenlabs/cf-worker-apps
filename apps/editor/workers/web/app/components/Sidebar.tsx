@@ -3,9 +3,9 @@
 // root loader returns user:null on client nav, so we use window.location to let
 // SSR re-read the cookie and re-populate the user. (Established repo lesson.)
 
-import { useMemo, useState } from 'react';
-import type { PageNode, Workspace } from '~/server/docs';
-import { createPage, dbCreate } from '~/server/docs';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { FavoriteItem, PageNode, SearchResult, Workspace } from '~/server/docs';
+import { createPage, dbCreate, search as searchFn } from '~/server/docs';
 
 interface TreeNode extends PageNode {
   children: TreeNode[];
@@ -36,9 +36,16 @@ interface SidebarProps {
   workspaceId: string;
   pages: PageNode[];
   activePageId?: string;
+  favorites?: FavoriteItem[];
 }
 
-export function Sidebar({ workspaces, workspaceId, pages, activePageId }: SidebarProps) {
+export function Sidebar({
+  workspaces,
+  workspaceId,
+  pages,
+  activePageId,
+  favorites = [],
+}: SidebarProps) {
   const tree = useMemo(() => buildTree(pages), [pages]);
   const [busy, setBusy] = useState(false);
 
@@ -92,7 +99,34 @@ export function Sidebar({ workspaces, workspaceId, pages, activePageId }: Sideba
         )}
       </div>
 
+      <div className="px-2 py-2 border-b border-gray-200">
+        <SearchBox />
+      </div>
+
       <nav className="flex-1 overflow-y-auto py-2">
+        {favorites.length > 0 ? (
+          <div className="mb-2">
+            <p className="px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+              Favorites
+            </p>
+            <ul className="text-sm">
+              {favorites.map((f) => (
+                <li key={f.pageId}>
+                  <a
+                    href={`/p/${f.pageId}`}
+                    className={`flex items-center gap-1 px-3 py-1 rounded no-underline text-gray-800 hover:bg-gray-100 ${
+                      f.pageId === activePageId ? 'bg-gray-200 font-medium' : ''
+                    }`}
+                  >
+                    <span className="shrink-0">{f.icon ?? '★'}</span>
+                    <span className="truncate">{f.title || 'Untitled'}</span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
         {tree.length === 0 ? (
           <p className="px-3 py-2 text-xs text-gray-400">No pages yet.</p>
         ) : (
@@ -125,8 +159,82 @@ export function Sidebar({ workspaces, workspaceId, pages, activePageId }: Sideba
         >
           ⊞ New database
         </button>
+        <a
+          href={`/trash?ws=${workspaceId}`}
+          className="block px-2 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded no-underline"
+        >
+          🗑 Trash
+        </a>
       </div>
     </aside>
+  );
+}
+
+/** Debounced search box with a results dropdown; clicking a result navigates. */
+function SearchBox() {
+  const [q, setQ] = useState('');
+  const [results, setResults] = useState<SearchResult[]>([]);
+  const [open, setOpen] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (timer.current) clearTimeout(timer.current);
+    const term = q.trim();
+    if (!term) {
+      setResults([]);
+      setOpen(false);
+      return;
+    }
+    timer.current = setTimeout(() => {
+      void searchFn({ data: { q: term } })
+        .then((r) => {
+          setResults(r);
+          setOpen(true);
+        })
+        .catch(() => {
+          setResults([]);
+        });
+    }, 250);
+    return () => {
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, [q]);
+
+  return (
+    <div className="relative">
+      <input
+        className="w-full text-sm bg-white border border-gray-200 rounded px-2 py-1 outline-none focus:border-gray-400"
+        placeholder="Search…"
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        onFocus={() => {
+          if (results.length > 0) setOpen(true);
+        }}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        aria-label="Search pages"
+      />
+      {open ? (
+        <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-gray-200 rounded shadow-md max-h-72 overflow-y-auto">
+          {results.length === 0 ? (
+            <p className="px-3 py-2 text-xs text-gray-400">No results.</p>
+          ) : (
+            <ul className="text-sm">
+              {results.map((r) => (
+                <li key={r.id}>
+                  <a
+                    href={`/p/${r.id}`}
+                    className="flex items-center gap-1 px-3 py-1.5 no-underline text-gray-800 hover:bg-gray-100"
+                  >
+                    <span className="shrink-0">{r.icon ?? '📄'}</span>
+                    <span className="truncate">{r.title || 'Untitled'}</span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

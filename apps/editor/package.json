@@ -16,6 +16,7 @@
     "db:migrate": "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f drizzle-pg/0001_init.sql",
     "db:migrate:0002": "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f drizzle-pg/0002_pages.sql",
     "db:migrate:0003": "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f drizzle-pg/0003_databases.sql",
+    "db:migrate:0004": "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f drizzle-pg/0004_collab.sql",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

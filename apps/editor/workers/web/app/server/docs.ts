@@ -61,6 +61,43 @@ export interface PageFull {
   snapshotHtml: string;
   kind: string; // 'page' | 'database'
   databaseId: string | null;
+  public: boolean; // Phase 4 — public share toggle state
+  favorited: boolean; // Phase 4 — starred by the requesting user
+}
+
+// ---------- collaboration (Phase 4) ----------
+
+export interface FavoriteItem {
+  pageId: string;
+  title: string;
+  icon: string | null;
+}
+
+export interface TrashItem {
+  id: string;
+  title: string;
+  icon: string | null;
+}
+
+export interface SearchResult {
+  id: string;
+  title: string;
+  icon: string | null;
+  workspaceId: string;
+}
+
+export interface PublicPage {
+  title: string;
+  icon: string | null;
+  snapshotHtml: string;
+}
+
+export interface CommentItem {
+  id: string;
+  authorName: string;
+  body: string;
+  resolved: boolean;
+  createdAt: string;
 }
 
 // ---------- databases (Phase 3) ----------
@@ -408,6 +445,127 @@ export function rowDeleteImpl(
   return apiPostImpl<{ ok: boolean }>(env, '/v1/db/row/delete', userBody(user, { id }), deps);
 }
 
+// ---------- collaboration impls (Phase 4) ----------
+
+export function favListImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  deps?: ApiClientDeps,
+): Promise<FavoriteItem[]> {
+  return apiPostImpl<FavoriteItem[]>(env, '/v1/fav/list', userBody(user), deps);
+}
+
+export function favToggleImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  pageId: string,
+  deps?: ApiClientDeps,
+): Promise<{ favorited: boolean }> {
+  return apiPostImpl<{ favorited: boolean }>(env, '/v1/fav/toggle', userBody(user, { pageId }), deps);
+}
+
+export function pagesTrashImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  workspaceId: string,
+  deps?: ApiClientDeps,
+): Promise<TrashItem[]> {
+  return apiPostImpl<TrashItem[]>(env, '/v1/pages/trash', userBody(user, { workspaceId }), deps);
+}
+
+export function pageRestoreImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  id: string,
+  deps?: ApiClientDeps,
+): Promise<{ ok: boolean }> {
+  return apiPostImpl<{ ok: boolean }>(env, '/v1/pages/restore', userBody(user, { id }), deps);
+}
+
+export function pagePurgeImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  id: string,
+  deps?: ApiClientDeps,
+): Promise<{ ok: boolean }> {
+  return apiPostImpl<{ ok: boolean }>(env, '/v1/pages/purge', userBody(user, { id }), deps);
+}
+
+export function searchImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  q: string,
+  deps?: ApiClientDeps,
+): Promise<SearchResult[]> {
+  return apiPostImpl<SearchResult[]>(env, '/v1/search', userBody(user, { q }), deps);
+}
+
+export function setPublicImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { id: string; public: boolean },
+  deps?: ApiClientDeps,
+): Promise<{ public: boolean }> {
+  return apiPostImpl<{ public: boolean }>(env, '/v1/pages/setPublic', userBody(user, input), deps);
+}
+
+/**
+ * NO-AUTH public read. Hits the editor-api public route directly (GET, no HMAC
+ * signature, no user body) so the share route is reachable signed-out.
+ */
+export async function publicPageImpl(
+  env: Pick<ApiClientEnv, 'EDITOR_API_URL'>,
+  id: string,
+  deps?: ApiClientDeps,
+): Promise<PublicPage | null> {
+  const base = env.EDITOR_API_URL.replace(/\/$/, '');
+  /* v8 ignore next — real fetch is the production default; tests inject one. */
+  const fetcher = deps?.fetcher ?? fetch;
+  const res = await fetcher(`${base}/public/page/${encodeURIComponent(id)}`, { method: 'GET' });
+  if (res.status === 404) return null;
+  /* v8 ignore next 3 — only on unexpected upstream failure. */
+  if (!res.ok) {
+    throw new Error(`editor-api /public/page ${res.status}`);
+  }
+  return (await res.json()) as PublicPage;
+}
+
+export function commentsListImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  pageId: string,
+  deps?: ApiClientDeps,
+): Promise<CommentItem[]> {
+  return apiPostImpl<CommentItem[]>(env, '/v1/comments/list', userBody(user, { pageId }), deps);
+}
+
+export function commentAddImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { pageId: string; body: string },
+  deps?: ApiClientDeps,
+): Promise<CommentItem> {
+  return apiPostImpl<CommentItem>(env, '/v1/comments/add', userBody(user, input), deps);
+}
+
+export function commentResolveImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { id: string; resolved: boolean },
+  deps?: ApiClientDeps,
+): Promise<{ ok: boolean }> {
+  return apiPostImpl<{ ok: boolean }>(env, '/v1/comments/resolve', userBody(user, input), deps);
+}
+
+export function commentDeleteImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  id: string,
+  deps?: ApiClientDeps,
+): Promise<{ ok: boolean }> {
+  return apiPostImpl<{ ok: boolean }>(env, '/v1/comments/delete', userBody(user, { id }), deps);
+}
+
 // ---------- createServerFn wrappers ----------
 /* v8 ignore start */
 
@@ -728,6 +886,97 @@ export const rowDelete = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
     const user = await requireUser();
     return rowDeleteImpl(getEnv(), user, data.id);
+  });
+
+// ---------- collaboration wrappers (Phase 4) ----------
+
+export const favList = createServerFn({ method: 'GET' }).handler(async () => {
+  const user = await requireUser();
+  return favListImpl(getEnv(), user);
+});
+
+export const favToggle = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) => z.object({ pageId: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return favToggleImpl(getEnv(), user, data.pageId);
+  });
+
+export const pagesTrash = createServerFn({ method: 'GET' })
+  .inputValidator((d: unknown) => z.object({ workspaceId: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return pagesTrashImpl(getEnv(), user, data.workspaceId);
+  });
+
+export const pageRestore = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return pageRestoreImpl(getEnv(), user, data.id);
+  });
+
+export const pagePurge = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return pagePurgeImpl(getEnv(), user, data.id);
+  });
+
+export const search = createServerFn({ method: 'GET' })
+  .inputValidator((d: unknown) => z.object({ q: z.string().default('') }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return searchImpl(getEnv(), user, data.q);
+  });
+
+export const setPublic = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z.object({ id: z.string().uuid(), public: z.boolean() }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return setPublicImpl(getEnv(), user, data);
+  });
+
+// NO-AUTH: backs the public /share/$pageId route. Does not call requireUser so
+// it works for signed-out visitors; the api enforces public=true.
+export const publicPage = createServerFn({ method: 'GET' })
+  .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    return publicPageImpl(getEnv(), data.id);
+  });
+
+export const commentsList = createServerFn({ method: 'GET' })
+  .inputValidator((d: unknown) => z.object({ pageId: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return commentsListImpl(getEnv(), user, data.pageId);
+  });
+
+export const commentAdd = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z.object({ pageId: z.string().uuid(), body: z.string().min(1).max(10000) }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return commentAddImpl(getEnv(), user, data);
+  });
+
+export const commentResolve = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z.object({ id: z.string().uuid(), resolved: z.boolean() }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return commentResolveImpl(getEnv(), user, data);
+  });
+
+export const commentDelete = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return commentDeleteImpl(getEnv(), user, data.id);
   });
 
 /* v8 ignore stop */
