@@ -2,11 +2,24 @@ name = "allenlabs-collab"
 main = "src/index.ts"
 compatibility_date = "2026-01-01"
 compatibility_flags = ["nodejs_compat"]
+workers_dev = true
 
+# One Yjs document per Durable Object (y-durableobjects). Hibernatable
+# WebSockets keep idle docs free.
 [[durable_objects.bindings]]
-name = "SMOKE"
-class_name = "SmokeDO"
+name = "Y_DURABLE_OBJECTS"
+class_name = "YDurableObjects"
 
+# v1 created SmokeDO (DO de-risk). v2 retires it and introduces the real
+# Yjs document object.
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["SmokeDO"]
+
+[[migrations]]
+tag = "v2"
+deleted_classes = ["SmokeDO"]
+new_classes = ["YDurableObjects"]
+
+# COLLAB_HMAC_SECRET set via `wrangler secret put COLLAB_HMAC_SECRET`.
+# Each embedding app mints WS tokens with the same secret.
