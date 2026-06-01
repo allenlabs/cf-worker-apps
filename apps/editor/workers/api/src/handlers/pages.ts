@@ -23,6 +23,7 @@ export interface PageNode {
   icon: string | null;
   parentId: string | null;
   position: number;
+  kind: string; // 'page' | 'database'
 }
 
 export interface PageFull {
@@ -32,6 +33,8 @@ export interface PageFull {
   title: string;
   icon: string | null;
   snapshotHtml: string;
+  kind: string; // 'page' | 'database'
+  databaseId: string | null; // set when this page is a database row
 }
 
 // ---------- membership helpers ----------
@@ -123,11 +126,19 @@ export async function listOrProvisionWorkspacesImpl(
 /** All non-archived pages in a workspace as a flat array (web builds the tree). */
 export async function pageTreeImpl(sql: Sql, workspaceId: string): Promise<PageNode[]> {
   const rows = await sql<
-    { id: string; title: string; icon: string | null; parentId: string | null; position: number }[]
+    {
+      id: string;
+      title: string;
+      icon: string | null;
+      parentId: string | null;
+      position: number;
+      kind: string;
+    }[]
   >`
-    SELECT id, title, icon, parent_id AS "parentId", position
+    SELECT id, title, icon, parent_id AS "parentId", position, kind
     FROM editor.pages
     WHERE workspace_id = ${workspaceId} AND archived = false
+      AND database_id IS NULL
     ORDER BY position ASC, created_at ASC
   `;
   return rows.map((r) => ({
@@ -136,6 +147,7 @@ export async function pageTreeImpl(sql: Sql, workspaceId: string): Promise<PageN
     icon: r.icon,
     parentId: r.parentId,
     position: Number(r.position),
+    kind: r.kind,
   }));
 }
 
@@ -173,7 +185,8 @@ export async function createPageImpl(
 export async function getPageImpl(sql: Sql, id: string): Promise<PageFull | null> {
   const [row] = await sql<PageFull[]>`
     SELECT id, workspace_id AS "workspaceId", parent_id AS "parentId",
-           title, icon, snapshot_html AS "snapshotHtml"
+           title, icon, snapshot_html AS "snapshotHtml",
+           kind, database_id AS "databaseId"
     FROM editor.pages
     WHERE id = ${id} AND archived = false
     LIMIT 1

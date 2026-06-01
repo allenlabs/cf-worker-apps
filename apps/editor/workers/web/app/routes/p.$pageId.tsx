@@ -3,9 +3,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { CollaborativeEditor } from '@allenlabs/editor';
 import '@allenlabs/editor/styles.css';
 import { Sidebar } from '~/components/Sidebar';
+import { DatabaseView } from '~/components/DatabaseView';
 import {
   collabToken,
   createPage,
+  dbSchema as dbSchemaFn,
   getPage,
   getTree,
   listWorkspaces,
@@ -13,6 +15,7 @@ import {
   updatePage,
   uploadFile,
   type CollabToken,
+  type DbSchema,
   type PageFull,
   type PageNode,
   type Workspace,
@@ -54,18 +57,27 @@ export const Route = createFileRoute('/p/$pageId')({
         token: null as CollabToken | null,
         workspaces: [] as Workspace[],
         pages: [] as PageNode[],
+        schema: null as DbSchema | null,
         userName: '',
       };
     }
     const { getCurrentUser } = await import('~/server/auth-runtime.server');
     const user = await getCurrentUser();
     const page = await getPage({ data: { id: params.pageId } });
-    const [token, workspaces, pages] = await Promise.all([
-      collabToken({ data: { docId: params.pageId } }),
+    const isDatabase = page.kind === 'database';
+    // Database pages have no editor → skip the collab token; fetch the schema
+    // (a row page is a normal page and still gets a collab editor).
+    const [token, workspaces, pages, schema] = await Promise.all([
+      isDatabase
+        ? Promise.resolve(null as CollabToken | null)
+        : collabToken({ data: { docId: params.pageId } }),
       listWorkspaces(),
       getTree({ data: { workspaceId: page.workspaceId } }),
+      isDatabase
+        ? dbSchemaFn({ data: { databaseId: params.pageId } })
+        : Promise.resolve(null as DbSchema | null),
     ]);
-    return { page, token, workspaces, pages, userName: user?.name ?? 'user' };
+    return { page, token, workspaces, pages, schema, userName: user?.name ?? 'user' };
   },
   component: PageView,
 });
@@ -86,8 +98,9 @@ function ancestorsOf(pages: PageNode[], pageId: string): PageNode[] {
 }
 
 function PageView() {
-  const { page, token, workspaces, pages, userName } = Route.useLoaderData();
+  const { page, token, workspaces, pages, schema, userName } = Route.useLoaderData();
   const { pageId } = Route.useParams();
+  const isDatabase = page?.kind === 'database';
 
   // TipTap touches the DOM — render the editor ONLY after mount (never on the
   // server). Until then show a skeleton.
@@ -126,7 +139,8 @@ function PageView() {
     }
   }
 
-  if (!page || !token) {
+  // A database page has no collab token (no editor); a normal page needs one.
+  if (!page || (!isDatabase && !token)) {
     return <div className="card p-8 text-gray-500">Loading…</div>;
   }
 
@@ -175,7 +189,9 @@ function PageView() {
             />
           </div>
 
-          {mounted ? (
+          {isDatabase && schema ? (
+            <DatabaseView databaseId={pageId} initialSchema={schema} />
+          ) : mounted && token ? (
             <CollaborativeEditor
               value={page.snapshotHtml}
               placeholder='Type "/" for commands…'
@@ -196,12 +212,14 @@ function PageView() {
             <div className="text-gray-400 text-sm">Loading editor…</div>
           )}
 
-          <button
-            className="mt-6 text-sm text-gray-500 hover:text-gray-800"
-            onClick={handleNewSub}
-          >
-            ＋ Add sub-page
-          </button>
+          {isDatabase ? null : (
+            <button
+              className="mt-6 text-sm text-gray-500 hover:text-gray-800"
+              onClick={handleNewSub}
+            >
+              ＋ Add sub-page
+            </button>
+          )}
         </div>
       </div>
     </div>

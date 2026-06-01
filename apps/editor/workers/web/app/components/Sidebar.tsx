@@ -5,7 +5,7 @@
 
 import { useMemo, useState } from 'react';
 import type { PageNode, Workspace } from '~/server/docs';
-import { createPage } from '~/server/docs';
+import { createPage, dbCreate } from '~/server/docs';
 
 interface TreeNode extends PageNode {
   children: TreeNode[];
@@ -55,6 +55,18 @@ export function Sidebar({ workspaces, workspaceId, pages, activePageId }: Sideba
     }
   }
 
+  async function handleNewDatabase() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const created = await dbCreate({ data: { workspaceId, title: 'Untitled database' } });
+      // Full-page nav so SSR re-reads the cookie (established repo lesson).
+      window.location.href = `/p/${created.id}`;
+    } catch {
+      setBusy(false);
+    }
+  }
+
   function switchWorkspace(id: string) {
     if (id === workspaceId) return;
     window.location.href = `/?ws=${id}`;
@@ -98,13 +110,20 @@ export function Sidebar({ workspaces, workspaceId, pages, activePageId }: Sideba
         )}
       </nav>
 
-      <div className="px-2 py-2 border-t border-gray-200">
+      <div className="px-2 py-2 border-t border-gray-200 space-y-0.5">
         <button
           className="w-full text-left px-2 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded"
           onClick={handleNewRoot}
           disabled={busy}
         >
           ＋ New page
+        </button>
+        <button
+          className="w-full text-left px-2 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded"
+          onClick={handleNewDatabase}
+          disabled={busy}
+        >
+          ⊞ New database
         </button>
       </div>
     </aside>
@@ -161,7 +180,9 @@ function TreeRow({ node, depth, workspaceId, activePageId }: TreeRowProps) {
           href={`/p/${node.id}`}
           className="flex-1 min-w-0 flex items-center gap-1 no-underline text-gray-800 truncate"
         >
-          <span className="shrink-0">{node.icon ?? '📄'}</span>
+          <span className="shrink-0">
+            {node.icon ?? (node.kind === 'database' ? '⊞' : '📄')}
+          </span>
           <span className="truncate">{node.title || 'Untitled'}</span>
         </a>
         <button

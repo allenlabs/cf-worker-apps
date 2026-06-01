@@ -29,6 +29,23 @@ import {
   pageTreeImpl,
   updatePageImpl,
 } from './pages';
+import {
+  addPropertyImpl,
+  addRowImpl,
+  addViewImpl,
+  createDatabaseImpl,
+  dbRowsImpl,
+  dbSchemaImpl,
+  deletePropertyImpl,
+  deleteRowImpl,
+  deleteViewImpl,
+  propertyDatabaseImpl,
+  rowDatabaseImpl,
+  updatePropertyImpl,
+  updateRowImpl,
+  updateViewImpl,
+  viewDatabaseImpl,
+} from './db';
 import { prepareUpload, publicUrlFor } from './files';
 import { mintCollabToken } from '../lib/hmac';
 import type { AppBindings } from '../context';
@@ -231,6 +248,267 @@ v1Router.post('/collab-token', async (c) => {
   };
   const token = await mintCollabToken(c.env.COLLAB_HMAC_SECRET, payload);
   return c.json({ token, url: c.env.COLLAB_URL, docId: parsed.data.docId }, 200);
+});
+
+// ---------- databases (Phase 3) ----------
+//
+// A database is a page (kind='database'); rows are pages with database_id set.
+// Access is gated by membership in the database page's workspace (or the row's,
+// which is the same workspace). property/view ids resolve to their database
+// first, then to the workspace via canAccessPageImpl.
+
+const propertyType = z.enum([
+  'text',
+  'number',
+  'checkbox',
+  'select',
+  'multi_select',
+  'status',
+  'date',
+  'url',
+  'email',
+  'phone',
+]);
+
+const dbCreateSchema = z.object({
+  workspaceId: z.string().uuid(),
+  parentId: z.string().uuid().nullish(),
+  title: z.string().max(255).optional(),
+});
+v1Router.post('/db/create', async (c) => {
+  const user = c.get('user');
+  const parsed = dbCreateSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const member = await isMemberImpl(c.get('db'), user.userId, parsed.data.workspaceId);
+  if (!member) return c.json({ error: 'not found' }, 404);
+  if (parsed.data.parentId) {
+    const parent = await getPageImpl(c.get('db'), parsed.data.parentId);
+    if (!parent || parent.workspaceId !== parsed.data.workspaceId) {
+      return c.json({ error: 'not found' }, 404);
+    }
+  }
+  const created = await createDatabaseImpl(c.get('db'), user.userId, {
+    workspaceId: parsed.data.workspaceId,
+    parentId: parsed.data.parentId ?? null,
+    title: parsed.data.title,
+  });
+  return c.json(created, 200);
+});
+
+const dbIdSchema = z.object({ databaseId: z.string().uuid() });
+v1Router.post('/db/schema', async (c) => {
+  const user = c.get('user');
+  const parsed = dbIdSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.databaseId);
+  if (!can) return c.json({ error: 'not found' }, 404);
+  const schema = await dbSchemaImpl(c.get('db'), parsed.data.databaseId);
+  if (!schema) return c.json({ error: 'not found' }, 404);
+  return c.json(schema, 200);
+});
+
+const propAddSchema = z.object({
+  databaseId: z.string().uuid(),
+  name: z.string().min(1).max(120),
+  type: propertyType,
+  config: z.record(z.string(), z.unknown()).optional(),
+});
+v1Router.post('/db/property/add', async (c) => {
+  const user = c.get('user');
+  const parsed = propAddSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.databaseId);
+  if (!can) return c.json({ error: 'not found' }, 404);
+  const prop = await addPropertyImpl(c.get('db'), {
+    databaseId: parsed.data.databaseId,
+    name: parsed.data.name,
+    type: parsed.data.type,
+    config: parsed.data.config,
+  });
+  return c.json(prop, 200);
+});
+
+const propUpdateSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string().min(1).max(120).optional(),
+  type: propertyType.optional(),
+  config: z.record(z.string(), z.unknown()).optional(),
+});
+v1Router.post('/db/property/update', async (c) => {
+  const user = c.get('user');
+  const parsed = propUpdateSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const dbId = await propertyDatabaseImpl(c.get('db'), parsed.data.id);
+  if (!dbId) return c.json({ error: 'not found' }, 404);
+  const can = await canAccessPageImpl(c.get('db'), user.userId, dbId);
+  if (!can) return c.json({ error: 'not found' }, 404);
+  const ok = await updatePropertyImpl(c.get('db'), parsed.data.id, {
+    name: parsed.data.name,
+    type: parsed.data.type,
+    config: parsed.data.config,
+  });
+  if (!ok) return c.json({ error: 'not found' }, 404);
+  return c.json({ ok: true }, 200);
+});
+
+v1Router.post('/db/property/delete', async (c) => {
+  const user = c.get('user');
+  const parsed = idSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const dbId = await propertyDatabaseImpl(c.get('db'), parsed.data.id);
+  if (!dbId) return c.json({ error: 'not found' }, 404);
+  const can = await canAccessPageImpl(c.get('db'), user.userId, dbId);
+  if (!can) return c.json({ error: 'not found' }, 404);
+  const ok = await deletePropertyImpl(c.get('db'), parsed.data.id);
+  if (!ok) return c.json({ error: 'not found' }, 404);
+  return c.json({ ok: true }, 200);
+});
+
+const viewAddSchema = z.object({
+  databaseId: z.string().uuid(),
+  type: z.enum(['table', 'board']),
+  name: z.string().max(120).optional(),
+  config: z.record(z.string(), z.unknown()).optional(),
+});
+v1Router.post('/db/view/add', async (c) => {
+  const user = c.get('user');
+  const parsed = viewAddSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.databaseId);
+  if (!can) return c.json({ error: 'not found' }, 404);
+  const view = await addViewImpl(c.get('db'), {
+    databaseId: parsed.data.databaseId,
+    type: parsed.data.type,
+    name: parsed.data.name,
+    config: parsed.data.config,
+  });
+  return c.json(view, 200);
+});
+
+const viewUpdateSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string().max(120).optional(),
+  config: z.record(z.string(), z.unknown()).optional(),
+});
+v1Router.post('/db/view/update', async (c) => {
+  const user = c.get('user');
+  const parsed = viewUpdateSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const dbId = await viewDatabaseImpl(c.get('db'), parsed.data.id);
+  if (!dbId) return c.json({ error: 'not found' }, 404);
+  const can = await canAccessPageImpl(c.get('db'), user.userId, dbId);
+  if (!can) return c.json({ error: 'not found' }, 404);
+  const ok = await updateViewImpl(c.get('db'), parsed.data.id, {
+    name: parsed.data.name,
+    config: parsed.data.config,
+  });
+  if (!ok) return c.json({ error: 'not found' }, 404);
+  return c.json({ ok: true }, 200);
+});
+
+v1Router.post('/db/view/delete', async (c) => {
+  const user = c.get('user');
+  const parsed = idSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const dbId = await viewDatabaseImpl(c.get('db'), parsed.data.id);
+  if (!dbId) return c.json({ error: 'not found' }, 404);
+  const can = await canAccessPageImpl(c.get('db'), user.userId, dbId);
+  if (!can) return c.json({ error: 'not found' }, 404);
+  const ok = await deleteViewImpl(c.get('db'), parsed.data.id);
+  if (!ok) return c.json({ error: 'not found' }, 404);
+  return c.json({ ok: true }, 200);
+});
+
+const dbRowsSchema = z.object({
+  databaseId: z.string().uuid(),
+  viewId: z.string().uuid().optional(),
+});
+v1Router.post('/db/rows', async (c) => {
+  const user = c.get('user');
+  const parsed = dbRowsSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.databaseId);
+  if (!can) return c.json({ error: 'not found' }, 404);
+  const rows = await dbRowsImpl(c.get('db'), parsed.data.databaseId, parsed.data.viewId);
+  return c.json(rows, 200);
+});
+
+const rowAddSchema = z.object({
+  databaseId: z.string().uuid(),
+  title: z.string().max(255).optional(),
+});
+v1Router.post('/db/row/add', async (c) => {
+  const user = c.get('user');
+  const parsed = rowAddSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.databaseId);
+  if (!can) return c.json({ error: 'not found' }, 404);
+  const row = await addRowImpl(c.get('db'), user.userId, {
+    databaseId: parsed.data.databaseId,
+    title: parsed.data.title,
+  });
+  return c.json(row, 200);
+});
+
+const rowUpdateSchema = z.object({
+  id: z.string().uuid(),
+  title: z.string().max(255).optional(),
+  props: z.record(z.string(), z.unknown()).optional(),
+});
+v1Router.post('/db/row/update', async (c) => {
+  const user = c.get('user');
+  const parsed = rowUpdateSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  // Rows are pages; canAccessPageImpl resolves the row's workspace directly.
+  const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.id);
+  if (!can) return c.json({ error: 'not found' }, 404);
+  if ((await rowDatabaseImpl(c.get('db'), parsed.data.id)) === null) {
+    return c.json({ error: 'not found' }, 404);
+  }
+  const ok = await updateRowImpl(c.get('db'), parsed.data.id, {
+    title: parsed.data.title,
+    props: parsed.data.props,
+  });
+  if (!ok) return c.json({ error: 'not found' }, 404);
+  return c.json({ ok: true }, 200);
+});
+
+v1Router.post('/db/row/delete', async (c) => {
+  const user = c.get('user');
+  const parsed = idSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.id);
+  if (!can) return c.json({ error: 'not found' }, 404);
+  if ((await rowDatabaseImpl(c.get('db'), parsed.data.id)) === null) {
+    return c.json({ error: 'not found' }, 404);
+  }
+  const ok = await deleteRowImpl(c.get('db'), parsed.data.id);
+  if (!ok) return c.json({ error: 'not found' }, 404);
+  return c.json({ ok: true }, 200);
 });
 
 // ---------- DEPRECATED: legacy flat documents (web no longer calls these) ----------

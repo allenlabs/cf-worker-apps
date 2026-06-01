@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Sidebar } from '~/components/Sidebar';
 import {
   createPage,
+  dbCreate,
   getTree,
   listWorkspaces,
   type PageNode,
@@ -62,6 +63,18 @@ function HomePage() {
     }
   }
 
+  async function handleNewDatabase() {
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await dbCreate({ data: { workspaceId, title: 'Untitled database' } });
+      window.location.href = `/p/${created.id}`;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setBusy(false);
+    }
+  }
+
   if (!workspaceId) {
     return (
       <div className="card p-8 text-center text-gray-500">Setting up your workspace…</div>
@@ -78,9 +91,18 @@ function HomePage() {
             Pages can be nested infinitely. Start with one and add sub-pages as you go.
           </p>
           {error ? <p className="text-sm text-red-700 mb-3">{error}</p> : null}
-          <button className="btn-primary" onClick={handleNew} disabled={busy}>
-            {busy ? 'Creating…' : 'New page'}
-          </button>
+          <div className="flex items-center justify-center gap-2">
+            <button className="btn-primary" onClick={handleNew} disabled={busy}>
+              {busy ? 'Creating…' : 'New page'}
+            </button>
+            <button
+              className="btn-primary"
+              onClick={handleNewDatabase}
+              disabled={busy}
+            >
+              {busy ? 'Creating…' : 'New database'}
+            </button>
+          </div>
         </div>
       </div>
     </div>

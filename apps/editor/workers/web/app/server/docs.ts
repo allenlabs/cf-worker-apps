@@ -49,6 +49,7 @@ export interface PageNode {
   icon: string | null;
   parentId: string | null;
   position: number;
+  kind: string; // 'page' | 'database'
 }
 
 export interface PageFull {
@@ -58,6 +59,83 @@ export interface PageFull {
   title: string;
   icon: string | null;
   snapshotHtml: string;
+  kind: string; // 'page' | 'database'
+  databaseId: string | null;
+}
+
+// ---------- databases (Phase 3) ----------
+
+/**
+ * JSON-serializable value. TanStack Start's createServerFn validates that
+ * return types are serializable, which rejects `unknown` — so cell values and
+ * jsonb config use this recursive JSON type instead.
+ */
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+export type PropertyType =
+  | 'text'
+  | 'number'
+  | 'checkbox'
+  | 'select'
+  | 'multi_select'
+  | 'status'
+  | 'date'
+  | 'url'
+  | 'email'
+  | 'phone';
+
+export interface SelectOption {
+  id: string;
+  name: string;
+  color?: string;
+}
+
+export interface DbPropertyConfig {
+  options?: SelectOption[];
+  [k: string]: JsonValue | SelectOption[] | undefined;
+}
+
+export interface DbProperty {
+  id: string;
+  databaseId: string;
+  name: string;
+  type: string;
+  config: DbPropertyConfig;
+  position: number;
+}
+
+export interface DbViewConfig {
+  filters?: { propId: string; value?: JsonValue }[];
+  sorts?: { propId: string; dir?: 'asc' | 'desc' }[];
+  groupBy?: string;
+  visible?: string[];
+}
+
+export interface DbView {
+  id: string;
+  databaseId: string;
+  name: string;
+  type: string; // 'table' | 'board'
+  config: DbViewConfig;
+  position: number;
+}
+
+export interface DbSchema {
+  database: { id: string; title: string };
+  properties: DbProperty[];
+  views: DbView[];
+}
+
+export interface DbRow {
+  id: string;
+  title: string;
+  props: Record<string, JsonValue>;
 }
 
 /** Fields the backend's HMAC layer trusts after verifying the signature. */
@@ -218,6 +296,116 @@ export function uploadFileImpl(
     userBody(user, input),
     deps,
   );
+}
+
+// ---------- database impls (Phase 3) ----------
+
+export function dbCreateImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { workspaceId: string; parentId?: string | null; title?: string },
+  deps?: ApiClientDeps,
+): Promise<{ id: string }> {
+  return apiPostImpl<{ id: string }>(env, '/v1/db/create', userBody(user, input), deps);
+}
+
+export function dbSchemaImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  databaseId: string,
+  deps?: ApiClientDeps,
+): Promise<DbSchema> {
+  return apiPostImpl<DbSchema>(env, '/v1/db/schema', userBody(user, { databaseId }), deps);
+}
+
+export function propAddImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { databaseId: string; name: string; type: PropertyType; config?: Record<string, unknown> },
+  deps?: ApiClientDeps,
+): Promise<DbProperty> {
+  return apiPostImpl<DbProperty>(env, '/v1/db/property/add', userBody(user, input), deps);
+}
+
+export function propUpdateImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { id: string; name?: string; type?: PropertyType; config?: Record<string, unknown> },
+  deps?: ApiClientDeps,
+): Promise<{ ok: boolean }> {
+  return apiPostImpl<{ ok: boolean }>(env, '/v1/db/property/update', userBody(user, input), deps);
+}
+
+export function propDeleteImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  id: string,
+  deps?: ApiClientDeps,
+): Promise<{ ok: boolean }> {
+  return apiPostImpl<{ ok: boolean }>(env, '/v1/db/property/delete', userBody(user, { id }), deps);
+}
+
+export function viewAddImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { databaseId: string; type: 'table' | 'board'; name?: string; config?: Record<string, unknown> },
+  deps?: ApiClientDeps,
+): Promise<DbView> {
+  return apiPostImpl<DbView>(env, '/v1/db/view/add', userBody(user, input), deps);
+}
+
+export function viewUpdateImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { id: string; name?: string; config?: Record<string, unknown> },
+  deps?: ApiClientDeps,
+): Promise<{ ok: boolean }> {
+  return apiPostImpl<{ ok: boolean }>(env, '/v1/db/view/update', userBody(user, input), deps);
+}
+
+export function viewDeleteImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  id: string,
+  deps?: ApiClientDeps,
+): Promise<{ ok: boolean }> {
+  return apiPostImpl<{ ok: boolean }>(env, '/v1/db/view/delete', userBody(user, { id }), deps);
+}
+
+export function dbRowsImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { databaseId: string; viewId?: string },
+  deps?: ApiClientDeps,
+): Promise<DbRow[]> {
+  return apiPostImpl<DbRow[]>(env, '/v1/db/rows', userBody(user, input), deps);
+}
+
+export function rowAddImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { databaseId: string; title?: string },
+  deps?: ApiClientDeps,
+): Promise<DbRow> {
+  return apiPostImpl<DbRow>(env, '/v1/db/row/add', userBody(user, input), deps);
+}
+
+export function rowUpdateImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { id: string; title?: string; props?: Record<string, unknown> },
+  deps?: ApiClientDeps,
+): Promise<{ ok: boolean }> {
+  return apiPostImpl<{ ok: boolean }>(env, '/v1/db/row/update', userBody(user, input), deps);
+}
+
+export function rowDeleteImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  id: string,
+  deps?: ApiClientDeps,
+): Promise<{ ok: boolean }> {
+  return apiPostImpl<{ ok: boolean }>(env, '/v1/db/row/delete', userBody(user, { id }), deps);
 }
 
 // ---------- createServerFn wrappers ----------
@@ -382,6 +570,164 @@ export const uploadFile = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
     const user = await requireUser();
     return uploadFileImpl(getEnv(), user, data);
+  });
+
+// ---------- database wrappers (Phase 3) ----------
+
+const propertyTypeSchema = z.enum([
+  'text',
+  'number',
+  'checkbox',
+  'select',
+  'multi_select',
+  'status',
+  'date',
+  'url',
+  'email',
+  'phone',
+]);
+
+export const dbCreate = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        workspaceId: z.string().uuid(),
+        parentId: z.string().uuid().nullish(),
+        title: z.string().max(255).optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return dbCreateImpl(getEnv(), user, {
+      workspaceId: data.workspaceId,
+      parentId: data.parentId ?? null,
+      title: data.title,
+    });
+  });
+
+export const dbSchema = createServerFn({ method: 'GET' })
+  .inputValidator((d: unknown) => z.object({ databaseId: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return dbSchemaImpl(getEnv(), user, data.databaseId);
+  });
+
+export const propAdd = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        databaseId: z.string().uuid(),
+        name: z.string().min(1).max(120),
+        type: propertyTypeSchema,
+        config: z.record(z.string(), z.unknown()).optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return propAddImpl(getEnv(), user, data);
+  });
+
+export const propUpdate = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        id: z.string().uuid(),
+        name: z.string().min(1).max(120).optional(),
+        type: propertyTypeSchema.optional(),
+        config: z.record(z.string(), z.unknown()).optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return propUpdateImpl(getEnv(), user, data);
+  });
+
+export const propDelete = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return propDeleteImpl(getEnv(), user, data.id);
+  });
+
+export const viewAdd = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        databaseId: z.string().uuid(),
+        type: z.enum(['table', 'board']),
+        name: z.string().max(120).optional(),
+        config: z.record(z.string(), z.unknown()).optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return viewAddImpl(getEnv(), user, data);
+  });
+
+export const viewUpdate = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        id: z.string().uuid(),
+        name: z.string().max(120).optional(),
+        config: z.record(z.string(), z.unknown()).optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return viewUpdateImpl(getEnv(), user, data);
+  });
+
+export const viewDelete = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return viewDeleteImpl(getEnv(), user, data.id);
+  });
+
+export const dbRows = createServerFn({ method: 'GET' })
+  .inputValidator((d: unknown) =>
+    z.object({ databaseId: z.string().uuid(), viewId: z.string().uuid().optional() }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return dbRowsImpl(getEnv(), user, data);
+  });
+
+export const rowAdd = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z.object({ databaseId: z.string().uuid(), title: z.string().max(255).optional() }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return rowAddImpl(getEnv(), user, data);
+  });
+
+export const rowUpdate = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        id: z.string().uuid(),
+        title: z.string().max(255).optional(),
+        props: z.record(z.string(), z.unknown()).optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return rowUpdateImpl(getEnv(), user, data);
+  });
+
+export const rowDelete = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return rowDeleteImpl(getEnv(), user, data.id);
   });
 
 /* v8 ignore stop */
