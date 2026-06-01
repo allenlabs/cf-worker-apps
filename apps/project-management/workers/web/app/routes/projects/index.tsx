@@ -135,7 +135,7 @@ function ProjectsListPage() {
       </div>
       <ul className="card divide-y divide-gray-100">
         {projects.map((p) => (
-          <li key={p.id} className="p-4">
+          <li key={p.id} className="p-4" data-testid={`project-row-${p.identifier}`}>
             <div className="flex items-center justify-between">
               <Link
                 to="/projects/$identifier"

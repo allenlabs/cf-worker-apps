@@ -50,7 +50,14 @@ export function contextName(label: string): string {
 
 /** Apps we sign into.  Each entry maps to a per-app session cookie + base URL. */
 export interface AppConfig {
-  readonly name: 'inbox' | 'focus' | 'today' | 'context' | 'concierge';
+  readonly name:
+    | 'inbox'
+    | 'focus'
+    | 'today'
+    | 'context'
+    | 'concierge'
+    | 'hub'
+    | 'pm';
   readonly baseUrl: string;
   readonly cookieName: string;
 }
@@ -81,7 +88,27 @@ export const APPS: Readonly<Record<AppConfig['name'], AppConfig>> = {
     baseUrl: 'https://concierge.allenlabs.org',
     cookieName: 'concierge_session',
   },
+  hub: {
+    name: 'hub',
+    baseUrl: 'https://hub.allenlabs.org',
+    cookieName: 'hub_session',
+  },
+  // Project Management uses the original SSO cookie name `cfr_session`
+  // (it predates the per-app `<app>_session` convention). Same /auth/login
+  // → /sign-in?return_to=…/auth/callback flow as every other app.
+  pm: {
+    name: 'pm',
+    baseUrl: 'https://projects.allenlabs.org',
+    cookieName: 'cfr_session',
+  },
 };
 
+/** Build a PM project identifier carrying the e2e- prefix cleanup.ts deletes. */
+export function pmIdentifier(label = 'spec'): string {
+  const rand = Math.random().toString(36).slice(2, 8);
+  const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return `${PM_E2E_PREFIX}${slug || 'proj'}-${rand}`;
+}
+
 export const AUTH_BASE_URL = 'https://auth.allen.company';
-export const TEST_EMAIL_DEFAULT = 'allenlim@allenlabs.org';
+export const TEST_EMAIL_DEFAULT = 'e2e-user@example.test';

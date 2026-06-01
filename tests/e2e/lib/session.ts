@@ -53,6 +53,11 @@ export interface SignInOptions {
   force?: boolean;
 }
 
+function hasAllSessionCookies(state: StorageState, cookieNames: string[]): boolean {
+  const cookieSet = new Set(state.cookies.map((cookie) => cookie.name));
+  return cookieNames.every((name) => cookieSet.has(name));
+}
+
 // Resolve relative to this file at runtime.  Playwright transpiles the
 // TypeScript to CJS by default (no `"type": "module"`), so `__dirname`
 // is available; we keep an ESM-safe fallback in case someone flips the
@@ -177,7 +182,16 @@ export async function buildStorageState(opts: SignInOptions = {}): Promise<strin
       const stat = await fs.stat(outputPath);
       const age = Date.now() - stat.mtimeMs;
       if (age < freshness) {
-        return outputPath;
+        const raw = await fs.readFile(outputPath, 'utf8');
+        const cachedState = JSON.parse(raw) as StorageState;
+        if (
+          hasAllSessionCookies(
+            cachedState,
+            Object.values(APPS).map((app) => app.cookieName),
+          )
+        ) {
+          return outputPath;
+        }
       }
     } catch {
       // No cached state — fall through and build it.
@@ -186,29 +200,43 @@ export async function buildStorageState(opts: SignInOptions = {}): Promise<strin
 
   const { email, password } = getCredentials(opts);
 
-  // One request context spans every sign-in so cookies accumulate.
+  // A FRESH request context per app. We used to share one context "so cookies
+  // accumulate", but auth-web's POST /sign-in short-circuits when an
+  // `__Secure-better-auth.session_token` is already in the jar: the 2nd and
+  // later sign-ins 302 to the auth root (https://auth.allen.company/) instead
+  // of minting an SSO code for the new return_to — so every app after the
+  // first failed with "redirect went somewhere unexpected". Signing each app
+  // in on a clean jar avoids the short-circuit; we then merge each app's
+  // resulting cookies into one storage state.
   const factory: APIRequest = requestModule;
-  const ctx = await factory.newContext();
-  try {
-    // auth-api rate-limits /api/auth/sign-in/email to 10 requests / 60s per
-    // IP.  With 5 apps in APPS we'd burn 5 of those on every cold cache
-    // build, leaving no headroom for retries or back-to-back local re-runs.
-    // A modest 1.2s pause between sign-ins keeps the rolling-window count
-    // far under the limit and is well under the 6h cache freshness window.
-    const SIGN_IN_GAP_MS = Number(process.env.E2E_SIGN_IN_GAP_MS ?? 1200);
-    let i = 0;
-    for (const app of Object.values(APPS)) {
-      if (i > 0 && SIGN_IN_GAP_MS > 0) {
-        await new Promise((r) => setTimeout(r, SIGN_IN_GAP_MS));
-      }
-      await signInOnce(ctx, app, email, password);
-      i++;
+  // auth-api rate-limits /api/auth/sign-in/email to 10 requests / 60s per IP.
+  // A modest pause between sign-ins keeps the rolling-window count under the
+  // limit (7 apps × 1 sign-in is fine) and leaves headroom for retries.
+  const SIGN_IN_GAP_MS = Number(process.env.E2E_SIGN_IN_GAP_MS ?? 1200);
+  const merged = new Map<string, PwCookie>();
+  let i = 0;
+  for (const app of Object.values(APPS)) {
+    if (i > 0 && SIGN_IN_GAP_MS > 0) {
+      await new Promise((r) => setTimeout(r, SIGN_IN_GAP_MS));
     }
-    await fs.mkdir(path.dirname(outputPath), { recursive: true });
-    await ctx.storageState({ path: outputPath });
-  } finally {
-    await ctx.dispose();
+    const ctx = await factory.newContext();
+    try {
+      await signInOnce(ctx, app, email, password);
+      const state = (await ctx.storageState()) as StorageState;
+      for (const c of state.cookies) {
+        // Key by name+domain+path so each app's own session cookie survives;
+        // the shared auth.allen.company cookies just overwrite harmlessly.
+        merged.set(`${c.name} ${c.domain} ${c.path}`, c);
+      }
+    } finally {
+      await ctx.dispose();
+    }
+    i++;
   }
+
+  const mergedState: StorageState = { cookies: [...merged.values()], origins: [] };
+  await fs.mkdir(path.dirname(outputPath), { recursive: true });
+  await fs.writeFile(outputPath, JSON.stringify(mergedState, null, 2), 'utf8');
 
   return outputPath;
 }

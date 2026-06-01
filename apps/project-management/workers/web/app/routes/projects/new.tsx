@@ -60,6 +60,7 @@ function NewProjectPage() {
         <div>
           <label className="label">{t('project.name')}</label>
           <input
+            data-testid="project-name"
             className="input"
             value={form.name}
             onChange={(e) =>
@@ -75,6 +76,7 @@ function NewProjectPage() {
         <div>
           <label className="label">{t('project.identifier')}</label>
           <input
+            data-testid="project-identifier"
             className="input font-mono"
             value={form.identifier}
             onChange={(e) => setForm({ ...form, identifier: e.target.value })}
@@ -110,7 +112,7 @@ function NewProjectPage() {
         </label>
         {error ? <p className="text-sm text-red-700">{error}</p> : null}
         <div className="pt-2">
-          <button className="btn-primary" disabled={busy}>
+          <button data-testid="project-submit" className="btn-primary" disabled={busy}>
             {busy ? t('btn.creating') : t('btn.create')}
           </button>
         </div>
