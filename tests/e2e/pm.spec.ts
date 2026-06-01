@@ -47,6 +47,20 @@ test.describe('project-management', () => {
     await expect(page.getByTestId(`project-row-${identifier}`)).toBeVisible();
   });
 
+  test('command palette (Ctrl-K) opens and navigates', async ({ page }) => {
+    await page.goto(`${PM}/projects`);
+    // Open with the global shortcut.
+    await page.keyboard.press('Control+k');
+    await expect(page.getByTestId('command-palette')).toBeVisible();
+    // Filtering narrows the action list.
+    await page.getByTestId('cmdk-input').fill('project');
+    await expect(page.getByTestId('cmdk-action-newProject')).toBeVisible();
+    // Activating an action navigates and closes the palette.
+    await page.getByTestId('cmdk-action-newProject').click();
+    await page.waitForURL(/\/projects\/new$/, { timeout: 10_000 });
+    await expect(page.getByTestId('command-palette')).toHaveCount(0);
+  });
+
   test('"assigned to me" filter hides issues that are not mine', async ({ page }) => {
     const identifier = await createProject(page, 'filter');
     const subject = `E2E unassigned ${Date.now()}`;

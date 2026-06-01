@@ -1,6 +1,7 @@
 import { Link, useLocation } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
 import { ToastViewport } from '~/components/ToastViewport';
+import { CommandPalette } from '~/components/CommandPalette';
 import { useT } from '@allenlabs/i18n/react';
 import { LanguagePicker } from '~/i18n/picker';
 
@@ -60,6 +61,7 @@ export function Layout({ user, appName, children }: Props) {
         </div>
       </header>
       <main className="max-w-7xl w-full mx-auto px-4 py-6 flex-1">{children}</main>
+      <CommandPalette />
       <ToastViewport />
       <footer className="text-center text-xs text-gray-500 py-4">
         {t('app.footer')}
