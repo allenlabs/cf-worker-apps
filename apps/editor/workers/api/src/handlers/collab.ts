@@ -189,29 +189,61 @@ export async function publicPageImpl(sql: Sql, id: string): Promise<PublicPage |
 
 export interface CommentItem {
   id: string;
+  /** null = page-level comment; non-null = inline thread anchor (the mark's id). */
+  threadId: string | null;
   authorName: string;
   body: string;
   resolved: boolean;
   createdAt: string;
 }
 
-/** All comments on a page, oldest first. */
-export async function commentsListImpl(sql: Sql, pageId: string): Promise<CommentItem[]> {
-  const rows = await sql<
-    { id: string; authorName: string; body: string; resolved: boolean; createdAt: string }[]
-  >`
-    SELECT id, author_name AS "authorName", body, resolved, created_at AS "createdAt"
-    FROM editor.comments
-    WHERE page_id = ${pageId}
-    ORDER BY created_at ASC
-  `;
-  return rows.map((r) => ({
+type CommentRow = {
+  id: string;
+  threadId: string | null;
+  authorName: string;
+  body: string;
+  resolved: boolean;
+  createdAt: string;
+};
+
+function toCommentItem(r: CommentRow): CommentItem {
+  return {
     id: r.id,
+    threadId: r.threadId,
     authorName: r.authorName,
     body: r.body,
     resolved: r.resolved,
     createdAt: String(r.createdAt),
-  }));
+  };
+}
+
+/**
+ * Comments on a page, oldest first. With `threadId` given, only that inline
+ * thread; otherwise ALL comments (page-level + every inline thread) so the
+ * panel can render both sections in one fetch.
+ */
+export async function commentsListImpl(
+  sql: Sql,
+  pageId: string,
+  threadId?: string,
+): Promise<CommentItem[]> {
+  const rows =
+    threadId === undefined
+      ? await sql<CommentRow[]>`
+          SELECT id, thread_id AS "threadId", author_name AS "authorName",
+                 body, resolved, created_at AS "createdAt"
+          FROM editor.comments
+          WHERE page_id = ${pageId}
+          ORDER BY created_at ASC
+        `
+      : await sql<CommentRow[]>`
+          SELECT id, thread_id AS "threadId", author_name AS "authorName",
+                 body, resolved, created_at AS "createdAt"
+          FROM editor.comments
+          WHERE page_id = ${pageId} AND thread_id = ${threadId}
+          ORDER BY created_at ASC
+        `;
+  return rows.map(toCommentItem);
 }
 
 export interface AddCommentInput {
@@ -219,29 +251,25 @@ export interface AddCommentInput {
   userId: string;
   authorName: string;
   body: string;
+  /** null/omitted → page-level comment; a UUID → append to that inline thread. */
+  threadId?: string | null;
 }
 
-/** Insert a comment; returns the created row. */
+/** Insert a comment (page-level or inline); returns the created row. */
 export async function commentAddImpl(sql: Sql, input: AddCommentInput): Promise<CommentItem> {
   const body = input.body.trim();
-  const [row] = await sql<
-    { id: string; authorName: string; body: string; resolved: boolean; createdAt: string }[]
-  >`
-    INSERT INTO editor.comments (page_id, user_id, author_name, body)
-    VALUES (${input.pageId}, ${input.userId}, ${input.authorName}, ${body})
-    RETURNING id, author_name AS "authorName", body, resolved, created_at AS "createdAt"
+  const threadId = input.threadId ?? null;
+  const [row] = await sql<CommentRow[]>`
+    INSERT INTO editor.comments (page_id, user_id, author_name, body, thread_id)
+    VALUES (${input.pageId}, ${input.userId}, ${input.authorName}, ${body}, ${threadId})
+    RETURNING id, thread_id AS "threadId", author_name AS "authorName",
+              body, resolved, created_at AS "createdAt"
   `;
   if (!row) throw new Error('commentAddImpl: insert returned no row');
-  return {
-    id: row.id,
-    authorName: row.authorName,
-    body: row.body,
-    resolved: row.resolved,
-    createdAt: String(row.createdAt),
-  };
+  return toCommentItem(row);
 }
 
-/** Resolve / unresolve a comment. Returns false if the comment is missing. */
+/** Resolve / unresolve a single comment. Returns false if the comment is missing. */
 export async function commentResolveImpl(
   sql: Sql,
   id: string,
@@ -251,6 +279,54 @@ export async function commentResolveImpl(
     UPDATE editor.comments SET resolved = ${resolved} WHERE id = ${id} RETURNING id
   `;
   return rows.length > 0;
+}
+
+/**
+ * Resolve / unresolve every comment in an inline thread. Returns false when the
+ * thread has no comments on this page (nothing matched).
+ */
+export async function commentResolveThreadImpl(
+  sql: Sql,
+  pageId: string,
+  threadId: string,
+  resolved: boolean,
+): Promise<boolean> {
+  const rows = await sql`
+    UPDATE editor.comments SET resolved = ${resolved}
+    WHERE page_id = ${pageId} AND thread_id = ${threadId}
+    RETURNING id
+  `;
+  return rows.length > 0;
+}
+
+export interface ThreadSummary {
+  threadId: string;
+  /** First (oldest) comment body in the thread — the margin/list snippet. */
+  snippet: string;
+  /** Number of comments in the thread. */
+  count: number;
+}
+
+/**
+ * Distinct OPEN (unresolved) inline threads on a page, each with its first
+ * comment snippet + total count. Drives the thread list / margin indicators.
+ * Page-level comments (thread_id NULL) are excluded.
+ */
+export async function commentThreadsImpl(sql: Sql, pageId: string): Promise<ThreadSummary[]> {
+  const rows = await sql<{ threadId: string; snippet: string; count: number }[]>`
+    SELECT thread_id AS "threadId",
+           (array_agg(body ORDER BY created_at ASC))[1] AS snippet,
+           count(*)::int AS count
+    FROM editor.comments
+    WHERE page_id = ${pageId} AND thread_id IS NOT NULL AND resolved = false
+    GROUP BY thread_id
+    ORDER BY min(created_at) ASC
+  `;
+  return rows.map((r) => ({
+    threadId: r.threadId,
+    snippet: r.snippet,
+    count: Number(r.count),
+  }));
 }
 
 /** Resolve the page a comment belongs to (null if the comment doesn't exist). */

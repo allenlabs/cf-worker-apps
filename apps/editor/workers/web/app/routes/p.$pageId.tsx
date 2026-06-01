@@ -4,7 +4,7 @@ import { CollaborativeEditor } from '@allenlabs/editor';
 import '@allenlabs/editor/styles.css';
 import { Sidebar } from '~/components/Sidebar';
 import { DatabaseView } from '~/components/DatabaseView';
-import { CommentsPanel } from '~/components/CommentsPanel';
+import { CommentsPanel, type PendingThread } from '~/components/CommentsPanel';
 import { VersionHistoryPanel } from '~/components/VersionHistoryPanel';
 import {
   collabToken,
@@ -127,6 +127,11 @@ function PageView() {
   const [shareOpen, setShareOpen] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  // Inline-comment state: the open thread, a just-anchored (empty) thread, and
+  // the threads the host has resolved/deleted (the editor strips their marks).
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [pendingThread, setPendingThread] = useState<PendingThread | null>(null);
+  const [resolvedThreadIds, setResolvedThreadIds] = useState<string[]>([]);
   const [copied, setCopied] = useState(false);
   const shareUrl = `${SHARE_BASE}${pageId}`;
 
@@ -168,6 +173,26 @@ function PageView() {
     saveTimer.current = setTimeout(() => {
       void updatePage({ data: { id: pageId, snapshotHtml: html } }).catch(() => {});
     }, 800);
+  }
+
+  // Inline comments: user anchored a fresh selection → open the panel on a new
+  // (empty) thread; the first reply persists it under this threadId.
+  function handleCommentCreate(threadId: string, selectedText: string) {
+    setPendingThread({ threadId, context: selectedText });
+    setActiveThreadId(threadId);
+    setCommentsOpen(true);
+  }
+
+  // User clicked commented text → open the panel focused on that thread.
+  function handleOpenThread(threadId: string) {
+    setActiveThreadId(threadId);
+    setCommentsOpen(true);
+  }
+
+  // A thread was resolved or fully deleted → tell the editor to strip its mark.
+  function handleThreadResolved(threadId: string) {
+    setResolvedThreadIds((ids) => (ids.includes(threadId) ? ids : [...ids, threadId]));
+    setPendingThread((p) => (p?.threadId === threadId ? null : p));
   }
 
   function handleTitleBlur() {
@@ -336,6 +361,12 @@ function PageView() {
               }}
               uploadImage={uploadImageFile}
               onUpdate={handleUpdate}
+              comments={{
+                onCreate: handleCommentCreate,
+                onOpenThread: handleOpenThread,
+                activeThreadId,
+                resolvedThreadIds,
+              }}
             />
           ) : (
             <div className="text-gray-400 text-sm">Loading editor…</div>
@@ -352,7 +383,14 @@ function PageView() {
         </div>
       </div>
       {commentsOpen ? (
-        <CommentsPanel pageId={pageId} onClose={() => setCommentsOpen(false)} />
+        <CommentsPanel
+          pageId={pageId}
+          activeThreadId={activeThreadId}
+          pendingThread={pendingThread}
+          onClose={() => setCommentsOpen(false)}
+          onThreadResolved={handleThreadResolved}
+          onSelectThread={setActiveThreadId}
+        />
       ) : null}
       {historyOpen && !isDatabase ? (
         <VersionHistoryPanel pageId={pageId} onClose={() => setHistoryOpen(false)} />

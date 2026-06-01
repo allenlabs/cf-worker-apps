@@ -24,6 +24,7 @@ import { Callout } from './extensions/callout';
 import { Toggle, ToggleSummary } from './extensions/toggle';
 import { Bookmark } from './extensions/bookmark';
 import { Columns, Column } from './extensions/columns';
+import { Comment, commentThreadIdAt } from './extensions/comment';
 import { BubbleToolbar } from './extensions/bubble-toolbar';
 import { DEFAULT_SLASH_ITEMS } from './lib/slash-items';
 import type { EditorProps, SlashItem } from './lib/types';
@@ -181,6 +182,8 @@ export function CollaborativeEditor(props: EditorProps) {
       Column,
       SlashCommand.configure({ items: slashItems }),
     ];
+    // Inline comments: a normal mark, so it rides through Yjs in collab mode.
+    if (props.comments) ext.push(Comment);
     if (props.mention) ext.push(makeMention(props.mention));
     if (collab && provider && ydocRef.current) {
       ext.push(Collaboration.configure({ document: ydocRef.current }));
@@ -192,12 +195,19 @@ export function CollaborativeEditor(props: EditorProps) {
       );
     }
     return ext;
+    // Note: only `!!props.comments` matters for the extension list (the mark is
+    // either present or not); the live handlers are read through refs below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [collab, provider, props.mention, props.placeholder, slashItems]);
+  }, [collab, provider, props.mention, props.placeholder, slashItems, !!props.comments]);
 
   // The paste/drop handlers need the editor instance, but it doesn't exist yet
   // when we build the config. A ref (kept current below) breaks that cycle.
   const editorRef = useRef<ImageEditor | null>(null);
+
+  // Comment click → open thread. Kept in a ref so the (config-time) handleClick
+  // closure always sees the latest callback without rebuilding the editor.
+  const onOpenThreadRef = useRef<((threadId: string) => void) | null>(null);
+  onOpenThreadRef.current = props.comments?.onOpenThread ?? null;
 
   const editor = useEditor(
     {
@@ -227,12 +237,56 @@ export function CollaborativeEditor(props: EditorProps) {
           void insertUploadedImage(ed, uploadImage, file);
           return true;
         },
+        // Click on commented text → open that thread. Returns false so the
+        // click still positions the caret as usual.
+        handleClick: (view, pos) => {
+          const open = onOpenThreadRef.current;
+          if (!open) return false;
+          const threadId = commentThreadIdAt(view.state.doc, pos);
+          if (threadId) open(threadId);
+          return false;
+        },
       },
       onUpdate: ({ editor }) => props.onUpdate?.(editor.getHTML()),
     },
     [extensions, props.editable],
   );
   editorRef.current = editor;
+
+  // When the host resolves/deletes a thread, strip its anchor mark from the doc
+  // (which syncs the removal to collaborators via Yjs). We track which ids we've
+  // already cleared so re-renders with the same list don't fire repeatedly.
+  const clearedThreadsRef = useRef<Set<string>>(new Set());
+  const resolvedThreadIds = props.comments?.resolvedThreadIds;
+  useEffect(() => {
+    if (!editor || !resolvedThreadIds) return;
+    for (const id of resolvedThreadIds) {
+      if (clearedThreadsRef.current.has(id)) continue;
+      clearedThreadsRef.current.add(id);
+      editor.chain().unsetCommentThread(id).run();
+    }
+  }, [editor, resolvedThreadIds]);
+
+  // Reflect the active thread as a `data-active` attribute on its spans so CSS
+  // can highlight the open thread more strongly.
+  const activeThreadId = props.comments?.activeThreadId ?? null;
+  useEffect(() => {
+    if (!editor || !props.comments) return;
+    const root = editor.view.dom as HTMLElement;
+    const apply = () => {
+      root.querySelectorAll('span.ae-comment').forEach((el) => {
+        const match = el.getAttribute('data-thread-id') === activeThreadId && activeThreadId;
+        el.classList.toggle('ae-comment-active', Boolean(match));
+      });
+    };
+    apply();
+    // Re-apply after doc changes (spans get re-rendered by ProseMirror).
+    editor.on('update', apply);
+    return () => {
+      editor.off('update', apply);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editor, activeThreadId, !!props.comments]);
 
   // In collab mode the editor can't initialise until the provider exists
   // (Collaboration extension needs the doc). Show a lightweight placeholder.
@@ -246,7 +300,7 @@ export function CollaborativeEditor(props: EditorProps) {
 
   return (
     <>
-      {editor ? <BubbleToolbar editor={editor} /> : null}
+      {editor ? <BubbleToolbar editor={editor} comments={props.comments} /> : null}
       <EditorContent
         editor={editor}
         className={props.className}

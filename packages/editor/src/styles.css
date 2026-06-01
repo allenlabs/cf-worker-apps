@@ -275,6 +275,17 @@
   cursor: col-resize;
 }
 
+/* Inline (text-anchored) comments */
+.ProseMirror .ae-comment {
+  background: rgba(253, 230, 138, 0.4); /* light yellow */
+  border-bottom: 2px solid #fbbf24;
+  cursor: pointer;
+}
+.ProseMirror .ae-comment.ae-comment-active {
+  background: rgba(251, 191, 36, 0.55);
+  border-bottom-color: #d97706;
+}
+
 /* Bubble (selection) toolbar */
 .ae-bubble-menu {
   display: flex;

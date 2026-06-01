@@ -1,16 +1,34 @@
 import { BubbleMenu } from '@tiptap/react';
 import type { Editor } from '@tiptap/core';
+import type { CommentConfig } from '../lib/types';
 
 interface Props {
   editor: Editor;
+  /** When set, adds a "💬" button that anchors a comment thread to the selection. */
+  comments?: CommentConfig;
+}
+
+/** Plain text inside the current selection (for the thread's anchor snippet). */
+function selectedTextOf(editor: Editor): string {
+  const { from, to } = editor.state.selection;
+  return editor.state.doc.textBetween(from, to, ' ');
 }
 
 /**
  * Floating selection toolbar — bold / italic / underline / strike / code,
- * a link toggle (URL prompt), and highlight. Shown by TipTap's BubbleMenu
- * whenever a non-empty text range is selected.
+ * a link toggle (URL prompt), highlight, and (when wired) an inline-comment
+ * button. Shown by TipTap's BubbleMenu whenever a non-empty text range is
+ * selected.
  */
-export function BubbleToolbar({ editor }: Props) {
+export function BubbleToolbar({ editor, comments }: Props) {
+  function addComment() {
+    if (editor.state.selection.empty || !comments) return;
+    const text = selectedTextOf(editor);
+    const threadId = crypto.randomUUID();
+    editor.chain().focus().setCommentThread(threadId).run();
+    comments.onCreate(threadId, text);
+  }
+
   function toggleLink() {
     const prev = (editor.getAttributes('link').href as string) ?? '';
     const url = window.prompt('Link URL', prev);
@@ -89,6 +107,17 @@ export function BubbleToolbar({ editor }: Props) {
       >
         🔗
       </button>
+      {comments ? (
+        <button
+          type="button"
+          className={btn(editor.isActive('comment'))}
+          data-testid="bubble-comment"
+          onClick={addComment}
+          title="Comment"
+        >
+          💬
+        </button>
+      ) : null}
     </BubbleMenu>
   );
 }

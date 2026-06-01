@@ -94,10 +94,18 @@ export interface PublicPage {
 
 export interface CommentItem {
   id: string;
+  /** null = page-level comment; non-null = inline (text-anchored) thread. */
+  threadId: string | null;
   authorName: string;
   body: string;
   resolved: boolean;
   createdAt: string;
+}
+
+export interface ThreadSummary {
+  threadId: string;
+  snippet: string;
+  count: number;
 }
 
 // ---------- databases (Phase 3) ----------
@@ -623,16 +631,26 @@ export async function publicPageImpl(
 export function commentsListImpl(
   env: ApiClientEnv,
   user: CurrentUser,
-  pageId: string,
+  input: { pageId: string; threadId?: string },
   deps?: ApiClientDeps,
 ): Promise<CommentItem[]> {
-  return apiPostImpl<CommentItem[]>(env, '/v1/comments/list', userBody(user, { pageId }), deps);
+  return apiPostImpl<CommentItem[]>(env, '/v1/comments/list', userBody(user, input), deps);
+}
+
+/** Distinct open inline threads on a page (snippet + count). */
+export function commentThreadsImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  pageId: string,
+  deps?: ApiClientDeps,
+): Promise<ThreadSummary[]> {
+  return apiPostImpl<ThreadSummary[]>(env, '/v1/comments/threads', userBody(user, { pageId }), deps);
 }
 
 export function commentAddImpl(
   env: ApiClientEnv,
   user: CurrentUser,
-  input: { pageId: string; body: string },
+  input: { pageId: string; body: string; threadId?: string | null },
   deps?: ApiClientDeps,
 ): Promise<CommentItem> {
   return apiPostImpl<CommentItem>(env, '/v1/comments/add', userBody(user, input), deps);
@@ -641,7 +659,9 @@ export function commentAddImpl(
 export function commentResolveImpl(
   env: ApiClientEnv,
   user: CurrentUser,
-  input: { id: string; resolved: boolean },
+  input:
+    | { id: string; resolved: boolean }
+    | { pageId: string; threadId: string; resolved: boolean },
   deps?: ApiClientDeps,
 ): Promise<{ ok: boolean }> {
   return apiPostImpl<{ ok: boolean }>(env, '/v1/comments/resolve', userBody(user, input), deps);
@@ -1096,15 +1116,30 @@ export const publicPage = createServerFn({ method: 'GET' })
   });
 
 export const commentsList = createServerFn({ method: 'GET' })
+  .inputValidator((d: unknown) =>
+    z.object({ pageId: z.string().uuid(), threadId: z.string().uuid().optional() }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return commentsListImpl(getEnv(), user, data);
+  });
+
+export const commentThreads = createServerFn({ method: 'GET' })
   .inputValidator((d: unknown) => z.object({ pageId: z.string().uuid() }).parse(d))
   .handler(async ({ data }) => {
     const user = await requireUser();
-    return commentsListImpl(getEnv(), user, data.pageId);
+    return commentThreadsImpl(getEnv(), user, data.pageId);
   });
 
 export const commentAdd = createServerFn({ method: 'POST' })
   .inputValidator((d: unknown) =>
-    z.object({ pageId: z.string().uuid(), body: z.string().min(1).max(10000) }).parse(d),
+    z
+      .object({
+        pageId: z.string().uuid(),
+        threadId: z.string().uuid().nullish(),
+        body: z.string().min(1).max(10000),
+      })
+      .parse(d),
   )
   .handler(async ({ data }) => {
     const user = await requireUser();
@@ -1113,7 +1148,16 @@ export const commentAdd = createServerFn({ method: 'POST' })
 
 export const commentResolve = createServerFn({ method: 'POST' })
   .inputValidator((d: unknown) =>
-    z.object({ id: z.string().uuid(), resolved: z.boolean() }).parse(d),
+    z
+      .union([
+        z.object({ id: z.string().uuid(), resolved: z.boolean() }),
+        z.object({
+          pageId: z.string().uuid(),
+          threadId: z.string().uuid(),
+          resolved: z.boolean(),
+        }),
+      ])
+      .parse(d),
   )
   .handler(async ({ data }) => {
     const user = await requireUser();

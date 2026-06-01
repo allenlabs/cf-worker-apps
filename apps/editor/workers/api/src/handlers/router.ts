@@ -54,6 +54,8 @@ import {
   commentDeleteImpl,
   commentPageImpl,
   commentResolveImpl,
+  commentResolveThreadImpl,
+  commentThreadsImpl,
   commentsListImpl,
   favListImpl,
   favToggleImpl,
@@ -673,7 +675,11 @@ v1Router.post('/pages/setPublic', async (c) => {
 
 // ---------- comments (Phase 4) ----------
 
-const commentsListSchema = z.object({ pageId: z.string().uuid() });
+// list: all comments for a page, or — with threadId — only that inline thread.
+const commentsListSchema = z.object({
+  pageId: z.string().uuid(),
+  threadId: z.string().uuid().optional(),
+});
 v1Router.post('/comments/list', async (c) => {
   const user = c.get('user');
   const parsed = commentsListSchema.safeParse(c.get('body'));
@@ -682,11 +688,29 @@ v1Router.post('/comments/list', async (c) => {
   }
   const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.pageId);
   if (!can) return c.json({ error: 'not found' }, 404);
-  const comments = await commentsListImpl(c.get('db'), parsed.data.pageId);
+  const comments = await commentsListImpl(c.get('db'), parsed.data.pageId, parsed.data.threadId);
   return c.json(comments, 200);
 });
 
-const commentAddSchema = z.object({ pageId: z.string().uuid(), body: z.string().min(1).max(10000) });
+// threads: distinct open inline threads (snippet + count) for margin indicators.
+const commentThreadsSchema = z.object({ pageId: z.string().uuid() });
+v1Router.post('/comments/threads', async (c) => {
+  const user = c.get('user');
+  const parsed = commentThreadsSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.pageId);
+  if (!can) return c.json({ error: 'not found' }, 404);
+  const threads = await commentThreadsImpl(c.get('db'), parsed.data.pageId);
+  return c.json(threads, 200);
+});
+
+const commentAddSchema = z.object({
+  pageId: z.string().uuid(),
+  threadId: z.string().uuid().nullish(),
+  body: z.string().min(1).max(10000),
+});
 v1Router.post('/comments/add', async (c) => {
   const user = c.get('user');
   const parsed = commentAddSchema.safeParse(c.get('body'));
@@ -700,16 +724,34 @@ v1Router.post('/comments/add', async (c) => {
     userId: user.userId,
     authorName: user.userName,
     body: parsed.data.body,
+    threadId: parsed.data.threadId ?? null,
   });
   return c.json(comment, 200);
 });
 
-const commentResolveSchema = z.object({ id: z.string().uuid(), resolved: z.boolean() });
+// resolve: either a single comment (id) or an entire inline thread
+// (pageId + threadId). One of the two shapes is required.
+const commentResolveSchema = z.union([
+  z.object({ id: z.string().uuid(), resolved: z.boolean() }),
+  z.object({ pageId: z.string().uuid(), threadId: z.string().uuid(), resolved: z.boolean() }),
+]);
 v1Router.post('/comments/resolve', async (c) => {
   const user = c.get('user');
   const parsed = commentResolveSchema.safeParse(c.get('body'));
   if (!parsed.success) {
     return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  if ('threadId' in parsed.data) {
+    const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.pageId);
+    if (!can) return c.json({ error: 'not found' }, 404);
+    const ok = await commentResolveThreadImpl(
+      c.get('db'),
+      parsed.data.pageId,
+      parsed.data.threadId,
+      parsed.data.resolved,
+    );
+    if (!ok) return c.json({ error: 'not found' }, 404);
+    return c.json({ ok: true }, 200);
   }
   const pageId = await commentPageImpl(c.get('db'), parsed.data.id);
   if (!pageId) return c.json({ error: 'not found' }, 404);
