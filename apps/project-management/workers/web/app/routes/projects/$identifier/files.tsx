@@ -2,6 +2,7 @@ import { createFileRoute, getRouteApi, useRouter } from '@tanstack/react-router'
 import { useState } from 'react';
 import { createServerFn } from '@tanstack/react-start';
 import { z } from 'zod';
+import { useT } from '@allenlabs/i18n/react';
 import { formatDateTime } from '~/lib/format';
 import {
   buildAuthContext,
@@ -58,6 +59,7 @@ function FilesPage() {
   const project = parentRoute.useLoaderData();
   const { files } = Route.useLoaderData();
   const router = useRouter();
+  const { t } = useT();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -76,40 +78,40 @@ function FilesPage() {
   }
 
   async function remove(id: number) {
-    if (!confirm('Delete this file?')) return;
+    if (!confirm(t('files.deleteConfirm'))) return;
     await deleteAttachment({ data: { id, projectId: project.id } });
     router.invalidate();
   }
 
   return (
     <div className="space-y-4">
-      <h2 className="text-xl font-semibold">Files</h2>
+      <h2 className="text-xl font-semibold">{t('files.title')}</h2>
 
       <form onSubmit={upload} className="card p-3 flex flex-wrap items-end gap-3">
         <div className="flex-1 min-w-[14rem]">
-          <label className="label">File</label>
+          <label className="label">{t('files.file')}</label>
           <input name="file" type="file" className="input" required />
         </div>
         <div className="flex-1 min-w-[14rem]">
-          <label className="label">Description</label>
+          <label className="label">{t('files.description')}</label>
           <input name="description" className="input" />
         </div>
-        <button className="btn-primary" disabled={busy}>{busy ? 'Uploading…' : 'Upload'}</button>
+        <button className="btn-primary" disabled={busy}>{busy ? t('files.uploading') : t('files.upload')}</button>
         {err ? <p className="w-full text-sm text-red-700">{err}</p> : null}
       </form>
 
       {files.length === 0 ? (
-        <p className="text-sm text-gray-500">No files yet.</p>
+        <p className="text-sm text-gray-500">{t('files.empty')}</p>
       ) : (
         <table className="data-table card">
-          <thead><tr><th>Name</th><th>Size</th><th>Uploaded</th><th></th></tr></thead>
+          <thead><tr><th>{t('files.colName')}</th><th>{t('files.colSize')}</th><th>{t('files.colUploaded')}</th><th></th></tr></thead>
           <tbody>
             {files.map((f) => (
               <tr key={f.id}>
                 <td><a href={`/files/${f.id}`}>{f.filename}</a>{f.description ? <span className="text-xs text-gray-500 ml-1">— {f.description}</span> : null}</td>
                 <td>{Math.ceil(f.filesize / 1024)} KB</td>
                 <td>{formatDateTime(f.createdAt)}</td>
-                <td><button className="btn-danger" onClick={() => remove(f.id)}>Delete</button></td>
+                <td><button className="btn-danger" onClick={() => remove(f.id)}>{t('btn.delete')}</button></td>
               </tr>
             ))}
           </tbody>

@@ -1,4 +1,5 @@
 import type { EventRow } from '~/server/dopamine';
+import { useT } from '@allenlabs/i18n/react';
 import { importanceLabel, kindLabel, relativeAgo } from '~/lib/format';
 
 interface EventCardProps {
@@ -6,7 +7,23 @@ interface EventCardProps {
   highlight?: boolean;
 }
 
+const KNOWN_KINDS = new Set([
+  'pr_merged',
+  'issue_closed',
+  'focus_completed',
+  'inbox_zeroed',
+  'custom',
+]);
+
 export function EventCard({ event, highlight }: EventCardProps) {
+  const { t } = useT();
+  const kindText = KNOWN_KINDS.has(event.kind)
+    ? t(`dopamine.kind.${event.kind}`)
+    : kindLabel(event.kind);
+  const importanceText =
+    event.importance >= 1 && event.importance <= 3
+      ? t(`dopamine.importance.${event.importance}`)
+      : importanceLabel(event.importance);
   return (
     <li
       className={`card p-3 ${highlight ? 'border-dopamine-700 bg-dopamine-900/30' : ''}`}
@@ -14,7 +31,7 @@ export function EventCard({ event, highlight }: EventCardProps) {
     >
       <div className="flex items-baseline justify-between gap-2">
         <span className="text-xs uppercase tracking-wide text-dopamine-400">
-          {kindLabel(event.kind)}
+          {kindText}
         </span>
         <span className="text-xs text-slate-500">{relativeAgo(event.occurredAt)}</span>
       </div>
@@ -30,7 +47,7 @@ export function EventCard({ event, highlight }: EventCardProps) {
             className="rounded bg-dopamine-800/60 text-dopamine-200 px-1.5 py-0.5"
             data-testid={`importance-${event.id}`}
           >
-            {importanceLabel(event.importance)}
+            {importanceText}
           </span>
         ) : null}
         {event.tags.map((t) => (

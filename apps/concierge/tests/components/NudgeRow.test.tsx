@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { I18nProvider } from '@allenlabs/i18n/react';
 import { EmptyNudges, NudgeRow, NudgeRowInner } from '~/components/NudgeRow';
+import { appDict } from '~/i18n/dict';
 import type { NudgeRow as NudgeRowType } from '~/server/concierge';
 
 const NOW = Date.parse('2026-05-24T12:00:00Z');
@@ -84,7 +86,11 @@ describe('NudgeRow (wrapper)', () => {
 
 describe('EmptyNudges', () => {
   it('shows the cron + manual-trigger copy', () => {
-    render(<EmptyNudges />);
+    render(
+      <I18nProvider locale="en" dict={appDict}>
+        <EmptyNudges />
+      </I18nProvider>,
+    );
     expect(screen.getByTestId('empty-nudges').textContent).toMatch(/cron/);
     expect(screen.getByTestId('empty-nudges').textContent).toMatch(/enabled = true/);
   });

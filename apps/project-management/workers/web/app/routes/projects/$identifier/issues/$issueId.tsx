@@ -2,6 +2,7 @@ import { createFileRoute, getRouteApi, useRouter } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start';
 import { useState } from 'react';
 import { z } from 'zod';
+import { useT } from '@allenlabs/i18n/react';
 import { PriorityBadge, ProgressBar, StatusBadge, TrackerBadge } from '~/components/badges';
 import { Markdown } from '~/components/Markdown';
 import { formatDate, formatDateTime, formatHours } from '~/lib/format';
@@ -51,6 +52,7 @@ function IssuePage() {
   const project = parentRoute.useLoaderData();
   const data = Route.useLoaderData();
   const router = useRouter();
+  const { t } = useT();
   const i = data.issue.issue;
   const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
@@ -67,10 +69,10 @@ function IssuePage() {
       await updateIssue({ data: { id: i.id, notes, changes } });
       setNotes('');
       setChanges({});
-      notifySuccess('Updated');
+      notifySuccess(t('issueDetail.updatedToast'));
       router.invalidate();
     } catch (err) {
-      notifyError(`Could not update issue: ${err instanceof Error ? err.message : String(err)}`);
+      notifyError(t('issueDetail.updateError', { msg: err instanceof Error ? err.message : String(err) }));
     } finally {
       setBusy(false);
     }
@@ -80,10 +82,10 @@ function IssuePage() {
     const am = data.issue.isWatching;
     try {
       await watchIssue({ data: { id: i.id, watch: !am } });
-      notifySuccess(am ? 'Unwatched' : 'Watching issue');
+      notifySuccess(am ? t('issueDetail.unwatchedToast') : t('issueDetail.watchingToast'));
       router.invalidate();
     } catch (err) {
-      notifyError(`Could not toggle watch: ${err instanceof Error ? err.message : String(err)}`);
+      notifyError(t('issueDetail.watchError', { msg: err instanceof Error ? err.message : String(err) }));
     }
   }
 
@@ -96,29 +98,29 @@ function IssuePage() {
             #{i.id} {i.subject}
           </h2>
           <p className="text-xs text-gray-500 mt-1">
-            Opened by <b>{data.issue.author?.login}</b> on {formatDateTime(i.createdAt)}
+            {t('issueDetail.openedBy', { author: data.issue.author?.login ?? '', date: formatDateTime(i.createdAt) })}
             {i.updatedAt && i.updatedAt !== i.createdAt
-              ? ` · updated ${formatDateTime(i.updatedAt)}`
+              ? t('issueDetail.updatedSuffix', { date: formatDateTime(i.updatedAt) })
               : ''}
           </p>
         </div>
         <button className="btn" onClick={toggleWatch}>
-          {data.issue.isWatching ? 'Unwatch' : 'Watch'}
+          {data.issue.isWatching ? t('issueDetail.unwatch') : t('issueDetail.watch')}
         </button>
       </div>
 
       <div className="grid grid-cols-3 gap-4">
         <div className="col-span-2 card p-4">
-          <h3 className="font-semibold mb-2">Description</h3>
+          <h3 className="font-semibold mb-2">{t('issueDetail.description')}</h3>
           {data.descriptionHtml ? (
             <Markdown html={data.descriptionHtml} />
           ) : (
-            <p className="text-sm text-gray-500">No description.</p>
+            <p className="text-sm text-gray-500">{t('issueDetail.noDescription')}</p>
           )}
 
           {data.issue.children.length > 0 ? (
             <div className="mt-4">
-              <h4 className="font-semibold text-sm mb-1">Subtasks</h4>
+              <h4 className="font-semibold text-sm mb-1">{t('issueDetail.subtasks')}</h4>
               <ul className="text-sm">
                 {data.issue.children.map((c) => (
                   <li key={c.id} className="flex items-center gap-2">
@@ -133,20 +135,20 @@ function IssuePage() {
         </div>
 
         <aside className="card p-4 text-sm space-y-2">
-          <Row label="Status">
+          <Row label={t('issue.status')}>
             <StatusBadge name={data.issue.status?.name ?? ''} color={data.issue.status?.color ?? '#ccc'} closed={data.issue.status?.isClosed ?? false} />
           </Row>
-          <Row label="Priority">
+          <Row label={t('issue.priority')}>
             <PriorityBadge name={data.issue.priority?.name ?? ''} color={data.issue.priority?.color ?? '#ccc'} />
           </Row>
-          <Row label="Assignee">{data.issue.assignee?.login ?? '—'}</Row>
-          <Row label="Category">{data.issue.category?.name ?? '—'}</Row>
-          <Row label="Version">{data.issue.version?.name ?? '—'}</Row>
-          <Row label="Parent">{data.issue.parent ? `#${data.issue.parent.id}` : '—'}</Row>
-          <Row label="Start date">{i.startDate ? formatDate(i.startDate) : '—'}</Row>
-          <Row label="Due date">{i.dueDate ? formatDate(i.dueDate) : '—'}</Row>
-          <Row label="Estimated">{formatHours(i.estimatedHours)}</Row>
-          <Row label="% Done">
+          <Row label={t('issue.assignee')}>{data.issue.assignee?.login ?? '—'}</Row>
+          <Row label={t('issue.category')}>{data.issue.category?.name ?? '—'}</Row>
+          <Row label={t('issueDetail.version')}>{data.issue.version?.name ?? '—'}</Row>
+          <Row label={t('issueDetail.parent')}>{data.issue.parent ? `#${data.issue.parent.id}` : '—'}</Row>
+          <Row label={t('issue.startDate')}>{i.startDate ? formatDate(i.startDate) : '—'}</Row>
+          <Row label={t('issue.dueDate')}>{i.dueDate ? formatDate(i.dueDate) : '—'}</Row>
+          <Row label={t('issueDetail.estimated')}>{formatHours(i.estimatedHours)}</Row>
+          <Row label={t('issue.doneRatio')}>
             <div className="w-32">
               <ProgressBar value={i.doneRatio} />
               <div className="text-xs text-gray-500 mt-0.5">{i.doneRatio}%</div>
@@ -156,9 +158,9 @@ function IssuePage() {
       </div>
 
       <section className="card p-4">
-        <h3 className="font-semibold mb-3">History</h3>
+        <h3 className="font-semibold mb-3">{t('issueDetail.history')}</h3>
         {data.issue.journals.length === 0 ? (
-          <p className="text-sm text-gray-500">No comments yet.</p>
+          <p className="text-sm text-gray-500">{t('issue.commentEmpty')}</p>
         ) : (
           <ul className="space-y-3">
             {data.issue.journals.map((j) => (
@@ -170,9 +172,9 @@ function IssuePage() {
                   <ul className="text-xs text-gray-600 my-1 list-disc ml-5">
                     {j.details.map((d) => (
                       <li key={d.id}>
-                        Changed <code>{d.prop_key}</code>{' '}
-                        {d.oldValue ? <>from <code>{d.oldValue}</code></> : null}{' '}
-                        to <code>{d.newValue ?? '∅'}</code>
+                        {t('issueDetail.changedField')}<code>{d.prop_key}</code>{' '}
+                        {d.oldValue ? <>{t('issueDetail.changedFrom')} <code>{d.oldValue}</code></> : null}{' '}
+                        {t('issueDetail.changedTo')} <code>{d.newValue ?? '∅'}</code>
                       </li>
                     ))}
                   </ul>
@@ -187,36 +189,36 @@ function IssuePage() {
       </section>
 
       <section className="card p-4">
-        <h3 className="font-semibold mb-3">Update</h3>
+        <h3 className="font-semibold mb-3">{t('issueDetail.update')}</h3>
         <form onSubmit={submit} className="space-y-3">
           <div className="grid grid-cols-3 gap-3">
             <Select
-              label="Status"
+              label={t('issue.status')}
               value={(changes.statusId as number) ?? i.statusId}
               onChange={(v) => updateField('statusId', v)}
               options={data.statuses}
             />
             <Select
-              label="Priority"
+              label={t('issue.priority')}
               value={(changes.priorityId as number) ?? i.priorityId}
               onChange={(v) => updateField('priorityId', v)}
               options={data.priorities}
             />
             <Select
-              label="Assignee"
+              label={t('issue.assignee')}
               value={(changes.assignedToId as number | null) ?? i.assignedToId ?? ''}
               onChange={(v) => updateField('assignedToId', v === '' ? null : Number(v))}
-              options={[{ id: '', name: '— unassigned —' }, ...data.members.map((m) => ({ id: m.userId, name: m.login }))]}
+              options={[{ id: '', name: t('issueNew.unassigned') }, ...data.members.map((m) => ({ id: m.userId, name: m.login }))]}
             />
-            <Field label="% done" type="number" min={0} max={100} step={10}
+            <Field label={t('issue.doneRatio')} type="number" min={0} max={100} step={10}
               value={(changes.doneRatio as number) ?? i.doneRatio}
               onChange={(v) => updateField('doneRatio', Number(v))}
             />
-            <Field label="Start" type="date" value={(changes.startDate as string) ?? i.startDate ?? ''} onChange={(v) => updateField('startDate', v || null)} />
-            <Field label="Due"   type="date" value={(changes.dueDate as string)   ?? i.dueDate   ?? ''} onChange={(v) => updateField('dueDate',   v || null)} />
+            <Field label={t('issueDetail.start')} type="date" value={(changes.startDate as string) ?? i.startDate ?? ''} onChange={(v) => updateField('startDate', v || null)} />
+            <Field label={t('issueDetail.due')}   type="date" value={(changes.dueDate as string)   ?? i.dueDate   ?? ''} onChange={(v) => updateField('dueDate',   v || null)} />
           </div>
           <div>
-            <label className="label">Notes (Markdown)</label>
+            <label className="label">{t('issueDetail.notesMarkdown')}</label>
             <textarea
               className="textarea font-mono text-sm"
               rows={4}
@@ -225,7 +227,7 @@ function IssuePage() {
             />
           </div>
           <button className="btn-primary" disabled={busy}>
-            {busy ? 'Saving…' : 'Submit'}
+            {busy ? t('btn.saving') : t('issueDetail.submit')}
           </button>
         </form>
       </section>

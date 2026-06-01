@@ -16,6 +16,7 @@ import {
 import { getDb, getEnv, requireUser } from '~/server/auth-runtime.server';
 import { readSessionToken, verifySessionToken } from '~/server/session.server';
 import { clockTime, humanMinutes, mmss } from '~/lib/format';
+import { useT } from '@allenlabs/i18n/react';
 
 /* v8 ignore start */
 // Server function: home payload.  Verifies the JWT, then dispatches to
@@ -82,6 +83,7 @@ interface StartFormProps {
 }
 
 export function StartForm({ initialTaskText = '', inboxSuggestions, onStart }: StartFormProps) {
+  const { t } = useT();
   const [taskText, setTaskText] = useState(initialTaskText);
   const [targetMinutes, setTargetMinutes] = useState<number>(25);
   const [inboxItemId, setInboxItemId] = useState<number | undefined>(undefined);
@@ -103,21 +105,21 @@ export function StartForm({ initialTaskText = '', inboxSuggestions, onStart }: S
     >
       <div>
         <label htmlFor="task" className="block text-sm text-slate-300 mb-1">
-          What are you focusing on?
+          {t('focus.taskQuestion')}
         </label>
         <input
           id="task"
           autoFocus
           value={taskText}
           onChange={(e) => setTaskText(e.target.value)}
-          placeholder="e.g. fixing the auth callback bug"
-          aria-label="Task"
+          placeholder={t('focus.taskPlaceholder')}
+          aria-label={t('focus.taskLabel')}
           className="w-full rounded bg-slate-900 border border-slate-700 px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:border-focus-500 focus:outline-none"
         />
       </div>
       {inboxSuggestions.length > 0 ? (
         <fieldset className="text-xs text-slate-400" data-testid="inbox-suggestions">
-          <legend className="mb-1">Or pick from inbox:</legend>
+          <legend className="mb-1">{t('focus.orPickInbox')}</legend>
           <div className="flex flex-wrap gap-1">
             {inboxSuggestions.map((s) => (
               <button
@@ -136,8 +138,8 @@ export function StartForm({ initialTaskText = '', inboxSuggestions, onStart }: S
         </fieldset>
       ) : null}
       <div>
-        <label className="block text-sm text-slate-300 mb-1">For how long?</label>
-        <div className="flex gap-2" role="radiogroup" aria-label="Target minutes">
+        <label className="block text-sm text-slate-300 mb-1">{t('focus.howLong')}</label>
+        <div className="flex gap-2" role="radiogroup" aria-label={t('focus.targetMinutes')}>
           {TARGET_MINUTES_OPTIONS.map((m) => (
             <button
               key={m}
@@ -151,7 +153,7 @@ export function StartForm({ initialTaskText = '', inboxSuggestions, onStart }: S
                   : 'border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800'
               }`}
             >
-              {m} min
+              {t('focus.minLabel', { n: m })}
             </button>
           ))}
         </div>
@@ -160,7 +162,7 @@ export function StartForm({ initialTaskText = '', inboxSuggestions, onStart }: S
         type="submit"
         className="rounded bg-focus-600 hover:bg-focus-500 px-4 py-2 text-sm font-medium text-white"
       >
-        Lock in
+        {t('focus.lockIn')}
       </button>
     </form>
   );
@@ -177,6 +179,7 @@ const RING_RADIUS = 90;
 const RING_CIRC = 2 * Math.PI * RING_RADIUS;
 
 export function Countdown({ endsAt, targetMinutes, nowOverride }: CountdownProps) {
+  const { t } = useT();
   const [now, setNow] = useState<number>(nowOverride ?? Date.now());
   useEffect(() => {
     /* v8 ignore next 5 — exercised by deploy smoke tests; the impl is the
@@ -206,7 +209,7 @@ export function Countdown({ endsAt, targetMinutes, nowOverride }: CountdownProps
           {mmss(remaining)}
         </div>
         <div className="text-xs text-slate-400 mt-1">
-          ends at <span className="text-slate-200">{clockTime(endsAt)}</span>
+          {t('focus.endsAt')} <span className="text-slate-200">{clockTime(endsAt)}</span>
         </div>
       </div>
     </div>
@@ -228,11 +231,12 @@ export function ActiveSessionView({
   onEnd,
   onExtend,
 }: ActiveSessionViewProps) {
+  const { t } = useT();
   const [wobbleOpen, setWobbleOpen] = useState(false);
   const [wobbleLabel, setWobbleLabel] = useState('');
   return (
     <div className="max-w-md mx-auto p-6 text-center" data-testid="active-view">
-      <div className="text-sm uppercase tracking-wide text-focus-400 mb-2">Locked in</div>
+      <div className="text-sm uppercase tracking-wide text-focus-400 mb-2">{t('focus.lockedIn')}</div>
       <h1 className="text-xl font-semibold text-slate-100 mb-6">{active.taskText}</h1>
       <Countdown endsAt={active.endsAt} targetMinutes={active.targetMinutes} />
       <div className="mt-6 flex flex-col gap-2">
@@ -242,7 +246,7 @@ export function ActiveSessionView({
           className="rounded border border-slate-700 bg-slate-900 hover:bg-slate-800 px-4 py-2 text-sm text-slate-200"
           data-testid="note-wobble"
         >
-          Note a wobble
+          {t('focus.noteWobble')}
         </button>
         <div className="grid grid-cols-2 gap-2">
           <button
@@ -251,7 +255,7 @@ export function ActiveSessionView({
             className="rounded border border-focus-700 bg-focus-900/40 hover:bg-focus-900 px-4 py-2 text-sm text-focus-200"
             data-testid="extend"
           >
-            +5 more
+            {t('focus.extend')}
           </button>
           <button
             type="button"
@@ -259,7 +263,7 @@ export function ActiveSessionView({
             className="rounded bg-emerald-700 hover:bg-emerald-600 px-4 py-2 text-sm text-white"
             data-testid="done-early"
           >
-            Done early
+            {t('focus.doneEarly')}
           </button>
         </div>
         <button
@@ -268,12 +272,12 @@ export function ActiveSessionView({
           className="text-xs text-slate-500 hover:text-slate-300 underline mt-2"
           data-testid="step-away"
         >
-          Step away
+          {t('focus.stepAway')}
         </button>
       </div>
       {todayDistractionCount > 0 ? (
         <div className="mt-4 text-xs text-slate-500" data-testid="distractions-today">
-          {todayDistractionCount} wobble{todayDistractionCount === 1 ? '' : 's'} noted today
+          {t(todayDistractionCount === 1 ? 'focus.wobbleNotedOne' : 'focus.wobbleNotedMany', { n: todayDistractionCount })}
         </div>
       ) : null}
       {wobbleOpen ? (
@@ -292,13 +296,13 @@ export function ActiveSessionView({
             }}
             className="card p-6 max-w-sm w-full"
           >
-            <h2 className="text-sm font-medium text-slate-200 mb-3">Note a wobble</h2>
+            <h2 className="text-sm font-medium text-slate-200 mb-3">{t('focus.noteWobble')}</h2>
             <input
               autoFocus
               value={wobbleLabel}
               onChange={(e) => setWobbleLabel(e.target.value)}
-              placeholder="e.g. twitter, random thought, slack"
-              aria-label="Wobble label"
+              placeholder={t('focus.wobblePlaceholder')}
+              aria-label={t('focus.wobbleLabel')}
               className="w-full rounded bg-slate-950 border border-slate-700 px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:border-focus-500 focus:outline-none"
             />
             <div className="mt-4 flex justify-end gap-2">
@@ -307,13 +311,13 @@ export function ActiveSessionView({
                 onClick={() => setWobbleOpen(false)}
                 className="text-sm text-slate-400 hover:text-slate-200"
               >
-                Cancel
+                {t('btn.cancel')}
               </button>
               <button
                 type="submit"
                 className="rounded bg-focus-600 hover:bg-focus-500 px-3 py-1.5 text-sm text-white"
               >
-                Note it
+                {t('focus.noteIt')}
               </button>
             </div>
           </form>
@@ -329,15 +333,16 @@ interface ReflectionViewProps {
 }
 
 export function ReflectionView({ onSave, onSkip }: ReflectionViewProps) {
+  const { t } = useT();
   const [notes, setNotes] = useState('');
   const [satisfaction, setSatisfaction] = useState(0);
   return (
     <div className="max-w-md mx-auto p-6" data-testid="reflection-view">
       <h2 className="text-lg font-semibold text-emerald-300 mb-1">
-        You started — that's the hard part.
+        {t('focus.reflectTitle')}
       </h2>
       <p className="text-sm text-slate-400 mb-6">
-        Want to note how that went?  Skip if you'd rather just move on.
+        {t('focus.reflectHint')}
       </p>
       <form
         onSubmit={(e) => {
@@ -349,14 +354,14 @@ export function ReflectionView({ onSave, onSkip }: ReflectionViewProps) {
         <textarea
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
-          placeholder="What worked? What got in the way?"
-          aria-label="Reflection notes"
+          placeholder={t('focus.reflectNotesPlaceholder')}
+          aria-label={t('focus.reflectNotesLabel')}
           rows={4}
           className="w-full rounded bg-slate-900 border border-slate-700 px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:border-focus-500 focus:outline-none"
         />
         <div>
-          <div className="text-xs text-slate-400 mb-1">How did it feel?</div>
-          <div className="flex gap-1" role="radiogroup" aria-label="Satisfaction">
+          <div className="text-xs text-slate-400 mb-1">{t('focus.howFeel')}</div>
+          <div className="flex gap-1" role="radiogroup" aria-label={t('focus.satisfaction')}>
             {[1, 2, 3, 4, 5].map((n) => (
               <button
                 key={n}
@@ -382,14 +387,14 @@ export function ReflectionView({ onSave, onSkip }: ReflectionViewProps) {
             onClick={onSkip}
             className="text-sm text-slate-400 hover:text-slate-200"
           >
-            Skip
+            {t('focus.skip')}
           </button>
           <button
             type="submit"
             className="rounded bg-focus-600 hover:bg-focus-500 px-4 py-2 text-sm text-white"
             disabled={satisfaction === 0}
           >
-            Save
+            {t('btn.save')}
           </button>
         </div>
       </form>
@@ -402,18 +407,19 @@ export function TodayStats({
   todaySessionsCount,
   todayDistractionCount,
 }: Pick<HomePayload, 'todayFocusedMinutes' | 'todaySessionsCount' | 'todayDistractionCount'>) {
+  const { t } = useT();
   return (
     <div className="grid grid-cols-3 gap-2 mb-6 text-center" data-testid="today-stats">
       <div className="card p-3">
-        <div className="text-xs text-slate-500">Focused today</div>
+        <div className="text-xs text-slate-500">{t('focus.statFocusedToday')}</div>
         <div className="text-lg font-semibold text-focus-300 mt-1">{humanMinutes(todayFocusedMinutes)}</div>
       </div>
       <div className="card p-3">
-        <div className="text-xs text-slate-500">Sessions</div>
+        <div className="text-xs text-slate-500">{t('focus.statSessions')}</div>
         <div className="text-lg font-semibold text-slate-200 mt-1">{todaySessionsCount}</div>
       </div>
       <div className="card p-3">
-        <div className="text-xs text-slate-500">Wobbles</div>
+        <div className="text-xs text-slate-500">{t('focus.statWobbles')}</div>
         <div className="text-lg font-semibold text-slate-200 mt-1">{todayDistractionCount}</div>
       </div>
     </div>
@@ -425,12 +431,13 @@ export function TodayStats({
 function HomePage() {
   const data = Route.useLoaderData();
   const router = useRouter();
+  const { t } = useT();
   // After "Done early" or "Step away" we briefly show the reflection card
   // (a recently-ended session id) before the home loader rolls forward.
   const [justEndedId, setJustEndedId] = useState<number | null>(null);
 
   if (!data) {
-    return <div className="p-6 text-slate-400">Loading…</div>;
+    return <div className="p-6 text-slate-400">{t('state.loading')}</div>;
   }
 
   if (justEndedId !== null) {
@@ -490,9 +497,9 @@ function HomePage() {
 
   return (
     <div className="max-w-md mx-auto p-6">
-      <h1 className="text-lg font-semibold text-slate-200 mb-1">Focus</h1>
+      <h1 className="text-lg font-semibold text-slate-200 mb-1">{t('focus.title')}</h1>
       <p className="text-xs text-slate-500 mb-6">
-        Lock in on one thing.  Notice wobbles.  No streaks, no shame.
+        {t('focus.subtitle')}
       </p>
       <TodayStats
         todayFocusedMinutes={data.todayFocusedMinutes}
@@ -508,7 +515,7 @@ function HomePage() {
         }}
       />
       <div className="mt-8 text-xs text-slate-500">
-        <a href="/history" className="hover:underline">View 90-day history →</a>
+        <a href="/history" className="hover:underline">{t('focus.viewHistory')}</a>
       </div>
     </div>
   );

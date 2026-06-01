@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render as rtlRender, screen } from '@testing-library/react';
+import type { ReactElement } from 'react';
+import { I18nProvider } from '@allenlabs/i18n/react';
+import { appDict } from '~/i18n/dict';
 import { EventCard } from '~/components/EventCard';
 import type { EventRow } from '~/server/dopamine';
+
+const render = (ui: ReactElement) =>
+  rtlRender(<I18nProvider locale="en" dict={appDict}>{ui}</I18nProvider>);
 
 const baseEvent: EventRow = {
   id: 1,

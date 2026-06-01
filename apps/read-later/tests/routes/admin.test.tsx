@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render as rtlRender, screen, fireEvent } from '@testing-library/react';
+import { I18nProvider } from '@allenlabs/i18n/react';
+import { appDict } from '~/i18n/dict';
+
+const render = (ui: React.ReactElement) =>
+  rtlRender(<I18nProvider locale="en" dict={appDict}>{ui}</I18nProvider>);
 
 vi.mock('@tanstack/react-router', async () => {
   const actual = await vi.importActual<typeof import('@tanstack/react-router')>(

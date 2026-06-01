@@ -17,8 +17,13 @@ vi.mock('@tanstack/react-start', () => ({
   }),
 }));
 
-import { render, screen } from '@testing-library/react';
+import { render as rtlRender, screen } from '@testing-library/react';
+import { I18nProvider } from '@allenlabs/i18n/react';
+import { appDict } from '~/i18n/dict';
 import { CopyButton, DetailHeader } from '~/routes/snippet.$id';
+
+const render = (ui: React.ReactElement) =>
+  rtlRender(<I18nProvider locale="en" dict={appDict}>{ui}</I18nProvider>);
 
 const NOW = Date.parse('2026-05-24T12:00:00Z');
 

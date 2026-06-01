@@ -2,6 +2,7 @@ import { createFileRoute, getRouteApi, useRouter } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start';
 import { useState } from 'react';
 import { z } from 'zod';
+import { useT } from '@allenlabs/i18n/react';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { createCategory, deleteCategory, listCategoriesImpl } from '~/server/categories';
 import { listMembersImpl } from '~/server/members';
@@ -34,6 +35,7 @@ function CategoriesPage() {
   const project = parentRoute.useLoaderData();
   const { categories, members } = Route.useLoaderData();
   const router = useRouter();
+  const { t } = useT();
   const [name, setName] = useState('');
   const [assignedToId, setAssignedToId] = useState<string>('');
 
@@ -51,32 +53,32 @@ function CategoriesPage() {
   }
 
   async function remove(id: number) {
-    if (!confirm('Delete this category?')) return;
+    if (!confirm(t('categories.deleteConfirm'))) return;
     await deleteCategory({ data: { id, projectId: project.id } });
     router.invalidate();
   }
 
   return (
     <div className="space-y-4">
-      <header><h2 className="text-xl font-semibold">Issue categories</h2></header>
+      <header><h2 className="text-xl font-semibold">{t('categories.title')}</h2></header>
 
       <div className="card p-3 flex flex-wrap items-end gap-3">
-        <div className="flex-1 min-w-[12rem]"><label className="label">Name</label><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></div>
+        <div className="flex-1 min-w-[12rem]"><label className="label">{t('categories.name')}</label><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></div>
         <div>
-          <label className="label">Default assignee</label>
+          <label className="label">{t('categories.defaultAssignee')}</label>
           <select className="select" value={assignedToId} onChange={(e) => setAssignedToId(e.target.value)}>
-            <option value="">—</option>
+            <option value="">{t('btn.dash')}</option>
             {members.map((m) => <option key={m.id} value={m.userId}>{m.login}</option>)}
           </select>
         </div>
-        <button className="btn-primary" onClick={create}>+ Create</button>
+        <button className="btn-primary" onClick={create}>{t('categories.create')}</button>
       </div>
 
       {categories.length === 0 ? (
-        <p className="text-sm text-gray-500">No categories defined.</p>
+        <p className="text-sm text-gray-500">{t('categories.empty')}</p>
       ) : (
         <table className="data-table card">
-          <thead><tr><th>Name</th><th>Default assignee</th><th></th></tr></thead>
+          <thead><tr><th>{t('categories.name')}</th><th>{t('categories.defaultAssignee')}</th><th></th></tr></thead>
           <tbody>
             {categories.map((c) => {
               const m = members.find((m) => m.userId === c.assignedToId);
@@ -84,7 +86,7 @@ function CategoriesPage() {
                 <tr key={c.id}>
                   <td>{c.name}</td>
                   <td>{m?.login ?? '—'}</td>
-                  <td><button className="btn-danger" onClick={() => remove(c.id)}>Delete</button></td>
+                  <td><button className="btn-danger" onClick={() => remove(c.id)}>{t('btn.delete')}</button></td>
                 </tr>
               );
             })}

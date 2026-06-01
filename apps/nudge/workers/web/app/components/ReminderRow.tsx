@@ -1,5 +1,6 @@
 import type { ReminderRow as ReminderData } from '~/server/nudge';
 import { timeUntil } from '~/lib/format';
+import { useT } from '@allenlabs/i18n/react';
 
 interface ReminderRowProps {
   reminder: ReminderData;
@@ -9,6 +10,7 @@ interface ReminderRowProps {
 }
 
 export function ReminderRowCard({ reminder, now, onSnooze, onDismiss }: ReminderRowProps) {
+  const { t } = useT();
   const when = timeUntil(reminder.fireAt, now);
   return (
     <li
@@ -40,7 +42,7 @@ export function ReminderRowCard({ reminder, now, onSnooze, onDismiss }: Reminder
           className="rounded border border-slate-700 px-2 py-1 text-slate-300 hover:bg-slate-800"
           data-testid={`snooze-${reminder.id}`}
         >
-          snooze 30m
+          {t('nudge.snooze30m')}
         </button>
         <button
           type="button"
@@ -48,7 +50,7 @@ export function ReminderRowCard({ reminder, now, onSnooze, onDismiss }: Reminder
           className="rounded border border-slate-700 px-2 py-1 text-slate-300 hover:bg-slate-800"
           data-testid={`dismiss-${reminder.id}`}
         >
-          dismiss
+          {t('nudge.dismiss')}
         </button>
       </div>
     </li>

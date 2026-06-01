@@ -1,11 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render as rtlRender, screen } from '@testing-library/react';
+import { I18nProvider } from '@allenlabs/i18n/react';
+import { appDict } from '~/i18n/dict';
 import {
   DayDetail,
   Heatmap,
   heatmapCellClass,
   intensityBucket,
 } from '~/routes/history';
+
+function render(ui: React.ReactElement) {
+  return rtlRender(
+    <I18nProvider locale="en" dict={appDict}>
+      {ui}
+    </I18nProvider>,
+  );
+}
 
 describe('intensityBucket', () => {
   it('returns 0 for zero/negative minutes', () => {

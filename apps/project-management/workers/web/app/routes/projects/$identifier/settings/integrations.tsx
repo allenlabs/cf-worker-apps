@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { z } from 'zod';
 import { issues, issueStatuses } from '~/db/schema';
 import { PM_FIELDS } from '@cf-worker-apps/notion-gateway/shared/src/types';
+import { useT } from '@allenlabs/i18n/react';
 import { notifyError, notifySuccess } from '~/lib/toast';
 import { getDb, getEnv, requirePermission } from '~/server/auth-runtime.server';
 import * as notionGateway from '~/server/notion-gateway-client';
@@ -176,6 +177,7 @@ function IntegrationsPage() {
   const project = parentRoute.useLoaderData();
   const search = Route.useSearch();
   const router = useRouter();
+  const { t } = useT();
   const [loaded, setLoaded] = useState(false);
   const [connection, setConnection] = useState<GatewayConnection | null>(null);
   const [state, setState] = useState<LocalState>({ kind: 'none' });
@@ -260,7 +262,7 @@ function IntegrationsPage() {
           mapping: state.mapping,
         },
       });
-      notifySuccess('Connected to Notion');
+      notifySuccess(t('notion.connectedToast'));
       router.invalidate();
       setLoaded(false);
       setState({ kind: 'none' });
@@ -272,11 +274,11 @@ function IntegrationsPage() {
   }
 
   async function disconnect() {
-    if (!confirm('Disconnect this project from Notion?')) return;
+    if (!confirm(t('notion.disconnectConfirm'))) return;
     setBusy(true);
     try {
       await disconnectFn({ data: { projectId: project.id } });
-      notifySuccess('Disconnected');
+      notifySuccess(t('notion.disconnectedToast'));
       setConnection(null);
       router.invalidate();
     } catch (e) {
@@ -290,7 +292,7 @@ function IntegrationsPage() {
     setBusy(true);
     try {
       const result = await resyncFn({ data: { projectId: project.id } });
-      notifySuccess(`Synced ${result.synced} of ${result.total} issues`);
+      notifySuccess(t('notion.syncedToast', { synced: result.synced, total: result.total }));
     } catch (e) {
       notifyError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -301,18 +303,18 @@ function IntegrationsPage() {
   if (connection) {
     return (
       <div className="max-w-2xl space-y-4">
-        <h2 className="text-xl font-semibold">Notion integration</h2>
+        <h2 className="text-xl font-semibold">{t('notion.title')}</h2>
         <div className="card p-4">
           <p className="text-sm">
-            Connected to <strong>{connection.database_title}</strong>
+            {t('notion.connectedTo', { title: connection.database_title })}
           </p>
           <p className="text-xs text-gray-500 mt-1 font-mono">{connection.database_id}</p>
           <div className="flex gap-2 mt-3">
             <button className="btn-primary" disabled={busy} onClick={resync}>
-              Re-sync all issues now
+              {t('notion.resyncAll')}
             </button>
             <button className="btn-danger" disabled={busy} onClick={disconnect}>
-              Disconnect
+              {t('notion.disconnect')}
             </button>
           </div>
         </div>
@@ -323,11 +325,10 @@ function IntegrationsPage() {
   if (state.kind === 'picking') {
     return (
       <div className="max-w-2xl space-y-4">
-        <h2 className="text-xl font-semibold">Pick a Notion Database</h2>
+        <h2 className="text-xl font-semibold">{t('notion.pickDatabase')}</h2>
         {state.databases.length === 0 ? (
           <p className="text-sm text-gray-600">
-            No Databases are shared with the integration.  Invite the
-            integration to a Database from Notion's UI and try again.
+            {t('notion.noDatabases')}
           </p>
         ) : (
           <ul className="card divide-y">
@@ -342,7 +343,7 @@ function IntegrationsPage() {
                   disabled={busy}
                   onClick={() => pickDatabase(d.id, d.title)}
                 >
-                  Select
+                  {t('btn.select')}
                 </button>
               </li>
             ))}
@@ -356,12 +357,12 @@ function IntegrationsPage() {
     const propsList = Object.values(state.properties);
     return (
       <div className="max-w-3xl space-y-4">
-        <h2 className="text-xl font-semibold">Map PM fields → {state.databaseTitle}</h2>
+        <h2 className="text-xl font-semibold">{t('notion.mapTitle', { title: state.databaseTitle })}</h2>
         <table className="data-table card">
           <thead>
             <tr>
-              <th>PM field</th>
-              <th>Notion property</th>
+              <th>{t('notion.colPmField')}</th>
+              <th>{t('notion.colNotionProperty')}</th>
             </tr>
           </thead>
           <tbody>
@@ -375,7 +376,7 @@ function IntegrationsPage() {
                   <td>
                     <div className="font-medium">{f.label}</div>
                     <div className="text-xs text-gray-500">
-                      Accepts: {f.compatibleTypes.join(', ')}
+                      {t('notion.accepts', { types: f.compatibleTypes.join(', ') })}
                     </div>
                   </td>
                   <td>
@@ -417,14 +418,14 @@ function IntegrationsPage() {
         </table>
         <div className="flex gap-2">
           <button className="btn-primary" disabled={busy} onClick={saveMapping}>
-            Save mapping
+            {t('notion.saveMapping')}
           </button>
           <button
             className="btn-secondary"
             disabled={busy}
             onClick={() => setState({ kind: 'none' })}
           >
-            Cancel
+            {t('btn.cancel')}
           </button>
         </div>
       </div>
@@ -433,16 +434,13 @@ function IntegrationsPage() {
 
   return (
     <div className="max-w-2xl space-y-4">
-      <h2 className="text-xl font-semibold">Notion integration</h2>
+      <h2 className="text-xl font-semibold">{t('notion.title')}</h2>
       <div className="card p-4">
         <p className="text-sm text-gray-700">
-          One-way push: every PM issue is mirrored onto a Notion page in the
-          Database you connect below.  Updates flow PM → Notion via the
-          central gateway at <code className="font-mono">notion-api.allen.company</code>;
-          bidirectional sync is wired in for selected fields.
+          {t('notion.intro', { host: 'notion-api.allen.company' })}
         </p>
         <button className="btn-primary mt-3" disabled={busy} onClick={startConnect}>
-          Connect a Notion Database
+          {t('notion.connectDatabase')}
         </button>
       </div>
     </div>

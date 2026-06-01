@@ -2,6 +2,7 @@ import { Link, createFileRoute } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
 import { sql } from 'drizzle-orm';
 import { getRequest } from '@tanstack/react-start/server';
+import { useT } from '@allenlabs/i18n/react';
 import { getDb, getEnv } from '~/server/auth-runtime.server';
 import { readSessionToken, verifySessionToken } from '~/server/session.server';
 
@@ -112,15 +113,16 @@ export const Route = createFileRoute('/projects/')({
 
 function ProjectsListPage() {
   const projects = Route.useLoaderData() ?? [];
+  const { t } = useT();
 
   if (projects.length === 0) {
     return (
       <section className="card p-10 max-w-2xl mx-auto text-center">
-        <h1 className="text-2xl font-semibold mb-3">No projects yet</h1>
+        <h1 className="text-2xl font-semibold mb-3">{t('projects.emptyTitle')}</h1>
         <p className="text-sm text-gray-600 mb-6">
-          Projects organize issues, wiki pages, and files. Create one to begin.
+          {t('projects.emptyBody')}
         </p>
-        <Link to="/projects/new" className="btn-primary">+ New project</Link>
+        <Link to="/projects/new" className="btn-primary">{t('projects.newProject')}</Link>
       </section>
     );
   }
@@ -128,8 +130,8 @@ function ProjectsListPage() {
   return (
     <div>
       <div className="flex items-center justify-between mb-3">
-        <h1 className="text-2xl font-semibold">Projects</h1>
-        <Link to="/projects/new" className="btn-primary">+ New project</Link>
+        <h1 className="text-2xl font-semibold">{t('projects.title')}</h1>
+        <Link to="/projects/new" className="btn-primary">{t('projects.newProject')}</Link>
       </div>
       <ul className="card divide-y divide-gray-100">
         {projects.map((p) => (
@@ -143,7 +145,7 @@ function ProjectsListPage() {
                 {p.name}
               </Link>
               <span className="text-xs text-gray-500">
-                {p.isPublic ? 'public' : 'private'} · {p.status}
+                {p.isPublic ? t('projects.visibilityPublic') : t('projects.visibilityPrivate')} · {p.status}
               </span>
             </div>
             <div className="text-xs text-gray-500 mt-0.5">{p.identifier}</div>

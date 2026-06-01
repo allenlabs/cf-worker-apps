@@ -1,6 +1,7 @@
 import { createFileRoute, getRouteApi } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
 import { z } from 'zod';
+import { useT } from '@allenlabs/i18n/react';
 import { formatDate } from '~/lib/format';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { listIssuesImpl } from '~/server/issues';
@@ -35,14 +36,15 @@ const DAY = 24 * 60 * 60 * 1000;
 function GanttPage() {
   const project = parentRoute.useLoaderData();
   const { issues } = Route.useLoaderData();
+  const { t } = useT();
 
   const dated = issues.filter((i) => i.startDate || i.dueDate);
   if (dated.length === 0) {
     return (
       <div>
-        <h2 className="text-xl font-semibold mb-3">Gantt</h2>
+        <h2 className="text-xl font-semibold mb-3">{t('gantt.title')}</h2>
         <p className="text-sm text-gray-500">
-          Add a start/due date to issues to see them on the Gantt chart.
+          {t('gantt.empty')}
         </p>
       </div>
     );
@@ -85,11 +87,11 @@ function GanttPage() {
 
   return (
     <div>
-      <h2 className="text-xl font-semibold mb-3">Gantt</h2>
+      <h2 className="text-xl font-semibold mb-3">{t('gantt.title')}</h2>
       <div className="card overflow-auto">
         <div className="flex">
           <div className="w-72 shrink-0 border-r border-gray-200">
-            <div className="h-7 bg-gray-100 px-2 py-1 text-xs font-semibold uppercase">Issue</div>
+            <div className="h-7 bg-gray-100 px-2 py-1 text-xs font-semibold uppercase">{t('gantt.colIssue')}</div>
             {dated.map((i) => (
               <div key={i.id} className="h-7 px-2 py-1 text-sm truncate border-b border-gray-100">
                 <span className="font-mono text-xs text-gray-500 mr-1">#{i.id}</span>{i.subject}

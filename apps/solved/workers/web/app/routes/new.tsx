@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { saveSchema, saveEntryImpl } from '~/server/solved';
 import { getDb, requireUser } from '~/server/auth-runtime.server';
 import { Header } from '~/components/Header';
+import { useT } from '@allenlabs/i18n/react';
 
 /* v8 ignore start */
 const saveEntry = createServerFn({ method: 'POST' })
@@ -36,6 +37,7 @@ export function parseTags(raw: string): string[] {
 
 function NewPage() {
   const router = useRouter();
+  const { t } = useT();
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [tagsRaw, setTagsRaw] = useState('');
@@ -49,11 +51,11 @@ function NewPage() {
     const trimmedTitle = title.trim();
     const trimmedBody = body.trim();
     if (!trimmedTitle) {
-      setError('title required');
+      setError(t('solved.error.titleRequired'));
       return;
     }
     if (!trimmedBody) {
-      setError('body required');
+      setError(t('solved.error.bodyRequired'));
       return;
     }
     setSubmitting(true);
@@ -78,14 +80,14 @@ function NewPage() {
     <>
       <Header />
       <div className="max-w-3xl mx-auto p-4">
-        <h1 className="text-lg font-semibold text-slate-200 mb-3">New entry</h1>
+        <h1 className="text-lg font-semibold text-slate-200 mb-3">{t('solved.new.title')}</h1>
         <form onSubmit={submit} className="space-y-3" data-testid="new-form">
           <input
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            placeholder="What did you figure out?"
-            aria-label="Title"
+            placeholder={t('solved.new.titlePlaceholder')}
+            aria-label={t('solved.new.titleLabel')}
             autoFocus
             className="w-full rounded bg-slate-900 border border-slate-800 px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:border-solved-500 focus:outline-none"
             data-testid="title-input"
@@ -93,8 +95,8 @@ function NewPage() {
           <textarea
             value={body}
             onChange={(e) => setBody(e.target.value)}
-            placeholder="The fix, the gotcha, the link to the PR…"
-            aria-label="Body"
+            placeholder={t('solved.new.bodyPlaceholder')}
+            aria-label={t('solved.new.bodyLabel')}
             rows={14}
             className="w-full rounded bg-slate-900 border border-slate-800 px-3 py-2 font-mono text-sm text-slate-100 placeholder:text-slate-500 focus:border-solved-500 focus:outline-none"
             data-testid="body-input"
@@ -103,8 +105,8 @@ function NewPage() {
             type="text"
             value={tagsRaw}
             onChange={(e) => setTagsRaw(e.target.value)}
-            placeholder="Tags (space or comma separated)"
-            aria-label="Tags"
+            placeholder={t('solved.new.tagsPlaceholder')}
+            aria-label={t('solved.new.tagsLabel')}
             className="w-full rounded bg-slate-900 border border-slate-800 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-solved-500 focus:outline-none"
             data-testid="tags-input"
           />
@@ -120,7 +122,7 @@ function NewPage() {
               className="rounded bg-solved-600 hover:bg-solved-500 disabled:opacity-50 disabled:cursor-not-allowed px-4 py-2 text-sm font-semibold text-white"
               data-testid="save-button"
             >
-              {submitting ? 'Saving…' : 'Save'}
+              {submitting ? t('state.saving') : t('btn.save')}
             </button>
           </div>
         </form>

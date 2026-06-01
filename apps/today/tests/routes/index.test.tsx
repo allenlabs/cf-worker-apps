@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render as rtlRender, screen } from '@testing-library/react';
+import { I18nProvider } from '@allenlabs/i18n/react';
+import { appDict } from '~/i18n/dict';
 import {
   ActiveFocusFooter,
   ActivityPanel,
@@ -13,6 +15,14 @@ import {
   maxHeatmap,
   sumHeatmap,
 } from '~/routes/index';
+
+function render(ui: React.ReactElement) {
+  return rtlRender(
+    <I18nProvider locale="en" dict={appDict}>
+      {ui}
+    </I18nProvider>,
+  );
+}
 import type {
   ActiveFocusRow,
   InboxUnreadRow,

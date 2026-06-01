@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useT } from '@allenlabs/i18n/react';
 import { TARGETS, type SaveRitualInput, type Target } from '~/server/transition';
 
 interface RitualFormProps {
@@ -7,7 +8,14 @@ interface RitualFormProps {
   error?: string | null;
 }
 
+const TARGET_OPTION_KEY: Record<string, string> = {
+  context: 'transition.form.targetContext',
+  inbox: 'transition.form.targetInbox',
+  journal: 'transition.form.targetJournal',
+};
+
 export function RitualForm({ onSubmit, busy, error }: RitualFormProps) {
+  const { t } = useT();
   const [leavingAt, setLeavingAt] = useState('');
   const [nextStep, setNextStep] = useState('');
   const [mightForget, setMightForget] = useState('');
@@ -28,7 +36,7 @@ export function RitualForm({ onSubmit, busy, error }: RitualFormProps) {
     <form onSubmit={handleSubmit} className="space-y-4" data-testid="ritual-form">
       <div>
         <label className="block text-xs text-slate-400 mb-1">
-          1. Where am I leaving this?
+          {t('transition.form.q1')}
         </label>
         <textarea
           value={leavingAt}
@@ -36,12 +44,12 @@ export function RitualForm({ onSubmit, busy, error }: RitualFormProps) {
           rows={2}
           className="w-full rounded bg-slate-950 border border-slate-800 px-3 py-2 text-sm text-slate-100 focus:border-transition-500 focus:outline-none"
           data-testid="leaving-input"
-          placeholder="What state is the project in right now?"
+          placeholder={t('transition.form.leavingPlaceholder')}
         />
       </div>
       <div>
         <label className="block text-xs text-slate-400 mb-1">
-          2. What&apos;s the very next step?
+          {t('transition.form.q2')}
         </label>
         <textarea
           value={nextStep}
@@ -49,12 +57,12 @@ export function RitualForm({ onSubmit, busy, error }: RitualFormProps) {
           rows={2}
           className="w-full rounded bg-slate-950 border border-slate-800 px-3 py-2 text-sm text-slate-100 focus:border-transition-500 focus:outline-none"
           data-testid="next-input"
-          placeholder="When I come back, do X first."
+          placeholder={t('transition.form.nextPlaceholder')}
         />
       </div>
       <div>
         <label className="block text-xs text-slate-400 mb-1">
-          3. What might I forget?
+          {t('transition.form.q3')}
         </label>
         <textarea
           value={mightForget}
@@ -62,12 +70,12 @@ export function RitualForm({ onSubmit, busy, error }: RitualFormProps) {
           rows={2}
           className="w-full rounded bg-slate-950 border border-slate-800 px-3 py-2 text-sm text-slate-100 focus:border-transition-500 focus:outline-none"
           data-testid="forget-input"
-          placeholder="Easy to lose: a half-thought, a tab, a config bit."
+          placeholder={t('transition.form.forgetPlaceholder')}
         />
       </div>
       <div>
         <label className="block text-xs text-slate-400 mb-1">
-          Send a copy to…
+          {t('transition.form.sendCopy')}
         </label>
         <select
           value={target}
@@ -75,9 +83,11 @@ export function RitualForm({ onSubmit, busy, error }: RitualFormProps) {
           className="rounded bg-slate-950 border border-slate-800 px-3 py-2 text-sm text-slate-100 focus:border-transition-500 focus:outline-none"
           data-testid="target-select"
         >
-          <option value="">— keep here only —</option>
-          {TARGETS.map((t) => (
-            <option key={t} value={t}>{t}</option>
+          <option value="">{t('transition.form.keepHere')}</option>
+          {TARGETS.map((opt) => (
+            <option key={opt} value={opt}>
+              {TARGET_OPTION_KEY[opt] ? t(TARGET_OPTION_KEY[opt]!) : opt}
+            </option>
           ))}
         </select>
       </div>
@@ -89,7 +99,7 @@ export function RitualForm({ onSubmit, busy, error }: RitualFormProps) {
           className="rounded bg-transition-600 hover:bg-transition-500 disabled:opacity-50 disabled:cursor-not-allowed px-4 py-2 text-sm font-semibold text-white"
           data-testid="save-button"
         >
-          {busy ? 'Saving…' : 'Save ritual'}
+          {busy ? t('state.saving') : t('transition.form.save')}
         </button>
       </div>
     </form>

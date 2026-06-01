@@ -11,6 +11,7 @@ const hub: Dict = {
     "hub.signedInAs": "Signed in as {name}",
     "hub.guest": "Guest",
     "hub.health": "Health",
+    "hub.appList": "App list",
   },
   ko: {
     "app.name": "Allen Labs",
@@ -20,6 +21,7 @@ const hub: Dict = {
     "hub.signedInAs": "{name}님으로 로그인",
     "hub.guest": "게스트",
     "hub.health": "상태",
+    "hub.appList": "앱 목록",
   },
 };
 

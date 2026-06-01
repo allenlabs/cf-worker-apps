@@ -2,6 +2,7 @@ import { createFileRoute, redirect, useRouter } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
+import { useT } from '@allenlabs/i18n/react';
 import { users } from '~/db/schema';
 import { formatDateTime } from '~/lib/format';
 import { notifyError, notifySuccess } from '~/lib/toast';
@@ -52,12 +53,13 @@ export const Route = createFileRoute('/admin/users')({
 function AdminUsersPage() {
   const data = Route.useLoaderData();
   const router = useRouter();
+  const { t } = useT();
   return (
     <div>
-      <h1 className="text-2xl font-semibold mb-4">Users</h1>
+      <h1 className="text-2xl font-semibold mb-4">{t('admin.usersTitle')}</h1>
       <table className="data-table card">
         <thead>
-          <tr><th>Login</th><th>Email</th><th>Name</th><th>Admin</th><th>Status</th><th>Last login</th><th>Created</th></tr>
+          <tr><th>{t('admin.colLogin')}</th><th>{t('admin.colEmail')}</th><th>{t('admin.colName')}</th><th>{t('admin.colAdmin')}</th><th>{t('admin.colStatus')}</th><th>{t('admin.colLastLogin')}</th><th>{t('admin.colCreated')}</th></tr>
         </thead>
         <tbody>
           {data.map((u) => (
@@ -72,10 +74,10 @@ function AdminUsersPage() {
                   onChange={async (e) => {
                     try {
                       await setAdmin({ data: { id: u.id, admin: e.target.checked } });
-                      notifySuccess('User updated');
+                      notifySuccess(t('admin.userUpdated'));
                       router.invalidate();
                     } catch (err) {
-                      notifyError(`Could not update user: ${err instanceof Error ? err.message : String(err)}`);
+                      notifyError(t('admin.userUpdateError', { msg: err instanceof Error ? err.message : String(err) }));
                     }
                   }}
                 />
@@ -87,15 +89,15 @@ function AdminUsersPage() {
                   onChange={async (e) => {
                     try {
                       await setStatus({ data: { id: u.id, status: e.target.value as any } });
-                      notifySuccess('User updated');
+                      notifySuccess(t('admin.userUpdated'));
                       router.invalidate();
                     } catch (err) {
-                      notifyError(`Could not update user: ${err instanceof Error ? err.message : String(err)}`);
+                      notifyError(t('admin.userUpdateError', { msg: err instanceof Error ? err.message : String(err) }));
                     }
                   }}
                 >
-                  <option value="active">active</option>
-                  <option value="locked">locked</option>
+                  <option value="active">{t('admin.statusActive')}</option>
+                  <option value="locked">{t('admin.statusLocked')}</option>
                 </select>
               </td>
               <td>{formatDateTime(u.lastLoginAt)}</td>

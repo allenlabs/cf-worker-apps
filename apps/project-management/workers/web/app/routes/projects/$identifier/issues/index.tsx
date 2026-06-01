@@ -1,6 +1,7 @@
 import { Link, createFileRoute, getRouteApi } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
 import { z } from 'zod';
+import { useT } from '@allenlabs/i18n/react';
 import { PriorityBadge, StatusBadge, TrackerBadge } from '~/components/badges';
 import { formatDate, timeAgo } from '~/lib/format';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
@@ -66,51 +67,52 @@ function IssuesIndexPage() {
   const { issues } = Route.useLoaderData();
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
+  const { t } = useT();
   return (
     <div>
       <header className="flex items-center justify-between mb-3">
-        <h2 className="text-xl font-semibold">Issues</h2>
+        <h2 className="text-xl font-semibold">{t('issues.title')}</h2>
         <Link
           to="/projects/$identifier/issues/new"
           params={{ identifier: project.identifier }}
           className="btn-primary"
         >
-          + New issue
+          {t('issuesList.newIssue')}
         </Link>
       </header>
 
       <div className="card p-3 mb-3 flex flex-wrap items-end gap-3">
         <div>
-          <label className="label">Status</label>
+          <label className="label">{t('issue.status')}</label>
           <select
             className="select"
             value={search.status}
             onChange={(e) => navigate({ search: (s) => ({ ...s, status: e.target.value as any }) })}
           >
-            <option value="open">Open</option>
-            <option value="closed">Closed</option>
-            <option value="all">All</option>
+            <option value="open">{t('issuesList.statusOpen')}</option>
+            <option value="closed">{t('issuesList.statusClosed')}</option>
+            <option value="all">{t('issuesList.statusAll')}</option>
           </select>
         </div>
         <div>
-          <label className="label">Sort by</label>
+          <label className="label">{t('issuesList.sortBy')}</label>
           <select
             className="select"
             value={search.sort}
             onChange={(e) => navigate({ search: (s) => ({ ...s, sort: e.target.value as any }) })}
           >
-            <option value="updated">Updated</option>
-            <option value="priority">Priority</option>
-            <option value="id">Number</option>
+            <option value="updated">{t('issuesList.sortUpdated')}</option>
+            <option value="priority">{t('issuesList.sortPriority')}</option>
+            <option value="id">{t('issuesList.sortNumber')}</option>
           </select>
         </div>
         <div className="flex-1 min-w-[12rem]">
-          <label className="label">Search</label>
+          <label className="label">{t('filter.query')}</label>
           <input
             className="input"
             value={search.q ?? ''}
             onChange={(e) => navigate({ search: (s) => ({ ...s, q: e.target.value || undefined }) })}
-            placeholder="subject or description…"
+            placeholder={t('issuesList.searchPlaceholder')}
           />
         </div>
       </div>
@@ -118,33 +120,33 @@ function IssuesIndexPage() {
       {issues.length === 0 ? (
         search.status === 'open' && !search.q ? (
           <section className="card p-8 text-center">
-            <h3 className="text-lg font-semibold mb-2">No issues yet</h3>
+            <h3 className="text-lg font-semibold mb-2">{t('issuesList.emptyTitle')}</h3>
             <p className="text-sm text-gray-600 mb-4">
-              Track bugs, features, and tasks here. Create the first issue to get started.
+              {t('issuesList.emptyBody')}
             </p>
             <Link
               to="/projects/$identifier/issues/new"
               params={{ identifier: project.identifier }}
               className="btn-primary"
             >
-              + New issue
+              {t('issuesList.newIssue')}
             </Link>
           </section>
         ) : (
-          <p className="text-sm text-gray-500">No issues match these filters.</p>
+          <p className="text-sm text-gray-500">{t('issuesList.noMatch')}</p>
         )
       ) : (
         <table className="data-table card">
           <thead>
             <tr>
               <th>#</th>
-              <th>Tracker</th>
-              <th>Status</th>
-              <th>Priority</th>
-              <th>Subject</th>
-              <th>Assignee</th>
-              <th>Due</th>
-              <th>Updated</th>
+              <th>{t('issuesList.colTracker')}</th>
+              <th>{t('issuesList.colStatus')}</th>
+              <th>{t('issuesList.colPriority')}</th>
+              <th>{t('issuesList.colSubject')}</th>
+              <th>{t('issuesList.colAssignee')}</th>
+              <th>{t('issuesList.colDue')}</th>
+              <th>{t('issuesList.colUpdated')}</th>
             </tr>
           </thead>
           <tbody>

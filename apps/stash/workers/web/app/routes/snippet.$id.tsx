@@ -14,6 +14,7 @@ import { getDb, getEnv, requireUser } from '~/server/auth-runtime.server';
 import { readSessionToken, verifySessionToken } from '~/server/session.server';
 import { languageLabel, timeAgo } from '~/lib/format';
 import { Header } from '~/components/Header';
+import { useT } from '@allenlabs/i18n/react';
 import { parseTags } from './new';
 
 const IdInput = z.object({ id: z.number().int().positive() });
@@ -72,18 +73,19 @@ interface DetailHeaderProps {
 }
 
 export function DetailHeader({ snippet, now }: DetailHeaderProps) {
+  const { t } = useT();
   const lang = languageLabel(snippet.language);
-  const title = snippet.title || '(untitled snippet)';
+  const title = snippet.title || t('stash.untitledSnippet');
   return (
     <div className="mb-4" data-testid="detail-header">
       <h1 className="text-xl font-semibold text-slate-100">{title}</h1>
       <div className="mt-1 flex flex-wrap gap-3 text-xs text-slate-500">
-        <span>saved {timeAgo(snippet.createdAt, now)}</span>
+        <span>{t('stash.savedAt', { when: timeAgo(snippet.createdAt, now) })}</span>
         {snippet.updatedAt !== snippet.createdAt ? (
-          <span>· edited {timeAgo(snippet.updatedAt, now)}</span>
+          <span>· {t('stash.editedAt', { when: timeAgo(snippet.updatedAt, now) })}</span>
         ) : null}
         {lang ? <span>· <span className="text-stash-300">{lang}</span></span> : null}
-        {snippet.source ? <span>· via {snippet.source}</span> : null}
+        {snippet.source ? <span>· {t('stash.via', { source: snippet.source })}</span> : null}
       </div>
       {snippet.tags.length > 0 ? (
         <div className="mt-2 flex flex-wrap gap-2 text-xs">
@@ -103,6 +105,7 @@ interface CopyButtonProps {
 }
 
 export function CopyButton({ text }: CopyButtonProps) {
+  const { t } = useT();
   const [copied, setCopied] = useState(false);
   /* v8 ignore start — covered by deploy smoke; jsdom tests stub clipboard. */
   async function handle() {
@@ -124,7 +127,7 @@ export function CopyButton({ text }: CopyButtonProps) {
       className="rounded bg-stash-600 hover:bg-stash-500 px-3 py-1 text-sm font-medium text-white"
       data-testid="copy-button"
     >
-      {copied ? 'Copied' : 'Copy'}
+      {copied ? t('stash.copied') : t('stash.copy')}
     </button>
   );
 }
@@ -134,6 +137,7 @@ export function CopyButton({ text }: CopyButtonProps) {
 function DetailPage() {
   const initial = Route.useLoaderData();
   const router = useRouter();
+  const { t } = useT();
   const [snap, setSnap] = useState<SnippetDetail | null>(initial);
   const [editing, setEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState(initial?.title ?? '');
@@ -148,8 +152,8 @@ function DetailPage() {
       <>
         <Header />
         <div className="max-w-3xl mx-auto p-4 text-slate-400" data-testid="not-found">
-          <p>Snippet not found.</p>
-          <Link to="/" className="text-stash-400 hover:underline">← Back</Link>
+          <p>{t('stash.snippetNotFound')}</p>
+          <Link to="/" className="text-stash-400 hover:underline">{t('stash.back')}</Link>
         </div>
       </>
     );
@@ -183,7 +187,7 @@ function DetailPage() {
   }
 
   async function destroy() {
-    if (!confirm('Delete this snippet?')) return;
+    if (!confirm(t('stash.deleteConfirm'))) return;
     setBusy(true);
     void deleteSnippet({ data: { id: snap!.id } }).then(() => {
       router.navigate({ to: '/' });
@@ -195,22 +199,22 @@ function DetailPage() {
     <>
       <Header />
       <div className="max-w-3xl mx-auto p-4">
-        <Link to="/" className="text-xs text-stash-400 hover:underline">← All snippets</Link>
+        <Link to="/" className="text-xs text-stash-400 hover:underline">{t('stash.allSnippets')}</Link>
         {editing ? (
           <div className="mt-3 space-y-3" data-testid="edit-form">
             <input
               type="text"
               value={draftTitle}
               onChange={(e) => setDraftTitle(e.target.value)}
-              placeholder="Title (optional)"
-              aria-label="Title"
+              placeholder={t('stash.titleOptional')}
+              aria-label={t('stash.titleLabel')}
               className="w-full rounded bg-slate-900 border border-slate-800 px-3 py-2 text-slate-100 focus:border-stash-500 focus:outline-none"
               data-testid="edit-title"
             />
             <textarea
               value={draftBody}
               onChange={(e) => setDraftBody(e.target.value)}
-              aria-label="Body"
+              aria-label={t('stash.bodyLabel')}
               rows={16}
               className="w-full rounded bg-slate-900 border border-slate-800 px-3 py-2 font-mono text-sm text-slate-100 focus:border-stash-500 focus:outline-none"
               data-testid="edit-body"
@@ -220,8 +224,8 @@ function DetailPage() {
                 type="text"
                 value={draftLang}
                 onChange={(e) => setDraftLang(e.target.value)}
-                placeholder="Language"
-                aria-label="Language"
+                placeholder={t('stash.languageLabel')}
+                aria-label={t('stash.languageLabel')}
                 className="rounded bg-slate-900 border border-slate-800 px-3 py-2 text-sm text-slate-100 focus:border-stash-500 focus:outline-none"
                 data-testid="edit-lang"
               />
@@ -229,8 +233,8 @@ function DetailPage() {
                 type="text"
                 value={draftTags}
                 onChange={(e) => setDraftTags(e.target.value)}
-                placeholder="Tags"
-                aria-label="Tags"
+                placeholder={t('stash.tagsLabel')}
+                aria-label={t('stash.tagsLabel')}
                 className="rounded bg-slate-900 border border-slate-800 px-3 py-2 text-sm text-slate-100 focus:border-stash-500 focus:outline-none"
                 data-testid="edit-tags"
               />
@@ -243,7 +247,7 @@ function DetailPage() {
                 className="rounded border border-slate-700 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800"
                 data-testid="cancel-edit"
               >
-                Cancel
+                {t('btn.cancel')}
               </button>
               <button
                 type="button"
@@ -252,7 +256,7 @@ function DetailPage() {
                 className="rounded bg-stash-600 hover:bg-stash-500 disabled:opacity-50 disabled:cursor-not-allowed px-3 py-1.5 text-sm font-semibold text-white"
                 data-testid="save-edit"
               >
-                {busy ? 'Saving…' : 'Save'}
+                {busy ? t('state.saving') : t('btn.save')}
               </button>
             </div>
           </div>
@@ -267,7 +271,7 @@ function DetailPage() {
                 className="rounded border border-slate-700 px-3 py-1 text-sm text-slate-300 hover:bg-slate-800"
                 data-testid="edit-button"
               >
-                Edit
+                {t('stash.edit')}
               </button>
             </div>
             <pre
@@ -284,7 +288,7 @@ function DetailPage() {
                 onClick={destroy}
                 disabled={busy}
               >
-                Delete snippet
+                {t('stash.deleteSnippet')}
               </button>
             </div>
           </>

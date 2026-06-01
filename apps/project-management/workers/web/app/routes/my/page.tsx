@@ -1,6 +1,7 @@
 import { Link, createFileRoute, redirect } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
 import { getRequest } from '@tanstack/react-start/server';
+import { useT } from '@allenlabs/i18n/react';
 import { PriorityBadge, StatusBadge, TrackerBadge } from '~/components/badges';
 import { formatDate, timeAgo } from '~/lib/format';
 import { getDb, getEnv } from '~/server/auth-runtime.server';
@@ -36,6 +37,7 @@ export const Route = createFileRoute('/my/page')({
 
 function MyPagePage() {
   const data = Route.useLoaderData();
+  const { t } = useT();
   if (!data) return null;
   const { myAssigned, myReported, watched, recent } = data;
 
@@ -46,13 +48,12 @@ function MyPagePage() {
   ) {
     return (
       <section className="card p-10 max-w-2xl mx-auto text-center">
-        <h1 className="text-2xl font-semibold mb-3">Your page is empty</h1>
+        <h1 className="text-2xl font-semibold mb-3">{t('my.emptyTitle')}</h1>
         <p className="text-sm text-gray-600 mb-6">
-          You have no assigned issues yet. Browse projects to find something to
-          work on, or report a new issue inside a project.
+          {t('my.emptyBody')}
         </p>
         <Link to="/projects" className="btn-primary">
-          Browse projects
+          {t('my.browseProjects')}
         </Link>
       </section>
     );
@@ -62,9 +63,9 @@ function MyPagePage() {
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <section className="lg:col-span-2 space-y-6">
         <div className="card p-4">
-          <h2 className="text-lg font-semibold mb-3">Issues assigned to me</h2>
+          <h2 className="text-lg font-semibold mb-3">{t('my.issuesAssignedToMe')}</h2>
           {myAssigned.length === 0 ? (
-            <p className="text-sm text-gray-500">None</p>
+            <p className="text-sm text-gray-500">{t('state.none')}</p>
           ) : (
             <ul className="divide-y divide-gray-100">
               {myAssigned.map((i) => (
@@ -84,7 +85,7 @@ function MyPagePage() {
                   <PriorityBadge name={i.priorityName} color={i.priorityColor} />
                   {i.dueDate ? (
                     <span className="text-xs text-gray-500">
-                      due {formatDate(i.dueDate)}
+                      {t('my.dueShort', { date: formatDate(i.dueDate) })}
                     </span>
                   ) : null}
                 </li>
@@ -94,9 +95,9 @@ function MyPagePage() {
         </div>
 
         <div className="card p-4">
-          <h2 className="text-lg font-semibold mb-3">Issues I reported</h2>
+          <h2 className="text-lg font-semibold mb-3">{t('my.issuesIReported')}</h2>
           {myReported.length === 0 ? (
-            <p className="text-sm text-gray-500">None</p>
+            <p className="text-sm text-gray-500">{t('state.none')}</p>
           ) : (
             <ul className="divide-y divide-gray-100">
               {myReported.map((i) => (
@@ -119,9 +120,9 @@ function MyPagePage() {
         </div>
 
         <div className="card p-4">
-          <h2 className="text-lg font-semibold mb-3">Watched</h2>
+          <h2 className="text-lg font-semibold mb-3">{t('my.watched')}</h2>
           {watched.length === 0 ? (
-            <p className="text-sm text-gray-500">None</p>
+            <p className="text-sm text-gray-500">{t('state.none')}</p>
           ) : (
             <ul className="divide-y divide-gray-100">
               {watched.map((i) => (
@@ -145,9 +146,9 @@ function MyPagePage() {
       </section>
 
       <aside className="card p-4">
-        <h2 className="text-lg font-semibold mb-3">Recent activity</h2>
+        <h2 className="text-lg font-semibold mb-3">{t('my.recentActivity')}</h2>
         {recent.length === 0 ? (
-          <p className="text-sm text-gray-500">Nothing yet.</p>
+          <p className="text-sm text-gray-500">{t('state.nothingYet')}</p>
         ) : (
           <ul className="text-sm space-y-2">
             {recent.map((a) => (

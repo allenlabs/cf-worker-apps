@@ -1,3 +1,4 @@
+import { useT } from '@allenlabs/i18n/react';
 import { topicLabel, timeAgo } from '~/lib/format';
 import type { NudgeRow as NudgeRowType } from '~/server/concierge';
 
@@ -54,13 +55,12 @@ export function NudgeRow({ nudge, now }: NudgeRowProps) {
 }
 
 export function EmptyNudges() {
+  const { t } = useT();
   return (
     <div className="card p-6 text-center text-sm text-slate-400" data-testid="empty-nudges">
-      <p className="mb-2 text-slate-200">No nudges yet.</p>
+      <p className="mb-2 text-slate-200">{t('concierge.emptyTitle')}</p>
       <p className="text-xs">
-        The cron runs every 30 minutes.  Make sure your preferences below have
-        <code className="text-conci-300 px-1">enabled = true</code>, then wait
-        for the next tick — or trigger a manual run.
+        {t('concierge.emptyBody', { flag: 'enabled = true' })}
       </p>
     </div>
   );

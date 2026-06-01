@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render as rtlRender, screen } from '@testing-library/react';
+import { I18nProvider } from '@allenlabs/i18n/react';
+import { appDict } from '~/i18n/dict';
 import {
   ActiveSessionView,
   Countdown,
@@ -9,6 +11,19 @@ import {
   computeRemainingSeconds,
   ringDashOffset,
 } from '~/routes/index';
+
+function render(ui: React.ReactElement) {
+  const wrap = (node: React.ReactElement) => (
+    <I18nProvider locale="en" dict={appDict}>
+      {node}
+    </I18nProvider>
+  );
+  const result = rtlRender(wrap(ui));
+  return {
+    ...result,
+    rerender: (node: React.ReactElement) => result.rerender(wrap(node)),
+  };
+}
 
 describe('computeRemainingSeconds', () => {
   const NOW = 1_700_000_000_000;

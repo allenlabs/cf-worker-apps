@@ -2,6 +2,7 @@ import { createFileRoute, getRouteApi, useRouter } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start';
 import { useState } from 'react';
 import { z } from 'zod';
+import { useT } from '@allenlabs/i18n/react';
 import { Markdown } from '~/components/Markdown';
 import { formatDateTime } from '~/lib/format';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
@@ -41,6 +42,7 @@ function WikiPagePage() {
   const { data, html } = Route.useLoaderData();
   const params = Route.useParams();
   const router = useRouter();
+  const { t } = useT();
   const [editing, setEditing] = useState(!data.page);
   const [title, setTitle] = useState(data.page?.title ?? params.slug);
   const [text, setText] = useState(data.revision?.text ?? '');
@@ -60,7 +62,7 @@ function WikiPagePage() {
   }
 
   async function destroy() {
-    if (!data.page || !confirm('Delete this page?')) return;
+    if (!data.page || !confirm(t('wiki.deleteConfirm'))) return;
     await deleteWikiPage({ data: { id: data.page.id, projectId: project.id } });
     // Refresh /projects/$identifier/wiki so the deleted page disappears.
     router.invalidate();
@@ -72,10 +74,10 @@ function WikiPagePage() {
       <div className="space-y-3">
         <input className="input text-lg font-semibold" value={title} onChange={(e) => setTitle(e.target.value)} />
         <textarea className="textarea font-mono text-sm" rows={20} value={text} onChange={(e) => setText(e.target.value)} />
-        <input className="input" placeholder="Comment for this revision (optional)" value={comments} onChange={(e) => setComments(e.target.value)} />
+        <input className="input" placeholder={t('wiki.revisionCommentPlaceholder')} value={comments} onChange={(e) => setComments(e.target.value)} />
         <div className="flex gap-2">
-          <button className="btn-primary" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save'}</button>
-          {data.page ? <button className="btn" onClick={() => setEditing(false)}>Cancel</button> : null}
+          <button className="btn-primary" onClick={save} disabled={busy}>{busy ? t('btn.saving') : t('btn.save')}</button>
+          {data.page ? <button className="btn" onClick={() => setEditing(false)}>{t('btn.cancel')}</button> : null}
         </div>
       </div>
     );
@@ -86,14 +88,14 @@ function WikiPagePage() {
       <header className="flex items-center justify-between">
         <h2 className="text-xl font-semibold">{data.page?.title ?? params.slug}</h2>
         <div className="flex gap-2">
-          <button className="btn" onClick={() => setEditing(true)}>Edit</button>
-          {data.page ? <button className="btn-danger" onClick={destroy}>Delete</button> : null}
+          <button className="btn" onClick={() => setEditing(true)}>{t('btn.edit')}</button>
+          {data.page ? <button className="btn-danger" onClick={destroy}>{t('btn.delete')}</button> : null}
         </div>
       </header>
-      {html ? <Markdown html={html} /> : <p className="text-sm text-gray-500">This page is empty.</p>}
+      {html ? <Markdown html={html} /> : <p className="text-sm text-gray-500">{t('wiki.empty')}</p>}
       {data.revisions.length > 0 ? (
         <section className="card p-3">
-          <h3 className="font-semibold mb-2">Revisions</h3>
+          <h3 className="font-semibold mb-2">{t('wiki.revisions')}</h3>
           <ul className="text-xs space-y-1">
             {data.revisions.map((r) => (
               <li key={r.id}>

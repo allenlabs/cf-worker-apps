@@ -19,6 +19,9 @@ import {
   restoreCountLabel,
   timeAgo,
 } from '~/lib/format';
+import { useT } from '@allenlabs/i18n/react';
+
+type Translate = (key: string, vars?: Record<string, string | number>) => string;
 
 const IdInput = z.object({ id: z.number().int().positive() });
 
@@ -76,6 +79,7 @@ interface PayloadTableProps {
  * alphabetical key order.
  */
 export function PayloadTable({ payload }: PayloadTableProps) {
+  const { t } = useT();
   const keys = Object.keys(payload);
   const recognisedInOrder = RECOGNISED_KEYS.filter((k) => keys.includes(k));
   const unrecognised = keys
@@ -85,7 +89,7 @@ export function PayloadTable({ payload }: PayloadTableProps) {
   if (ordered.length === 0) {
     return (
       <div className="card p-3 text-xs text-slate-500" data-testid="payload-empty">
-        No payload captured.
+        {t('context.noPayload')}
       </div>
     );
   }
@@ -105,7 +109,7 @@ export function PayloadTable({ payload }: PayloadTableProps) {
               </th>
               <td className="py-2 align-top text-slate-200" data-testid={`payload-${k}`}>
                 {recognised ? (
-                  renderRecognisedValue(k, v)
+                  renderRecognisedValue(k, v, t)
                 ) : (
                   <pre className="whitespace-pre-wrap break-all text-xs text-slate-300">
                     {JSON.stringify(v, null, 2)}
@@ -120,14 +124,14 @@ export function PayloadTable({ payload }: PayloadTableProps) {
   );
 }
 
-function renderRecognisedValue(key: string, value: unknown): React.ReactNode {
+function renderRecognisedValue(key: string, value: unknown, t: Translate): React.ReactNode {
   // Render arrays of strings as bullet lists, plain strings as <code>.
   if (typeof value === 'string') {
     return <code className="break-all text-ctx-300">{value}</code>;
   }
   if (Array.isArray(value)) {
     if (value.length === 0) {
-      return <span className="text-xs text-slate-500">(empty)</span>;
+      return <span className="text-xs text-slate-500">{t('context.empty.paren')}</span>;
     }
     return (
       <ul className="space-y-1" data-testid={`list-${key}`}>
@@ -137,7 +141,7 @@ function renderRecognisedValue(key: string, value: unknown): React.ReactNode {
           </li>
         ))}
         {value.length > 50 ? (
-          <li className="text-xs text-slate-500">… (+{value.length - 50} more)</li>
+          <li className="text-xs text-slate-500">{t('context.moreItems', { n: value.length - 50 })}</li>
         ) : null}
       </ul>
     );
@@ -151,14 +155,15 @@ interface DetailHeaderProps {
 }
 
 export function DetailHeader({ snapshot, now }: DetailHeaderProps) {
+  const { t } = useT();
   return (
     <div className="mb-6" data-testid="detail-header">
       <h1 className="text-xl font-semibold text-slate-100">{snapshot.name}</h1>
       <div className="mt-1 flex flex-wrap gap-3 text-xs text-slate-500">
-        <span>captured {timeAgo(snapshot.createdAt, now)}</span>
+        <span>{t('context.captured', { when: timeAgo(snapshot.createdAt, now) })}</span>
         <span>· {restoreCountLabel(snapshot.restoredCount)}</span>
         {snapshot.restoredAt ? (
-          <span>· last restored {timeAgo(snapshot.restoredAt, now)}</span>
+          <span>· {t('context.lastRestored', { when: timeAgo(snapshot.restoredAt, now) })}</span>
         ) : null}
       </div>
     </div>
@@ -170,29 +175,30 @@ interface LinkedEntitiesProps {
 }
 
 export function LinkedEntities({ snapshot }: LinkedEntitiesProps) {
+  const { t } = useT();
   const items: Array<{ label: string; href: string }> = [];
   if (snapshot.focusSessionId) {
     items.push({
-      label: `Focus session #${snapshot.focusSessionId}`,
+      label: t('context.focusSession', { id: snapshot.focusSessionId }),
       href: `https://focus.allenlabs.org/history`,
     });
   }
   if (snapshot.inboxItemId) {
     items.push({
-      label: `Inbox item #${snapshot.inboxItemId}`,
+      label: t('context.inboxItem', { id: snapshot.inboxItemId }),
       href: `https://inbox.allenlabs.org/`,
     });
   }
   if (snapshot.pmIssueId) {
     items.push({
-      label: `PM issue #${snapshot.pmIssueId}`,
+      label: t('context.pmIssue', { id: snapshot.pmIssueId }),
       href: `https://projects.allenlabs.org/issues/${snapshot.pmIssueId}`,
     });
   }
   if (items.length === 0) return null;
   return (
     <div className="card p-3 mb-4" data-testid="linked-entities">
-      <div className="text-xs text-slate-500 mb-2">Linked at capture</div>
+      <div className="text-xs text-slate-500 mb-2">{t('context.linkedAtCapture')}</div>
       <ul className="space-y-1 text-sm">
         {items.map((it) => (
           <li key={it.href}>
@@ -235,6 +241,7 @@ interface ImBackButtonProps {
 }
 
 export function ImBackButton({ payload, onClick, disabled }: ImBackButtonProps) {
+  const { t } = useT();
   const snippet = buildRestoreSnippet(payload);
   const [copied, setCopied] = useState(false);
   /* v8 ignore start — the clipboard write is exercised by deploy smoke and
@@ -262,11 +269,11 @@ export function ImBackButton({ payload, onClick, disabled }: ImBackButtonProps) 
         className="w-full rounded bg-ctx-600 hover:bg-ctx-500 disabled:opacity-50 disabled:cursor-not-allowed px-4 py-3 text-base font-semibold text-white"
         data-testid="im-back-button"
       >
-        I&apos;m back
+        {t('context.imBack')}
       </button>
       {snippet ? (
         <div className="mt-2 text-xs text-slate-500" data-testid="im-back-snippet">
-          {copied ? 'Copied to clipboard:' : 'Will copy to clipboard:'}{' '}
+          {copied ? t('context.copied') : t('context.willCopy')}{' '}
           <code className="text-ctx-300 break-all">{snippet}</code>
         </div>
       ) : null}
@@ -279,20 +286,21 @@ export function ImBackButton({ payload, onClick, disabled }: ImBackButtonProps) 
 function DetailPage() {
   const initial = Route.useLoaderData();
   const router = useRouter();
+  const { t } = useT();
   const [snap, setSnap] = useState<SnapshotDetail | null>(initial);
 
   if (!snap) {
     return (
       <div className="max-w-2xl mx-auto p-6 text-slate-400" data-testid="not-found">
-        <p>Snapshot not found.</p>
-        <Link to="/" className="text-ctx-400 hover:underline">← Back</Link>
+        <p>{t('context.notFound')}</p>
+        <Link to="/" className="text-ctx-400 hover:underline">{t('context.back')}</Link>
       </div>
     );
   }
 
   return (
     <div className="max-w-2xl mx-auto p-6">
-      <Link to="/" className="text-xs text-ctx-400 hover:underline">← All snapshots</Link>
+      <Link to="/" className="text-xs text-ctx-400 hover:underline">{t('context.allSnapshots')}</Link>
       <DetailHeader snapshot={snap} />
       {snap.notes ? (
         <div className="card p-3 mb-4 text-sm text-slate-200 whitespace-pre-wrap" data-testid="notes">
@@ -321,13 +329,13 @@ function DetailPage() {
           data-testid="delete"
           onClick={() => {
             /* v8 ignore next 7 — deploy smoke covers the delete round-trip. */
-            if (!confirm('Delete this snapshot?')) return;
+            if (!confirm(t('context.confirmDelete'))) return;
             void deleteSnapshot({ data: { id: snap.id } }).then(() => {
               router.navigate({ to: '/' });
             });
           }}
         >
-          Delete snapshot
+          {t('context.delete')}
         </button>
       </div>
     </div>

@@ -3,6 +3,7 @@ import { createServerFn } from '@tanstack/react-start';
 import { getRequest } from '@tanstack/react-start/server';
 import { z } from 'zod';
 import { useState } from 'react';
+import { useT } from '@allenlabs/i18n/react';
 import {
   loadQueueImpl,
   markDoneImpl,
@@ -68,13 +69,14 @@ interface QueueCardProps {
  * (Done — already read it elsewhere).
  */
 export function QueueCard({ item, now, onDone, onSkip, busy }: QueueCardProps) {
+  const { t } = useT();
   const timeLabel = readingTimeLabel(item.estimatedMinutes);
   const skipped = skipCountLabel(item.skippedCount);
   return (
     <div className="card p-6" data-testid={`queue-card-${item.id}`}>
       <div className="flex items-baseline justify-between gap-3 text-xs text-slate-500">
-        <span>{item.hostname || 'link'}</span>
-        <span>saved {timeAgo(item.savedAt, now)}</span>
+        <span>{item.hostname || t('rl.linkFallback')}</span>
+        <span>{t('rl.savedPrefix')} {timeAgo(item.savedAt, now)}</span>
       </div>
       <h2 className="mt-2 text-xl font-semibold text-slate-100">
         {item.title ?? item.url}
@@ -98,7 +100,7 @@ export function QueueCard({ item, now, onDone, onSkip, busy }: QueueCardProps) {
           className="rounded bg-rl-600 hover:bg-rl-500 px-4 py-2 text-center font-semibold text-white"
           data-testid="read-now"
         >
-          Read now
+          {t('rl.readNow')}
         </Link>
         <button
           type="button"
@@ -107,7 +109,7 @@ export function QueueCard({ item, now, onDone, onSkip, busy }: QueueCardProps) {
           className="rounded border border-slate-700 px-4 py-2 text-slate-200 hover:bg-slate-800 disabled:opacity-50"
           data-testid="skip"
         >
-          Skip for now
+          {t('rl.skipForNow')}
         </button>
         <button
           type="button"
@@ -116,7 +118,7 @@ export function QueueCard({ item, now, onDone, onSkip, busy }: QueueCardProps) {
           className="rounded border border-slate-800 px-4 py-2 text-xs text-slate-400 hover:bg-slate-800 disabled:opacity-50"
           data-testid="done"
         >
-          Done — already read
+          {t('rl.doneAlready')}
         </button>
       </div>
     </div>
@@ -124,35 +126,37 @@ export function QueueCard({ item, now, onDone, onSkip, busy }: QueueCardProps) {
 }
 
 export function QueueEmpty({ unreadCount }: { unreadCount: number }) {
+  const { t } = useT();
   return (
     <div className="card p-6 text-center text-slate-300" data-testid="queue-empty">
-      <p className="text-lg font-semibold mb-1">Nothing to read.</p>
+      <p className="text-lg font-semibold mb-1">{t('rl.nothingToRead')}</p>
       <p className="text-xs text-slate-500 mb-3">
         {unreadCount === 0
-          ? 'Your queue is empty — save something with `al rl save <url>`.'
-          : `${unreadCount} unread item${unreadCount === 1 ? '' : 's'}, but none surface right now.`}
+          ? t('rl.queueEmptyHint')
+          : t(unreadCount === 1 ? 'rl.noneSurfaceOne' : 'rl.noneSurfaceMany', { n: unreadCount })}
       </p>
       <Link to="/queue" className="text-rl-400 hover:underline text-sm">
-        View the full queue →
+        {t('rl.viewFullQueue')}
       </Link>
     </div>
   );
 }
 
 export function QueueHeader({ unreadCount }: { unreadCount: number }) {
+  const { t } = useT();
   return (
     <div className="mb-4 flex items-center justify-between" data-testid="queue-header">
       <div>
-        <h1 className="text-lg font-semibold text-slate-200">Read Later</h1>
+        <h1 className="text-lg font-semibold text-slate-200">{t('rl.title')}</h1>
         <p className="text-xs text-slate-500">
           {unreadCount === 0
-            ? 'Inbox zero.'
-            : `${unreadCount} unread`}
+            ? t('rl.inboxZero')
+            : t('rl.unreadCount', { n: unreadCount })}
         </p>
       </div>
       <nav className="flex gap-3 text-xs">
-        <Link to="/queue" className="text-rl-400 hover:underline">Full queue</Link>
-        <Link to="/admin/api-clients" className="text-slate-500 hover:underline">Tokens</Link>
+        <Link to="/queue" className="text-rl-400 hover:underline">{t('rl.fullQueue')}</Link>
+        <Link to="/admin/api-clients" className="text-slate-500 hover:underline">{t('rl.tokens')}</Link>
       </nav>
     </div>
   );
@@ -164,9 +168,10 @@ function QueuePage() {
   const data = Route.useLoaderData() as QueuePayload | null;
   const router = useRouter();
   const [busy, setBusy] = useState(false);
+  const { t } = useT();
 
   if (!data) {
-    return <div className="p-6 text-slate-400">Loading…</div>;
+    return <div className="p-6 text-slate-400">{t('state.loading')}</div>;
   }
 
   return (

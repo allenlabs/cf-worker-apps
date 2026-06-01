@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
 import { z } from 'zod';
+import { useT } from '@allenlabs/i18n/react';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { searchImpl } from '~/server/search';
 
@@ -28,21 +29,22 @@ export const Route = createFileRoute('/search')({
 
 function SearchPage() {
   const { results, q } = Route.useLoaderData();
+  const { t } = useT();
   return (
     <div>
-      <h1 className="text-2xl font-semibold mb-4">Search</h1>
+      <h1 className="text-2xl font-semibold mb-4">{t('search.title')}</h1>
       <form className="card p-3 mb-4">
-        <input name="q" className="input" placeholder="Type to search…" defaultValue={q} autoFocus />
+        <input name="q" className="input" placeholder={t('search.placeholder')} defaultValue={q} autoFocus />
       </form>
 
       {!q ? (
-        <p className="text-sm text-gray-500">Enter a query to search issues and wiki pages.</p>
+        <p className="text-sm text-gray-500">{t('search.prompt')}</p>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <section className="card p-4">
-            <h2 className="font-semibold mb-2">Issues ({results.issues.length})</h2>
+            <h2 className="font-semibold mb-2">{t('search.issuesCount', { n: results.issues.length })}</h2>
             {results.issues.length === 0 ? (
-              <p className="text-sm text-gray-500">No issues match.</p>
+              <p className="text-sm text-gray-500">{t('search.noIssues')}</p>
             ) : (
               <ul className="text-sm divide-y divide-gray-100">
                 {results.issues.map((i) => (
@@ -55,9 +57,9 @@ function SearchPage() {
             )}
           </section>
           <section className="card p-4">
-            <h2 className="font-semibold mb-2">Wiki ({results.wikis.length})</h2>
+            <h2 className="font-semibold mb-2">{t('search.wikiCount', { n: results.wikis.length })}</h2>
             {results.wikis.length === 0 ? (
-              <p className="text-sm text-gray-500">No pages match.</p>
+              <p className="text-sm text-gray-500">{t('search.noPages')}</p>
             ) : (
               <ul className="text-sm divide-y divide-gray-100">
                 {results.wikis.map((w) => (

@@ -11,6 +11,7 @@ import { getDb, getEnv } from '~/server/auth-runtime.server';
 import { readSessionToken, verifySessionToken } from '~/server/session.server';
 import { highlightSegments, languageLabel, timeAgo } from '~/lib/format';
 import { Header } from '~/components/Header';
+import { useT } from '@allenlabs/i18n/react';
 
 const SearchInput = z.object({
   q: z.string().min(1).max(400),
@@ -79,9 +80,10 @@ interface SearchHitRowProps {
 }
 
 export function SearchHitRow({ hit, now }: SearchHitRowProps) {
+  const { t } = useT();
   const ago = timeAgo(hit.createdAt, now);
   const lang = languageLabel(hit.language);
-  const title = hit.title || '(untitled)';
+  const title = hit.title || t('stash.untitled');
   return (
     <li className="card hover:bg-slate-800/40 transition-colors" data-testid={`hit-${hit.id}`}>
       <Link
@@ -115,6 +117,7 @@ export function SearchHitRow({ hit, now }: SearchHitRowProps) {
 
 function SearchPage() {
   const { q, hits } = Route.useLoaderData();
+  const { t } = useT();
 
   return (
     <>
@@ -122,16 +125,16 @@ function SearchPage() {
       <div className="max-w-3xl mx-auto p-4">
         {!q ? (
           <p className="text-sm text-slate-400" data-testid="empty-query">
-            Type a query in the search box.
+            {t('stash.typeQuery')}
           </p>
         ) : hits.length === 0 ? (
           <p className="text-sm text-slate-400" data-testid="no-results">
-            No matches for <code className="text-stash-300">{q}</code>.
+            {t('stash.noMatchesFor')} <code className="text-stash-300">{q}</code>.
           </p>
         ) : (
           <>
             <p className="text-xs text-slate-500 mb-3" data-testid="results-count">
-              {hits.length} match{hits.length === 1 ? '' : 'es'} for{' '}
+              {t(hits.length === 1 ? 'stash.matchOne' : 'stash.matchMany', { n: hits.length })}{' '}
               <code className="text-stash-300">{q}</code>
             </p>
             <ul className="space-y-2" data-testid="results-list">

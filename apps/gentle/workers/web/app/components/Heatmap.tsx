@@ -1,4 +1,5 @@
 import { intensityBucket } from '~/lib/format';
+import { useT } from '@allenlabs/i18n/react';
 
 interface HeatmapProps {
   /** 90 entries (or however many `from`..`to` covers).  Score is the
@@ -21,6 +22,7 @@ const BUCKET_CLASSES = [
  * gentle, not punishing.
  */
 export function Heatmap({ cells }: HeatmapProps) {
+  const { t } = useT();
   return (
     <div className="card p-3" data-testid="heatmap">
       <div className="grid grid-cols-15 gap-1 sm:grid-cols-30">
@@ -30,7 +32,7 @@ export function Heatmap({ cells }: HeatmapProps) {
           return (
             <div
               key={c.date}
-              title={`${c.date}${c.score == null ? '' : ` · ${c.score} of 5`}`}
+              title={c.score == null ? c.date : t('gentle.heatmap.score', { date: c.date, n: c.score })}
               className={`aspect-square rounded-sm ${cls}`}
               data-testid={`heatmap-cell-${c.date}`}
               data-bucket={bucket}
@@ -39,11 +41,11 @@ export function Heatmap({ cells }: HeatmapProps) {
         })}
       </div>
       <div className="mt-3 text-xs text-slate-500 flex items-center gap-2">
-        <span>quiet day</span>
+        <span>{t('gentle.heatmap.quiet')}</span>
         {BUCKET_CLASSES.map((cls, i) => (
           <div key={i} className={`h-3 w-3 rounded-sm ${cls}`} />
         ))}
-        <span>full day</span>
+        <span>{t('gentle.heatmap.full')}</span>
       </div>
     </div>
   );

@@ -1,5 +1,6 @@
 import { createFileRoute, redirect, useRouter } from '@tanstack/react-router';
 import { useState } from 'react';
+import { useT } from '@allenlabs/i18n/react';
 import { slugify } from '~/lib/format';
 import { notifyError, notifySuccess } from '~/lib/toast';
 import { getCurrentUser } from '~/server/auth-runtime.server';
@@ -21,6 +22,7 @@ export const Route = createFileRoute('/projects/new')({
 
 function NewProjectPage() {
   const router = useRouter();
+  const { t } = useT();
   const [form, setForm] = useState({
     name: '',
     identifier: '',
@@ -37,7 +39,7 @@ function NewProjectPage() {
     setError(null);
     try {
       const created = await createProject({ data: form });
-      notifySuccess('Project created');
+      notifySuccess(t('project.createdToast'));
       // Invalidate cached loaders so /projects re-fetches the new list
       // when the user navigates back.
       router.invalidate();
@@ -45,7 +47,7 @@ function NewProjectPage() {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);
-      notifyError(`Could not create project: ${message}`);
+      notifyError(t('project.createError', { msg: message }));
     } finally {
       setBusy(false);
     }
@@ -53,10 +55,10 @@ function NewProjectPage() {
 
   return (
     <div className="max-w-2xl card p-6">
-      <h1 className="text-xl font-semibold mb-4">New project</h1>
+      <h1 className="text-xl font-semibold mb-4">{t('project.newTitle')}</h1>
       <form onSubmit={handle} className="space-y-3">
         <div>
-          <label className="label">Name</label>
+          <label className="label">{t('project.name')}</label>
           <input
             className="input"
             value={form.name}
@@ -71,7 +73,7 @@ function NewProjectPage() {
           />
         </div>
         <div>
-          <label className="label">Identifier</label>
+          <label className="label">{t('project.identifier')}</label>
           <input
             className="input font-mono"
             value={form.identifier}
@@ -79,10 +81,10 @@ function NewProjectPage() {
             required
             pattern="^[a-z0-9][a-z0-9_-]*$"
           />
-          <p className="text-xs text-gray-500 mt-1">URL slug; lowercase letters, digits, dash, underscore.</p>
+          <p className="text-xs text-gray-500 mt-1">{t('project.identifierHint')}</p>
         </div>
         <div>
-          <label className="label">Description</label>
+          <label className="label">{t('project.description')}</label>
           <textarea
             className="textarea"
             rows={4}
@@ -91,7 +93,7 @@ function NewProjectPage() {
           />
         </div>
         <div>
-          <label className="label">Homepage</label>
+          <label className="label">{t('project.homepage')}</label>
           <input
             className="input"
             value={form.homepage}
@@ -104,12 +106,12 @@ function NewProjectPage() {
             checked={form.isPublic}
             onChange={(e) => setForm({ ...form, isPublic: e.target.checked })}
           />
-          Public project (visible without login)
+          {t('project.publicLabel')}
         </label>
         {error ? <p className="text-sm text-red-700">{error}</p> : null}
         <div className="pt-2">
           <button className="btn-primary" disabled={busy}>
-            {busy ? 'Creating…' : 'Create'}
+            {busy ? t('btn.creating') : t('btn.create')}
           </button>
         </div>
       </form>

@@ -1,4 +1,5 @@
 import { intensityBucket } from '~/lib/format';
+import { useT } from '@allenlabs/i18n/react';
 
 interface HeatmapProps {
   /** 90 entries, oldest first, each with date + nullable composite score (3..15). */
@@ -19,6 +20,7 @@ const BUCKET_CLASSES = [
  * not shaming missed days.
  */
 export function Heatmap({ cells }: HeatmapProps) {
+  const { t } = useT();
   return (
     <div className="card p-3" data-testid="heatmap">
       <div className="grid grid-cols-15 gap-1 sm:grid-cols-30">
@@ -37,11 +39,11 @@ export function Heatmap({ cells }: HeatmapProps) {
         })}
       </div>
       <div className="mt-3 text-xs text-slate-500 flex items-center gap-2">
-        <span>less</span>
+        <span>{t('journal.heatmapLess')}</span>
         {BUCKET_CLASSES.map((cls, i) => (
           <div key={i} className={`h-3 w-3 rounded-sm ${cls}`} />
         ))}
-        <span>more</span>
+        <span>{t('journal.heatmapMore')}</span>
       </div>
     </div>
   );

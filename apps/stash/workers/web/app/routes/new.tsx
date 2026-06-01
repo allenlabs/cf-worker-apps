@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { saveSchema, saveSnippetImpl } from '~/server/stash';
 import { getDb, requireUser } from '~/server/auth-runtime.server';
 import { Header } from '~/components/Header';
+import { useT } from '@allenlabs/i18n/react';
 
 /* v8 ignore start */
 const saveSnippet = createServerFn({ method: 'POST' })
@@ -45,6 +46,7 @@ export function parseTags(raw: string): string[] {
 
 function NewPage() {
   const router = useRouter();
+  const { t } = useT();
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [language, setLanguage] = useState('');
@@ -58,7 +60,7 @@ function NewPage() {
     setError(null);
     const trimmedBody = body.trim();
     if (!trimmedBody) {
-      setError('body required');
+      setError(t('stash.bodyRequired'));
       return;
     }
     setSubmitting(true);
@@ -84,14 +86,14 @@ function NewPage() {
     <>
       <Header />
       <div className="max-w-3xl mx-auto p-4">
-        <h1 className="text-lg font-semibold text-slate-200 mb-3">New snippet</h1>
+        <h1 className="text-lg font-semibold text-slate-200 mb-3">{t('stash.newTitle')}</h1>
         <form onSubmit={submit} className="space-y-3" data-testid="new-form">
           <input
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            placeholder="Title (optional)"
-            aria-label="Title"
+            placeholder={t('stash.titleOptional')}
+            aria-label={t('stash.titleLabel')}
             className="w-full rounded bg-slate-900 border border-slate-800 px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:border-stash-500 focus:outline-none"
             data-testid="title-input"
           />
@@ -99,8 +101,8 @@ function NewPage() {
             autoFocus
             value={body}
             onChange={(e) => setBody(e.target.value)}
-            placeholder="Paste anything.  Code, commands, half-finished thoughts."
-            aria-label="Body"
+            placeholder={t('stash.bodyPrompt')}
+            aria-label={t('stash.bodyLabel')}
             rows={14}
             className="w-full rounded bg-slate-900 border border-slate-800 px-3 py-2 font-mono text-sm text-slate-100 placeholder:text-slate-500 focus:border-stash-500 focus:outline-none"
             data-testid="body-input"
@@ -110,8 +112,8 @@ function NewPage() {
               type="text"
               value={language}
               onChange={(e) => setLanguage(e.target.value)}
-              placeholder="Language (sh, js, sql, …)"
-              aria-label="Language"
+              placeholder={t('stash.langPlaceholder')}
+              aria-label={t('stash.languageLabel')}
               className="rounded bg-slate-900 border border-slate-800 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-stash-500 focus:outline-none"
               data-testid="lang-input"
             />
@@ -119,8 +121,8 @@ function NewPage() {
               type="text"
               value={tagsRaw}
               onChange={(e) => setTagsRaw(e.target.value)}
-              placeholder="Tags (space or comma separated)"
-              aria-label="Tags"
+              placeholder={t('stash.tagsSpaceComma')}
+              aria-label={t('stash.tagsLabel')}
               className="rounded bg-slate-900 border border-slate-800 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-stash-500 focus:outline-none"
               data-testid="tags-input"
             />
@@ -137,11 +139,11 @@ function NewPage() {
               className="rounded bg-stash-600 hover:bg-stash-500 disabled:opacity-50 disabled:cursor-not-allowed px-4 py-2 text-sm font-semibold text-white"
               data-testid="save-button"
             >
-              {submitting ? 'Saving…' : 'Save (⌘↵)'}
+              {submitting ? t('state.saving') : t('stash.saveShortcut')}
             </button>
           </div>
           <p className="text-xs text-slate-500">
-            Press ⌘↵ or Ctrl+↵ in the body to save.
+            {t('stash.saveHint')}
           </p>
         </form>
       </div>

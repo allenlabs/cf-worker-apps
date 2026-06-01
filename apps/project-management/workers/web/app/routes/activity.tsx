@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
+import { useT } from '@allenlabs/i18n/react';
 import { timeAgo } from '~/lib/format';
 import { listActivitiesImpl } from '~/server/activities';
 import { getDb } from '~/server/auth-runtime.server';
@@ -18,11 +19,12 @@ export const Route = createFileRoute('/activity')({
 
 function ActivityPage() {
   const { activities } = Route.useLoaderData();
+  const { t } = useT();
   return (
     <div>
-      <h1 className="text-2xl font-semibold mb-4">Global activity</h1>
+      <h1 className="text-2xl font-semibold mb-4">{t('activity.globalTitle')}</h1>
       {activities.length === 0 ? (
-        <p className="text-sm text-gray-500">No activity yet.</p>
+        <p className="text-sm text-gray-500">{t('activity.empty')}</p>
       ) : (
         <ul className="card divide-y divide-gray-100">
           {activities.map((a) => (

@@ -8,6 +8,7 @@ import {
   unsubscribe,
   type PushPreferencesShape,
 } from '~/lib/push-client';
+import { useT } from '@allenlabs/i18n/react';
 
 interface NotificationsPanelProps {
   /** Optional override — when absent we read the key from
@@ -54,6 +55,7 @@ export function formatTimeOfDay(minutes: number | null): string {
 }
 
 export function NotificationsPanel({ vapidPublicKey }: NotificationsPanelProps = {}) {
+  const { t } = useT();
   const effectiveKey = vapidPublicKey || readVapidFromMeta();
   const [supported, setSupported] = useState<boolean>(false);
   const [permission, setPermission] = useState<NotificationPermission | 'unsupported'>(
@@ -133,15 +135,15 @@ export function NotificationsPanel({ vapidPublicKey }: NotificationsPanelProps =
       data-testid="notifications-panel"
       className="mt-8 text-sm text-slate-400 border border-slate-800 rounded p-3"
     >
-      <summary className="cursor-pointer select-none text-slate-300">Notifications</summary>
+      <summary className="cursor-pointer select-none text-slate-300">{t('notif.title')}</summary>
       <div className="mt-3 space-y-3">
         <div>
-          <span className="text-slate-500">Permission:</span>{' '}
+          <span className="text-slate-500">{t('notif.permission')}</span>{' '}
           <span data-testid="notif-permission">{supported ? permission : 'unsupported'}</span>
         </div>
         {!supported ? (
           <p className="text-xs text-slate-500">
-            This browser does not support Web Push.  Try Safari 16.4+ on iOS or any modern desktop browser.
+            {t('notif.unsupportedHint')}
           </p>
         ) : (
           <div className="flex gap-2">
@@ -152,7 +154,7 @@ export function NotificationsPanel({ vapidPublicKey }: NotificationsPanelProps =
                 disabled={busy}
                 className="rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 px-3 py-1 text-sm text-white"
               >
-                Enable notifications
+                {t('notif.enable')}
               </button>
             ) : (
               <button
@@ -161,7 +163,7 @@ export function NotificationsPanel({ vapidPublicKey }: NotificationsPanelProps =
                 disabled={busy}
                 className="rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-50 px-3 py-1 text-sm text-white"
               >
-                Disable notifications
+                {t('notif.disable')}
               </button>
             )}
           </div>
@@ -177,15 +179,15 @@ export function NotificationsPanel({ vapidPublicKey }: NotificationsPanelProps =
               checked={prefs?.onCapture ?? true}
               onChange={(e) => void onToggleOnCapture(e.target.checked)}
             />
-            Notify on new captures
+            {t('notif.onCapture')}
           </label>
         </div>
 
         <div className="pt-2 border-t border-slate-800">
-          <div className="text-slate-300 mb-1">Quiet hours</div>
+          <div className="text-slate-300 mb-1">{t('notif.quietHours')}</div>
           <div className="flex items-center gap-2">
             <input
-              aria-label="quiet start"
+              aria-label={t('notif.quietStart')}
               type="time"
               value={quietStart}
               onChange={(e) => setQuietStart(e.target.value)}
@@ -193,7 +195,7 @@ export function NotificationsPanel({ vapidPublicKey }: NotificationsPanelProps =
             />
             <span className="text-slate-500">→</span>
             <input
-              aria-label="quiet end"
+              aria-label={t('notif.quietEnd')}
               type="time"
               value={quietEnd}
               onChange={(e) => setQuietEnd(e.target.value)}
@@ -204,11 +206,11 @@ export function NotificationsPanel({ vapidPublicKey }: NotificationsPanelProps =
               onClick={onSaveQuiet}
               className="rounded bg-slate-700 hover:bg-slate-600 px-3 py-1 text-sm text-white"
             >
-              Save
+              {t('btn.save')}
             </button>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Times are UTC.  Leave blank to disable.
+            {t('notif.quietHint')}
           </p>
         </div>
       </div>

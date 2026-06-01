@@ -8,6 +8,7 @@ import {
 import { getDb, getEnv } from '~/server/auth-runtime.server';
 import { readSessionToken, verifySessionToken } from '~/server/session.server';
 import { restoreCountLabel, timeAgo } from '~/lib/format';
+import { useT } from '@allenlabs/i18n/react';
 
 /* v8 ignore start */
 // Server function: home payload.  Verifies the JWT, then dispatches to
@@ -77,11 +78,12 @@ export function SnapshotRow({ snapshot, now }: SnapshotRowInnerProps) {
 }
 
 export function EmptyState() {
+  const { t } = useT();
   return (
     <div className="card p-6 text-center text-sm text-slate-400" data-testid="empty-state">
-      <p className="mb-2 text-slate-200">No snapshots yet.</p>
+      <p className="mb-2 text-slate-200">{t('context.noSnapshots')}</p>
       <p className="text-xs">
-        From your terminal: <code className="text-ctx-300">al ctx save "fixing auth bug"</code>
+        {t('context.cliHintPrefix')} <code className="text-ctx-300">al ctx save "fixing auth bug"</code>
       </p>
     </div>
   );
@@ -91,16 +93,17 @@ export function EmptyState() {
 
 function HomePage() {
   const data = Route.useLoaderData();
+  const { t } = useT();
 
   if (!data) {
-    return <div className="p-6 text-slate-400">Loading…</div>;
+    return <div className="p-6 text-slate-400">{t('state.loading')}</div>;
   }
 
   return (
     <div className="max-w-2xl mx-auto p-6">
-      <h1 className="text-lg font-semibold text-slate-200 mb-1">Context</h1>
+      <h1 className="text-lg font-semibold text-slate-200 mb-1">{t('context.title')}</h1>
       <p className="text-xs text-slate-500 mb-6">
-        What were you doing?  Pick up where you left off.
+        {t('context.subtitleHome')}
       </p>
       {data.snapshots.length === 0 ? (
         <EmptyState />

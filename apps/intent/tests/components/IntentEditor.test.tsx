@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render as rtlRender, screen, fireEvent, waitFor } from '@testing-library/react';
+import type { ReactElement } from 'react';
+import { I18nProvider } from '@allenlabs/i18n/react';
+import { appDict } from '~/i18n/dict';
 import { IntentEditor } from '~/components/IntentEditor';
+
+const render = (ui: ReactElement) =>
+  rtlRender(<I18nProvider locale="en" dict={appDict}>{ui}</I18nProvider>);
 
 describe('IntentEditor', () => {
   it('renders initial text', () => {
@@ -85,7 +91,11 @@ describe('IntentEditor', () => {
     const { rerender } = render(
       <IntentEditor initialText="one" updatedAt="" onSave={async () => {}} />,
     );
-    rerender(<IntentEditor initialText="two" updatedAt="" onSave={async () => {}} />);
+    rerender(
+      <I18nProvider locale="en" dict={appDict}>
+        <IntentEditor initialText="two" updatedAt="" onSave={async () => {}} />
+      </I18nProvider>,
+    );
     expect((screen.getByTestId('intent-input') as HTMLTextAreaElement).value).toBe('two');
   });
 

@@ -13,6 +13,7 @@ import { readSessionToken, verifySessionToken } from '~/server/session.server';
 import { todayUtcIso } from '~/lib/format';
 import { Header } from '~/components/Header';
 import { CheckinForm } from '~/components/CheckinForm';
+import { useT } from '@allenlabs/i18n/react';
 
 /* v8 ignore start */
 const loadHome = createServerFn({ method: 'GET' }).handler(async () => {
@@ -40,9 +41,10 @@ export const Route = createFileRoute('/')({
 });
 
 export function EmptyToday() {
+  const { t } = useT();
   return (
     <div className="card p-4 text-sm text-slate-400" data-testid="empty-today">
-      No entry yet today — your call.  Add one when you&apos;re ready.
+      {t('journal.emptyToday')}
     </div>
   );
 }
@@ -53,9 +55,10 @@ function HomePage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const date = todayUtcIso();
+  const { t } = useT();
 
   if (!data) {
-    return <div className="p-6 text-slate-400">Loading…</div>;
+    return <div className="p-6 text-slate-400">{t('state.loading')}</div>;
   }
 
   /* v8 ignore start — server round-trip covered via deploy smoke. */

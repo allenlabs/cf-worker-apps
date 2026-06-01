@@ -1,6 +1,7 @@
 import { Link, Outlet, createFileRoute, notFound } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
 import { z } from 'zod';
+import { useT } from '@allenlabs/i18n/react';
 import { ProjectSidebar } from '~/components/ProjectSidebar';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { getProjectImpl } from '~/server/projects';
@@ -54,15 +55,15 @@ function ProjectLayout() {
 }
 
 function ProjectNotFound() {
+  const { t } = useT();
   return (
     <div className="max-w-lg mx-auto card p-8 text-center mt-12">
-      <h2 className="text-lg font-semibold mb-2">Project not found</h2>
+      <h2 className="text-lg font-semibold mb-2">{t('project.notFoundTitle')}</h2>
       <p className="text-sm text-gray-600 mb-4">
-        We couldn’t find a project with that identifier. It may have been deleted or
-        renamed.
+        {t('project.notFoundBody')}
       </p>
       <Link to="/projects" className="btn-primary">
-        ← Back to projects
+        {t('project.backToProjects')}
       </Link>
     </div>
   );

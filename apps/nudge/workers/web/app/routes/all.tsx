@@ -11,6 +11,7 @@ import {
 import { getDb, requireUser } from '~/server/auth-runtime.server';
 import { Header } from '~/components/Header';
 import { ReminderRowCard } from '~/components/ReminderRow';
+import { useT } from '@allenlabs/i18n/react';
 
 /* v8 ignore start */
 const loadAll = createServerFn({ method: 'GET' })
@@ -64,6 +65,7 @@ function AllPage() {
     includeDismissed: boolean;
   };
   const router = useRouter();
+  const { t } = useT();
 
   /* v8 ignore start */
   async function handleDismiss(id: number) {
@@ -75,7 +77,7 @@ function AllPage() {
     router.invalidate();
   }
   async function handleDelete(id: number) {
-    if (!confirm('Delete this reminder?')) return;
+    if (!confirm(t('nudge.deleteConfirm'))) return;
     await deleteReminder({ data: { id } });
     router.invalidate();
   }
@@ -86,7 +88,7 @@ function AllPage() {
       <Header />
       <div className="max-w-3xl mx-auto p-4">
         <div className="flex items-center justify-between mb-3">
-          <h1 className="text-base font-semibold text-slate-200">All reminders</h1>
+          <h1 className="text-base font-semibold text-slate-200">{t('nudge.all')}</h1>
           <label className="text-xs text-slate-400 flex items-center gap-1">
             <input
               type="checkbox"
@@ -101,11 +103,11 @@ function AllPage() {
               }}
               data-testid="include-dismissed"
             />
-            include dismissed
+            {t('nudge.includeDismissed')}
           </label>
         </div>
         {list.length === 0 ? (
-          <p className="text-sm text-slate-400" data-testid="no-reminders">No reminders.</p>
+          <p className="text-sm text-slate-400" data-testid="no-reminders">{t('nudge.noReminders')}</p>
         ) : (
           <ul className="space-y-2" data-testid="reminders-list">
             {list.map((r) => (
@@ -118,7 +120,7 @@ function AllPage() {
                     className="text-xs text-slate-500 hover:text-red-300 underline"
                     data-testid={`delete-${r.id}`}
                   >
-                    delete
+                    {t('nudge.delete')}
                   </button>
                 </div>
               </li>

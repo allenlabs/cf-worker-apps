@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render as rtlRender, screen, fireEvent } from '@testing-library/react';
+import { I18nProvider } from '@allenlabs/i18n/react';
+import { appDict } from '~/i18n/dict';
 import { ReminderRowCard } from '~/components/ReminderRow';
 import type { ReminderRow as ReminderData } from '~/server/nudge';
+
+const render = (ui: React.ReactElement) =>
+  rtlRender(<I18nProvider locale="en" dict={appDict}>{ui}</I18nProvider>);
 
 const NOW = new Date('2026-05-24T10:00:00Z').getTime();
 

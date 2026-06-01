@@ -1,5 +1,6 @@
 
 import { Link, createFileRoute, getRouteApi } from '@tanstack/react-router';
+import { useT } from '@allenlabs/i18n/react';
 import { ProgressBar } from '~/components/badges';
 import { Markdown } from '~/components/Markdown';
 import { renderMarkdown } from '~/server/markdown';
@@ -17,6 +18,7 @@ export const Route = createFileRoute('/projects/$identifier/')({
 
 function ProjectOverview() {
   const project = parentRoute.useLoaderData();
+  const { t } = useT();
   const activities = project.activities;
   const html = renderMarkdown(project.description);
   const open = project.counts.openIssues;
@@ -28,33 +30,33 @@ function ProjectOverview() {
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <div className="lg:col-span-2 space-y-4">
         <section className="card p-4">
-          <h2 className="text-lg font-semibold mb-2">Overview</h2>
+          <h2 className="text-lg font-semibold mb-2">{t('overview.title')}</h2>
           {html ? (
             <Markdown html={html} />
           ) : (
-            <p className="text-sm text-gray-500">No description yet.</p>
+            <p className="text-sm text-gray-500">{t('overview.noDescription')}</p>
           )}
         </section>
 
         <section className="card p-4">
-          <h2 className="text-lg font-semibold mb-2">Issue tracking</h2>
+          <h2 className="text-lg font-semibold mb-2">{t('overview.issueTracking')}</h2>
           <div className="grid grid-cols-3 gap-3 text-center">
             <div>
               <div className="text-2xl font-semibold">{open}</div>
-              <div className="text-xs text-gray-500">Open</div>
+              <div className="text-xs text-gray-500">{t('overview.open')}</div>
             </div>
             <div>
               <div className="text-2xl font-semibold">{closed}</div>
-              <div className="text-xs text-gray-500">Closed</div>
+              <div className="text-xs text-gray-500">{t('overview.closed')}</div>
             </div>
             <div>
               <div className="text-2xl font-semibold">{total}</div>
-              <div className="text-xs text-gray-500">Total</div>
+              <div className="text-xs text-gray-500">{t('overview.total')}</div>
             </div>
           </div>
           <div className="mt-3">
             <ProgressBar value={pct} />
-            <p className="text-xs text-gray-500 mt-1">{pct}% closed</p>
+            <p className="text-xs text-gray-500 mt-1">{t('overview.pctClosed', { n: pct })}</p>
           </div>
           <div className="mt-3 flex gap-2">
             <Link
@@ -63,21 +65,21 @@ function ProjectOverview() {
               search={{ status: 'open', q: undefined, sort: 'updated' }}
               className="btn"
             >
-              View issues
+              {t('overview.viewIssues')}
             </Link>
             <Link
               to="/projects/$identifier/issues/new"
               params={{ identifier: project.identifier }}
               className="btn-primary"
             >
-              + New issue
+              {t('overview.newIssue')}
             </Link>
           </div>
         </section>
 
         {project.versions.length > 0 ? (
           <section className="card p-4">
-            <h2 className="text-lg font-semibold mb-2">Versions</h2>
+            <h2 className="text-lg font-semibold mb-2">{t('overview.versions')}</h2>
             <ul className="text-sm space-y-1">
               {project.versions.map((v) => (
                 <li key={v.id} className="flex items-center justify-between">
@@ -92,7 +94,7 @@ function ProjectOverview() {
 
       <aside className="space-y-4">
         <section className="card p-4">
-          <h3 className="font-semibold mb-2">Trackers</h3>
+          <h3 className="font-semibold mb-2">{t('overview.trackers')}</h3>
           <div className="flex flex-wrap gap-1">
             {project.trackers.map((t) => (
               <span
@@ -106,9 +108,9 @@ function ProjectOverview() {
           </div>
         </section>
         <section className="card p-4">
-          <h3 className="font-semibold mb-2">Latest activity</h3>
+          <h3 className="font-semibold mb-2">{t('overview.latestActivity')}</h3>
           {activities.length === 0 ? (
-            <p className="text-sm text-gray-500">Nothing yet.</p>
+            <p className="text-sm text-gray-500">{t('state.nothingYet')}</p>
           ) : (
             <ul className="text-sm space-y-2">
               {activities.map((a) => (

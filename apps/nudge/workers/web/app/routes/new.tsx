@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { createReminderImpl, createSchema } from '~/server/nudge';
 import { getDb, requireUser } from '~/server/auth-runtime.server';
 import { Header } from '~/components/Header';
+import { useT } from '@allenlabs/i18n/react';
 
 /* v8 ignore start */
 const createReminder = createServerFn({ method: 'POST' })
@@ -62,6 +63,7 @@ export function parseWhen(raw: string): { relativeSeconds?: number; fireAt?: str
 
 function NewPage() {
   const router = useRouter();
+  const { t } = useT();
   const [text, setText] = useState('');
   const [when, setWhen] = useState('in 30m');
   const [recurrence, setRecurrence] = useState('');
@@ -74,12 +76,12 @@ function NewPage() {
     e.preventDefault();
     setError(null);
     if (!text.trim()) {
-      setError('text required');
+      setError(t('nudge.textRequired'));
       return;
     }
     const parsed = parseWhen(when);
     if (!parsed) {
-      setError('couldn\'t parse when. try "in 30m", "in 2h", or a date');
+      setError(t('nudge.whenParseError'));
       return;
     }
     setSubmitting(true);
@@ -105,14 +107,14 @@ function NewPage() {
     <>
       <Header />
       <div className="max-w-3xl mx-auto p-4">
-        <h1 className="text-lg font-semibold text-slate-200 mb-3">New reminder</h1>
+        <h1 className="text-lg font-semibold text-slate-200 mb-3">{t('nudge.newTitle')}</h1>
         <form onSubmit={submit} className="space-y-3" data-testid="new-form">
           <input
             type="text"
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder="What should I nudge you about?"
-            aria-label="Text"
+            placeholder={t('nudge.textPrompt')}
+            aria-label={t('nudge.textLabel')}
             autoFocus
             className="w-full rounded bg-slate-900 border border-slate-800 px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:border-nudge-500 focus:outline-none"
             data-testid="text-input"
@@ -122,8 +124,8 @@ function NewPage() {
               type="text"
               value={when}
               onChange={(e) => setWhen(e.target.value)}
-              placeholder='When? "in 30m", "in 2h", or a date'
-              aria-label="When"
+              placeholder={t('nudge.whenPlaceholder')}
+              aria-label={t('nudge.whenLabel')}
               className="rounded bg-slate-900 border border-slate-800 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-nudge-500 focus:outline-none"
               data-testid="when-input"
             />
@@ -131,8 +133,8 @@ function NewPage() {
               type="text"
               value={recurrence}
               onChange={(e) => setRecurrence(e.target.value)}
-              placeholder="Recurrence: daily, weekly, every:30m (optional)"
-              aria-label="Recurrence"
+              placeholder={t('nudge.recurrencePlaceholder')}
+              aria-label={t('nudge.recurrenceLabel')}
               className="rounded bg-slate-900 border border-slate-800 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-nudge-500 focus:outline-none"
               data-testid="recurrence-input"
             />
@@ -141,8 +143,8 @@ function NewPage() {
             type="text"
             value={tagsRaw}
             onChange={(e) => setTagsRaw(e.target.value)}
-            placeholder="Tags (space or comma separated)"
-            aria-label="Tags"
+            placeholder={t('nudge.tagsPlaceholder')}
+            aria-label={t('nudge.tagsLabel')}
             className="w-full rounded bg-slate-900 border border-slate-800 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-nudge-500 focus:outline-none"
             data-testid="tags-input"
           />
@@ -156,7 +158,7 @@ function NewPage() {
               className="rounded bg-nudge-600 hover:bg-nudge-500 disabled:opacity-50 disabled:cursor-not-allowed px-4 py-2 text-sm font-semibold text-white"
               data-testid="save-button"
             >
-              {submitting ? 'Saving…' : 'Schedule'}
+              {submitting ? t('state.saving') : t('nudge.schedule')}
             </button>
           </div>
         </form>

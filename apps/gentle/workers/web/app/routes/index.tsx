@@ -13,6 +13,7 @@ import { readSessionToken, verifySessionToken } from '~/server/session.server';
 import { todayUtcIso } from '~/lib/format';
 import { Header } from '~/components/Header';
 import { CheckinForm, type CheckinFormValues } from '~/components/CheckinForm';
+import { useT } from '@allenlabs/i18n/react';
 
 /* v8 ignore start */
 const loadHome = createServerFn({ method: 'GET' }).handler(async () => {
@@ -40,16 +41,17 @@ export const Route = createFileRoute('/')({
 });
 
 export function GentleHint({ hasToday }: { hasToday: boolean }) {
+  const { t } = useT();
   if (hasToday) {
     return (
       <div className="card p-3 text-sm text-slate-400" data-testid="checked-in-hint">
-        You checked in.  That&apos;s enough.
+        {t('gentle.hint.checkedIn')}
       </div>
     );
   }
   return (
     <div className="card p-3 text-sm text-slate-400" data-testid="not-yet-hint">
-      No pressure.  Toggle whatever&apos;s true today and hit save.
+      {t('gentle.hint.notYet')}
     </div>
   );
 }
@@ -60,9 +62,10 @@ function HomePage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const date = todayUtcIso();
+  const { t } = useT();
 
   if (!data) {
-    return <div className="p-6 text-slate-400">Loading…</div>;
+    return <div className="p-6 text-slate-400">{t('gentle.loading')}</div>;
   }
 
   /* v8 ignore start */
@@ -96,7 +99,7 @@ function HomePage() {
       <div className="max-w-3xl mx-auto p-4 space-y-4">
         <div className="flex items-baseline justify-between">
           <h1 className="text-base font-semibold text-slate-200">{date}</h1>
-          <span className="text-xs text-slate-500">gentle check-in</span>
+          <span className="text-xs text-slate-500">{t('gentle.checkInLabel')}</span>
         </div>
         <CheckinForm
           initial={data.today}

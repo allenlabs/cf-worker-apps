@@ -14,6 +14,7 @@ import { getDb, getEnv, requireUser } from '~/server/auth-runtime.server';
 import { readSessionToken, verifySessionToken } from '~/server/session.server';
 import { timeAgo } from '~/lib/format';
 import { Header } from '~/components/Header';
+import { useT } from '@allenlabs/i18n/react';
 import { parseTags } from './new';
 
 const IdInput = z.object({ id: z.number().int().positive() });
@@ -70,27 +71,28 @@ interface DetailHeaderProps {
 }
 
 export function DetailHeader({ entry, now }: DetailHeaderProps) {
+  const { t } = useT();
   return (
     <div className="mb-4" data-testid="detail-header">
       <h1 className="text-xl font-semibold text-slate-100">{entry.title}</h1>
       <div className="mt-1 flex flex-wrap gap-3 text-xs text-slate-500">
-        <span>saved {timeAgo(entry.createdAt, now)}</span>
+        <span>{t('solved.detail.saved', { when: timeAgo(entry.createdAt, now) })}</span>
         {entry.updatedAt !== entry.createdAt ? (
-          <span>· edited {timeAgo(entry.updatedAt, now)}</span>
+          <span>{t('solved.detail.edited', { when: timeAgo(entry.updatedAt, now) })}</span>
         ) : null}
-        {entry.source ? <span>· via {entry.source}</span> : null}
+        {entry.source ? <span>{t('solved.detail.via', { source: entry.source })}</span> : null}
         {entry.sourceRef ? <span>· <code className="text-solved-300">{entry.sourceRef}</code></span> : null}
         {entry.sourceUrl ? (
           <a href={entry.sourceUrl} target="_blank" rel="noreferrer" className="text-solved-400">
-            source ↗
+            {t('solved.detail.source')}
           </a>
         ) : null}
       </div>
       {entry.tags.length > 0 ? (
         <div className="mt-2 flex flex-wrap gap-2 text-xs">
-          {entry.tags.map((t) => (
-            <span key={t} className="text-slate-400" data-testid={`tag-${t}`}>
-              #{t}
+          {entry.tags.map((tag) => (
+            <span key={tag} className="text-slate-400" data-testid={`tag-${tag}`}>
+              #{tag}
             </span>
           ))}
         </div>
@@ -102,6 +104,7 @@ export function DetailHeader({ entry, now }: DetailHeaderProps) {
 function DetailPage() {
   const initial = Route.useLoaderData();
   const router = useRouter();
+  const { t } = useT();
   const [snap, setSnap] = useState<EntrySummary | null>(initial);
   const [editing, setEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState(initial?.title ?? '');
@@ -115,8 +118,8 @@ function DetailPage() {
       <>
         <Header />
         <div className="max-w-3xl mx-auto p-4 text-slate-400" data-testid="not-found">
-          <p>Entry not found.</p>
-          <Link to="/" className="text-solved-400 hover:underline">← Back</Link>
+          <p>{t('solved.detail.notFound')}</p>
+          <Link to="/" className="text-solved-400 hover:underline">{t('solved.detail.back')}</Link>
         </div>
       </>
     );
@@ -149,7 +152,7 @@ function DetailPage() {
   }
 
   async function destroy() {
-    if (!confirm('Delete this entry?')) return;
+    if (!confirm(t('solved.detail.deleteConfirm'))) return;
     setBusy(true);
     void deleteEntry({ data: { id: snap!.id } }).then(() => {
       router.navigate({ to: '/' });
@@ -161,21 +164,21 @@ function DetailPage() {
     <>
       <Header />
       <div className="max-w-3xl mx-auto p-4">
-        <Link to="/" className="text-xs text-solved-400 hover:underline">← All entries</Link>
+        <Link to="/" className="text-xs text-solved-400 hover:underline">{t('solved.detail.allEntries')}</Link>
         {editing ? (
           <div className="mt-3 space-y-3" data-testid="edit-form">
             <input
               type="text"
               value={draftTitle}
               onChange={(e) => setDraftTitle(e.target.value)}
-              aria-label="Title"
+              aria-label={t('solved.new.titleLabel')}
               className="w-full rounded bg-slate-900 border border-slate-800 px-3 py-2 text-slate-100 focus:border-solved-500 focus:outline-none"
               data-testid="edit-title"
             />
             <textarea
               value={draftBody}
               onChange={(e) => setDraftBody(e.target.value)}
-              aria-label="Body"
+              aria-label={t('solved.new.bodyLabel')}
               rows={16}
               className="w-full rounded bg-slate-900 border border-slate-800 px-3 py-2 font-mono text-sm text-slate-100 focus:border-solved-500 focus:outline-none"
               data-testid="edit-body"
@@ -184,8 +187,8 @@ function DetailPage() {
               type="text"
               value={draftTags}
               onChange={(e) => setDraftTags(e.target.value)}
-              placeholder="Tags"
-              aria-label="Tags"
+              placeholder={t('solved.detail.tagsPlaceholder')}
+              aria-label={t('solved.detail.tagsLabel')}
               className="w-full rounded bg-slate-900 border border-slate-800 px-3 py-2 text-sm text-slate-100 focus:border-solved-500 focus:outline-none"
               data-testid="edit-tags"
             />
@@ -197,7 +200,7 @@ function DetailPage() {
                 className="rounded border border-slate-700 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800"
                 data-testid="cancel-edit"
               >
-                Cancel
+                {t('btn.cancel')}
               </button>
               <button
                 type="button"
@@ -206,7 +209,7 @@ function DetailPage() {
                 className="rounded bg-solved-600 hover:bg-solved-500 disabled:opacity-50 disabled:cursor-not-allowed px-3 py-1.5 text-sm font-semibold text-white"
                 data-testid="save-edit"
               >
-                {busy ? 'Saving…' : 'Save'}
+                {busy ? t('state.saving') : t('btn.save')}
               </button>
             </div>
           </div>
@@ -220,7 +223,7 @@ function DetailPage() {
                 className="rounded border border-slate-700 px-3 py-1 text-sm text-slate-300 hover:bg-slate-800"
                 data-testid="edit-button"
               >
-                Edit
+                {t('btn.edit')}
               </button>
             </div>
             <pre
@@ -237,7 +240,7 @@ function DetailPage() {
                 onClick={destroy}
                 disabled={busy}
               >
-                Delete entry
+                {t('solved.detail.delete')}
               </button>
             </div>
           </>

@@ -1,6 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render as rtlRender, screen, fireEvent } from '@testing-library/react';
+import type { ReactElement } from 'react';
+import { I18nProvider } from '@allenlabs/i18n/react';
+import { appDict } from '~/i18n/dict';
 import { CheckinForm, ToggleRow } from '~/components/CheckinForm';
+
+const wrap = (ui: ReactElement) => <I18nProvider locale="en" dict={appDict}>{ui}</I18nProvider>;
+const render = (ui: ReactElement) => {
+  const result = rtlRender(wrap(ui));
+  return { ...result, rerender: (next: ReactElement) => result.rerender(wrap(next)) };
+};
 
 describe('ToggleRow', () => {
   it('cycles via onChange: null → true → null', () => {

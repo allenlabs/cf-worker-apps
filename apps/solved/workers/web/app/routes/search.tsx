@@ -11,6 +11,7 @@ import { getDb, getEnv } from '~/server/auth-runtime.server';
 import { readSessionToken, verifySessionToken } from '~/server/session.server';
 import { highlightSegments, timeAgo } from '~/lib/format';
 import { Header } from '~/components/Header';
+import { useT } from '@allenlabs/i18n/react';
 
 const SearchInput = z.object({
   q: z.string().min(1).max(400),
@@ -108,6 +109,7 @@ export function SearchHitRow({ hit, now }: SearchHitRowProps) {
 
 function SearchPage() {
   const { q, hits } = Route.useLoaderData();
+  const { t } = useT();
 
   return (
     <>
@@ -115,16 +117,18 @@ function SearchPage() {
       <div className="max-w-3xl mx-auto p-4">
         {!q ? (
           <p className="text-sm text-slate-400" data-testid="empty-query">
-            Type a query in the search box.
+            {t('solved.search.emptyQuery')}
           </p>
         ) : hits.length === 0 ? (
           <p className="text-sm text-slate-400" data-testid="no-results">
-            No matches for <code className="text-solved-300">{q}</code>.
+            {t('solved.search.noResultsPrefix')}<code className="text-solved-300">{q}</code>{t('solved.search.noResultsSuffix')}
           </p>
         ) : (
           <>
             <p className="text-xs text-slate-500 mb-3" data-testid="results-count">
-              {hits.length} match{hits.length === 1 ? '' : 'es'} for{' '}
+              {hits.length === 1
+                ? t('solved.search.countOne', { n: hits.length })
+                : t('solved.search.countMany', { n: hits.length })}
               <code className="text-solved-300">{q}</code>
             </p>
             <ul className="space-y-2" data-testid="results-list">

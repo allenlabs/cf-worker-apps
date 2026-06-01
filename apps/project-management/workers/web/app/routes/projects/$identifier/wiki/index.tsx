@@ -1,6 +1,7 @@
 import { Link, createFileRoute, getRouteApi } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
 import { z } from 'zod';
+import { useT } from '@allenlabs/i18n/react';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { getProjectImpl } from '~/server/projects';
 import { listWikiPagesImpl } from '~/server/wiki';
@@ -27,30 +28,31 @@ export const Route = createFileRoute('/projects/$identifier/wiki/')({
 function WikiIndex() {
   const project = parentRoute.useLoaderData();
   const { pages } = Route.useLoaderData();
+  const { t } = useT();
   return (
     <div>
       <header className="flex items-center justify-between mb-3">
-        <h2 className="text-xl font-semibold">Wiki</h2>
+        <h2 className="text-xl font-semibold">{t('wiki.title')}</h2>
         <Link
           className="btn-primary"
           to="/projects/$identifier/wiki/$slug"
           params={{ identifier: project.identifier, slug: 'index' }}
         >
-          + New page
+          {t('wiki.newPage')}
         </Link>
       </header>
       {pages.length === 0 ? (
         <section className="card p-8 text-center">
-          <h3 className="text-lg font-semibold mb-2">No wiki pages yet</h3>
+          <h3 className="text-lg font-semibold mb-2">{t('wiki.emptyTitle')}</h3>
           <p className="text-sm text-gray-600 mb-4">
-            Start a knowledge base for this project with an index page.
+            {t('wiki.emptyBody')}
           </p>
           <Link
             className="btn-primary"
             to="/projects/$identifier/wiki/$slug"
             params={{ identifier: project.identifier, slug: 'index' }}
           >
-            Create the index page
+            {t('wiki.createIndex')}
           </Link>
         </section>
       ) : (

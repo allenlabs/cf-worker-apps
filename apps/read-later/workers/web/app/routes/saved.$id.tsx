@@ -11,6 +11,7 @@ import { findUserBySsoImpl } from '~/server/users';
 import { getDb, getEnv, requireUser } from '~/server/auth-runtime.server';
 import { readSessionToken, verifySessionToken } from '~/server/session.server';
 import { getRequest } from '@tanstack/react-start/server';
+import { useT } from '@allenlabs/i18n/react';
 import { hostnameOf, readingTimeLabel, timeAgo } from '~/lib/format';
 
 const IdInput = z.object({ id: z.number().int().positive() });
@@ -63,6 +64,7 @@ interface ReaderHeaderProps {
 }
 
 export function ReaderHeader({ item, now }: ReaderHeaderProps) {
+  const { t } = useT();
   const host = hostnameOf(item.url) || item.url;
   const timeLabel = readingTimeLabel(item.estimatedMinutes);
   return (
@@ -71,9 +73,9 @@ export function ReaderHeader({ item, now }: ReaderHeaderProps) {
         <a href={item.url} target="_blank" rel="noopener noreferrer" className="text-rl-400 hover:underline">
           {host} ↗
         </a>
-        <span>saved {timeAgo(item.savedAt, now)}</span>
+        <span>{t('rl.savedPrefix')} {timeAgo(item.savedAt, now)}</span>
         {timeLabel ? <span data-testid="reader-time">{timeLabel}</span> : null}
-        {item.readAt ? <span className="text-rl-300">done</span> : null}
+        {item.readAt ? <span className="text-rl-300">{t('rl.done')}</span> : null}
       </div>
       <h1 className="mt-2 text-2xl font-semibold text-slate-50">
         {item.title ?? item.url}
@@ -90,6 +92,7 @@ interface ReaderBodyProps {
 }
 
 export function ReaderBody({ item }: ReaderBodyProps) {
+  const { t } = useT();
   if (item.contentHtml) {
     return (
       <article
@@ -103,7 +106,7 @@ export function ReaderBody({ item }: ReaderBodyProps) {
   return (
     <div className="mt-6 card p-6 text-sm text-slate-300" data-testid="reader-fallback">
       <p className="mb-3">
-        We couldn&apos;t extract the article body.  Open it on the original site:
+        {t('rl.extractFail')}
       </p>
       <a
         href={item.url}
@@ -111,7 +114,7 @@ export function ReaderBody({ item }: ReaderBodyProps) {
         rel="noopener noreferrer"
         className="rounded bg-rl-600 hover:bg-rl-500 px-4 py-2 text-white inline-block"
       >
-        Open original →
+        {t('rl.openOriginalArrow')}
       </a>
     </div>
   );
@@ -122,12 +125,13 @@ export function ReaderBody({ item }: ReaderBodyProps) {
 function SavedDetailPage() {
   const initial = Route.useLoaderData() as ItemDetail | null;
   const router = useRouter();
+  const { t } = useT();
 
   if (!initial) {
     return (
       <div className="max-w-2xl mx-auto p-6 text-slate-400" data-testid="not-found">
-        <p>Item not found.</p>
-        <Link to="/queue" className="text-rl-400 hover:underline">← Back to queue</Link>
+        <p>{t('rl.itemNotFound')}</p>
+        <Link to="/queue" className="text-rl-400 hover:underline">{t('rl.backToQueue')}</Link>
       </div>
     );
   }
@@ -135,7 +139,7 @@ function SavedDetailPage() {
   return (
     <div>
       <div className="max-w-2xl mx-auto pt-6 px-6">
-        <Link to="/queue" className="text-xs text-rl-400 hover:underline">← Back to queue</Link>
+        <Link to="/queue" className="text-xs text-rl-400 hover:underline">{t('rl.backToQueue')}</Link>
         <ReaderHeader item={initial} />
         <ReaderBody item={initial} />
         <div className="mt-8 flex flex-wrap gap-3 text-sm">
@@ -151,7 +155,7 @@ function SavedDetailPage() {
                 });
               }}
             >
-              Mark as done
+              {t('rl.markDone')}
             </button>
           ) : null}
           <button
@@ -160,13 +164,13 @@ function SavedDetailPage() {
             data-testid="delete"
             onClick={() => {
               /* v8 ignore next 7 — deploy smoke covers the delete. */
-              if (!confirm('Delete this saved item?')) return;
+              if (!confirm(t('rl.deleteConfirm'))) return;
               void deleteItem({ data: { id: initial.id } }).then(() => {
                 router.navigate({ to: '/queue' });
               });
             }}
           >
-            Delete
+            {t('btn.delete')}
           </button>
         </div>
       </div>

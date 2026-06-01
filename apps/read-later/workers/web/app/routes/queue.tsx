@@ -10,6 +10,7 @@ import { findUserBySsoImpl } from '~/server/users';
 import { getDb, getEnv } from '~/server/auth-runtime.server';
 import { readSessionToken, verifySessionToken } from '~/server/session.server';
 import { getRequest } from '@tanstack/react-start/server';
+import { useT } from '@allenlabs/i18n/react';
 import { readingTimeLabel, timeAgo } from '~/lib/format';
 
 const SearchSchema = z.object({
@@ -59,6 +60,7 @@ interface QueueListRowProps {
 }
 
 export function QueueListRow({ item, now }: QueueListRowProps) {
+  const { t } = useT();
   const timeLabel = readingTimeLabel(item.estimatedMinutes);
   const read = item.readAt != null;
   return (
@@ -80,7 +82,7 @@ export function QueueListRow({ item, now }: QueueListRowProps) {
         <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-400">
           <span className="text-slate-500">{item.hostname}</span>
           {timeLabel ? <span>{timeLabel}</span> : null}
-          {read ? <span className="text-rl-300">done</span> : null}
+          {read ? <span className="text-rl-300">{t('rl.done')}</span> : null}
           {item.tags.map((t) => (
             <span key={t} className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-300">
               #{t}
@@ -93,16 +95,17 @@ export function QueueListRow({ item, now }: QueueListRowProps) {
 }
 
 export function QueueListEmpty({ filtering }: { filtering: boolean }) {
+  const { t } = useT();
   return (
     <div className="card p-6 text-center text-sm text-slate-400" data-testid="list-empty">
       <p className="mb-2 text-slate-200">
-        {filtering ? 'No items match this filter.' : 'No items yet.'}
+        {filtering ? t('rl.noItemsMatch') : t('rl.noItems')}
       </p>
       {filtering ? (
-        <Link to="/queue" className="text-rl-400 hover:underline">Clear filter</Link>
+        <Link to="/queue" className="text-rl-400 hover:underline">{t('rl.clearFilter')}</Link>
       ) : (
         <p className="text-xs">
-          Save with <code className="text-rl-300">al rl save &lt;url&gt;</code>
+          {t('rl.saveHint')} <code className="text-rl-300">al rl save &lt;url&gt;</code>
         </p>
       )}
     </div>
@@ -114,9 +117,10 @@ export function QueueListEmpty({ filtering }: { filtering: boolean }) {
 function QueueListPage() {
   const data = Route.useLoaderData() as ListPayload | null;
   const search = Route.useSearch();
+  const { t } = useT();
 
   if (!data) {
-    return <div className="p-6 text-slate-400">Loading…</div>;
+    return <div className="p-6 text-slate-400">{t('state.loading')}</div>;
   }
 
   const filtering = Boolean(search.tag) || search.all === true;
@@ -125,25 +129,25 @@ function QueueListPage() {
     <div className="max-w-2xl mx-auto p-6">
       <div className="mb-4 flex items-center justify-between">
         <h1 className="text-lg font-semibold text-slate-200">
-          Queue
-          <span className="ml-2 text-xs text-slate-500">{data.total} total</span>
+          {t('rl.queue')}
+          <span className="ml-2 text-xs text-slate-500">{t('rl.totalCount', { n: data.total })}</span>
         </h1>
         <nav className="flex gap-3 text-xs">
-          <Link to="/" className="text-rl-400 hover:underline">Next up</Link>
+          <Link to="/" className="text-rl-400 hover:underline">{t('rl.nextUp')}</Link>
           <Link
             to="/queue"
             search={{ all: !(search.all === true) }}
             className="text-slate-500 hover:underline"
             data-testid="toggle-all"
           >
-            {search.all === true ? 'Hide read' : 'Show read'}
+            {search.all === true ? t('rl.hideRead') : t('rl.showRead')}
           </Link>
         </nav>
       </div>
       {search.tag ? (
         <p className="mb-3 text-xs text-slate-500">
-          Filtered by tag: <code className="text-rl-300">#{search.tag}</code>{' '}
-          <Link to="/queue" className="ml-1 text-rl-400 hover:underline">clear</Link>
+          {t('rl.filteredByTag')} <code className="text-rl-300">#{search.tag}</code>{' '}
+          <Link to="/queue" className="ml-1 text-rl-400 hover:underline">{t('rl.clear')}</Link>
         </p>
       ) : null}
       {data.items.length === 0 ? (

@@ -17,8 +17,13 @@ vi.mock('@tanstack/react-start/server', () => ({
   getRequest: () => null,
 }));
 
-import { render, screen } from '@testing-library/react';
+import { render as rtlRender, screen } from '@testing-library/react';
+import { I18nProvider } from '@allenlabs/i18n/react';
+import { appDict } from '~/i18n/dict';
 import { EmptyToday } from '~/routes/index';
+
+const render = (ui: React.ReactElement) =>
+  rtlRender(<I18nProvider locale="en" dict={appDict}>{ui}</I18nProvider>);
 
 describe('EmptyToday', () => {
   it('renders gentle copy', () => {

@@ -6,6 +6,7 @@ import { getRequest } from '@tanstack/react-start/server';
 import { readSessionToken, verifySessionToken } from '~/server/session.server';
 import { Header } from '~/components/Header';
 import { RitualCard } from '~/components/RitualCard';
+import { useT } from '@allenlabs/i18n/react';
 
 /* v8 ignore start */
 const loadHome = createServerFn({ method: 'GET' }).handler(async () => {
@@ -27,19 +28,21 @@ export const Route = createFileRoute('/')({
 });
 
 export function EmptyLog() {
+  const { t } = useT();
   return (
     <div className="card p-4 text-sm text-slate-400" data-testid="empty-log">
-      No transition rituals yet.  Hand off your next stopping point.
+      {t('transition.emptyLog')}
     </div>
   );
 }
 
 function HomePage() {
   const data = Route.useLoaderData() as HomePayload | null;
+  const { t } = useT();
   if (!data) {
     return (
       <div className="card p-4 text-sm text-slate-400 m-4" data-testid="no-session">
-        Signed out.
+        {t('state.signedOut')}
       </div>
     );
   }
@@ -48,8 +51,8 @@ function HomePage() {
       <Header />
       <div className="max-w-3xl mx-auto p-4 space-y-4">
         <div className="flex items-baseline justify-between">
-          <h1 className="text-base font-semibold text-slate-200">Recent transitions</h1>
-          <Link to="/new" className="text-sm" data-testid="new-link">+ new ritual</Link>
+          <h1 className="text-base font-semibold text-slate-200">{t('transition.recentTitle')}</h1>
+          <Link to="/new" className="text-sm" data-testid="new-link">{t('transition.newLink')}</Link>
         </div>
         {data.recent.length === 0 ? (
           <EmptyLog />

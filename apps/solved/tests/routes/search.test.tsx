@@ -9,8 +9,14 @@ vi.mock('@tanstack/react-router', () => ({
   createFileRoute: () => () => ({}),
 }));
 
-import { render, screen } from '@testing-library/react';
+import { render as rtlRender, screen } from '@testing-library/react';
+import type { ReactElement } from 'react';
+import { I18nProvider } from '@allenlabs/i18n/react';
+import { appDict } from '~/i18n/dict';
 import { Highlight, SearchHitRow } from '~/routes/search';
+
+const render = (ui: ReactElement) =>
+  rtlRender(<I18nProvider locale="en" dict={appDict}>{ui}</I18nProvider>);
 
 describe('Highlight', () => {
   it('marks <b>…</b> segments', () => {

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useT } from '@allenlabs/i18n/react';
 import type { EntryRow } from '~/server/journal';
 
 interface CheckinFormProps {
@@ -16,7 +17,13 @@ interface CheckinFormProps {
   error?: string | null;
 }
 
-const LABELS = ['rough', 'low', 'meh', 'good', 'great'];
+const SCORE_KEYS = [
+  'journal.scoreRough',
+  'journal.scoreLow',
+  'journal.scoreMeh',
+  'journal.scoreGood',
+  'journal.scoreGreat',
+] as const;
 
 interface ScoreRowProps {
   label: string;
@@ -26,6 +33,7 @@ interface ScoreRowProps {
 }
 
 export function ScoreRow({ label, value, testId, onChange }: ScoreRowProps) {
+  const { t } = useT();
   return (
     <div className="flex items-center gap-3" data-testid={`row-${testId}`}>
       <span className="w-16 text-sm text-slate-400">{label}</span>
@@ -48,13 +56,14 @@ export function ScoreRow({ label, value, testId, onChange }: ScoreRowProps) {
         ))}
       </div>
       <span className="text-xs text-slate-500" data-testid={`${testId}-label`}>
-        {LABELS[value - 1]}
+        {t(SCORE_KEYS[value - 1] ?? 'journal.scoreMeh')}
       </span>
     </div>
   );
 }
 
 export function CheckinForm({ initial, date, onSubmit, busy, error }: CheckinFormProps) {
+  const { t } = useT();
   const [mood, setMood] = useState<number>(initial?.mood ?? 3);
   const [energy, setEnergy] = useState<number>(initial?.energy ?? 3);
   const [focus, setFocus] = useState<number>(initial?.focus ?? 3);
@@ -71,12 +80,12 @@ export function CheckinForm({ initial, date, onSubmit, busy, error }: CheckinFor
       data-testid="checkin-form"
     >
       <div className="space-y-2">
-        <ScoreRow label="mood" value={mood} testId="mood" onChange={setMood} />
-        <ScoreRow label="energy" value={energy} testId="energy" onChange={setEnergy} />
-        <ScoreRow label="focus" value={focus} testId="focus" onChange={setFocus} />
+        <ScoreRow label={t('journal.moodLabel')} value={mood} testId="mood" onChange={setMood} />
+        <ScoreRow label={t('journal.energyLabel')} value={energy} testId="energy" onChange={setEnergy} />
+        <ScoreRow label={t('journal.focusLabel')} value={focus} testId="focus" onChange={setFocus} />
       </div>
       <div>
-        <label className="block text-xs text-slate-400 mb-1">what&apos;s on your mind?</label>
+        <label className="block text-xs text-slate-400 mb-1">{t('journal.mindPrompt')}</label>
         <textarea
           value={mind}
           onChange={(e) => setMind(e.target.value)}
@@ -86,7 +95,7 @@ export function CheckinForm({ initial, date, onSubmit, busy, error }: CheckinFor
         />
       </div>
       <div>
-        <label className="block text-xs text-slate-400 mb-1">what&apos;s blocking you?</label>
+        <label className="block text-xs text-slate-400 mb-1">{t('journal.blockersPrompt')}</label>
         <textarea
           value={blockers}
           onChange={(e) => setBlockers(e.target.value)}
@@ -103,7 +112,7 @@ export function CheckinForm({ initial, date, onSubmit, busy, error }: CheckinFor
           className="rounded bg-journal-600 hover:bg-journal-500 disabled:opacity-50 px-4 py-2 text-sm font-semibold text-white"
           data-testid="save-button"
         >
-          {busy ? 'Saving…' : initial ? 'Update' : 'Save'}
+          {busy ? t('state.saving') : initial ? t('journal.update') : t('btn.save')}
         </button>
       </div>
     </form>

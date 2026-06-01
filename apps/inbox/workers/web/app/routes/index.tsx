@@ -12,6 +12,7 @@ import { getDb, getEnv, requireUser } from '~/server/auth-runtime.server';
 import { readSessionToken, verifySessionToken } from '~/server/session.server';
 import { timeAgo, untilNow } from '~/lib/format';
 import { NotificationsPanel } from '~/components/NotificationsPanel';
+import { useT } from '@allenlabs/i18n/react';
 
 /* v8 ignore start */
 // Server function: triage list payload.  Verifies the JWT, then dispatches
@@ -92,6 +93,7 @@ interface CaptureBoxProps {
 
 export function CaptureBox({ onCapture }: CaptureBoxProps) {
   const [text, setText] = useState('');
+  const { t } = useT();
   return (
     <form
       onSubmit={(e) => {
@@ -107,15 +109,15 @@ export function CaptureBox({ onCapture }: CaptureBoxProps) {
         autoFocus
         value={text}
         onChange={(e) => setText(e.target.value)}
-        placeholder="Type a thought, hit ↵ — that's it."
-        aria-label="Capture"
+        placeholder={t('inbox.placeholder')}
+        aria-label={t('inbox.capture')}
         className="flex-1 rounded bg-slate-900 border border-slate-700 px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:border-emerald-500 focus:outline-none"
       />
       <button
         type="submit"
         className="rounded bg-emerald-600 hover:bg-emerald-500 px-4 py-2 text-sm font-medium text-white"
       >
-        Capture
+        {t('inbox.capture')}
       </button>
     </form>
   );
@@ -127,6 +129,7 @@ interface ItemRowProps {
 }
 
 export function ItemRow({ item, selected }: ItemRowProps) {
+  const { t } = useT();
   return (
     <li
       data-testid={`item-${item.id}`}
@@ -140,8 +143,8 @@ export function ItemRow({ item, selected }: ItemRowProps) {
       <div className="text-sm">{item.text}</div>
       <div className="mt-1 text-xs text-slate-500 flex flex-wrap gap-2">
         <span>{timeAgo(item.capturedAt)}</span>
-        {item.source ? <span>· via {item.source}</span> : null}
-        {item.snoozedUntil ? <span>· wakes {untilNow(item.snoozedUntil)}</span> : null}
+        {item.source ? <span>· {t('inbox.via', { source: item.source })}</span> : null}
+        {item.snoozedUntil ? <span>· {t('inbox.wakes', { when: untilNow(item.snoozedUntil) })}</span> : null}
         {item.tags?.length ? <span>· #{item.tags.join(' #')}</span> : null}
       </div>
     </li>
@@ -149,15 +152,16 @@ export function ItemRow({ item, selected }: ItemRowProps) {
 }
 
 export function EmptyState() {
+  const { t } = useT();
   return (
     <div
       data-testid="inbox-zero"
       className="text-center py-16 px-6 rounded-lg border border-emerald-700/40 bg-emerald-950/30"
     >
       <div className="text-5xl mb-3">▣</div>
-      <h2 className="text-xl font-semibold text-emerald-200 mb-1">Inbox zero.</h2>
+      <h2 className="text-xl font-semibold text-emerald-200 mb-1">{t('inbox.zero')}</h2>
       <p className="text-sm text-emerald-300/80">
-        Working memory: clear.  Go ship the thing.
+        {t('inbox.zeroHint')}
       </p>
     </div>
   );
@@ -166,6 +170,7 @@ export function EmptyState() {
 function TriagePage() {
   const data = Route.useLoaderData();
   const router = useRouter();
+  const { t } = useT();
   const items = useMemo(() => {
     if (!data) return [];
     // Pinned first, then unread, then snoozed/done in a folded section.
@@ -208,12 +213,12 @@ function TriagePage() {
   }, [cursor, items, router]);
 
   if (!data) {
-    return <div className="p-6 text-slate-400">Loading…</div>;
+    return <div className="p-6 text-slate-400">{t('state.loading')}</div>;
   }
 
   return (
     <div className="max-w-2xl mx-auto p-6">
-      <h1 className="text-lg font-semibold mb-4 text-slate-200">Inbox</h1>
+      <h1 className="text-lg font-semibold mb-4 text-slate-200">{t('inbox.title')}</h1>
       <CaptureBox
         onCapture={(text) => {
           /* v8 ignore next 3 */
@@ -223,7 +228,7 @@ function TriagePage() {
       {items.length === 0 ? (
         <EmptyState />
       ) : (
-        <ul aria-label="Triage list">
+        <ul aria-label={t('inbox.triageLabel')}>
           {items.map((it, idx) => (
             <ItemRow key={it.id} item={it} selected={idx === cursor} />
           ))}
@@ -231,7 +236,7 @@ function TriagePage() {
       )}
       {data.snoozed.length > 0 ? (
         <details className="mt-8 text-sm text-slate-400">
-          <summary>Snoozed ({data.snoozed.length})</summary>
+          <summary>{t('inbox.snoozed', { n: data.snoozed.length })}</summary>
           <ul className="mt-2">
             {data.snoozed.map((it) => (
               <ItemRow key={it.id} item={it} selected={false} />
@@ -241,7 +246,7 @@ function TriagePage() {
       ) : null}
       <NotificationsPanel />
       <div className="mt-8 text-xs text-slate-500">
-        <strong>Keys</strong>: j/k move · ↵ open · 1 pin · 2 refile→PM · d drop · s snooze 1d · S snooze 1w · u mark unread
+        {t('inbox.keysHint')}
       </div>
     </div>
   );

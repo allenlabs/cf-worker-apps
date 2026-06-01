@@ -1,5 +1,6 @@
 import { Link } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
+import { useT } from '@allenlabs/i18n/react';
 
 interface HeaderProps {
   initialQuery?: string;
@@ -10,6 +11,7 @@ interface HeaderProps {
  * form so `?q=...` survives a hard reload and shows up in browser history.
  */
 export function Header({ initialQuery }: HeaderProps) {
+  const { t } = useT();
   const [q, setQ] = useState(initialQuery ?? '');
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -44,9 +46,9 @@ export function Header({ initialQuery }: HeaderProps) {
             name="q"
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search (press /)"
+            placeholder={t('stash.searchPlaceholder')}
             className="w-full rounded bg-slate-800 border border-slate-700 px-3 py-1.5 text-sm text-slate-100 placeholder:text-slate-500 focus:border-stash-500 focus:outline-none"
-            aria-label="Search snippets"
+            aria-label={t('stash.searchAria')}
             data-testid="header-search"
           />
         </form>
@@ -55,7 +57,7 @@ export function Header({ initialQuery }: HeaderProps) {
           className="rounded bg-stash-600 hover:bg-stash-500 px-3 py-1.5 text-sm font-medium text-white no-underline hover:no-underline"
           data-testid="header-new"
         >
-          + New
+          {t('stash.new')}
         </Link>
       </div>
     </header>

@@ -11,6 +11,7 @@ import {
 import { getDb, requireUser } from '~/server/auth-runtime.server';
 import { timeAgo } from '~/lib/format';
 import { Header } from '~/components/Header';
+import { useT } from '@allenlabs/i18n/react';
 import { z } from 'zod';
 
 /* v8 ignore start */
@@ -51,6 +52,7 @@ interface ClientRowProps {
 }
 
 export function ClientRow({ client, now, onDelete }: ClientRowProps) {
+  const { t } = useT();
   return (
     <li
       className="card flex items-center justify-between gap-3 p-3"
@@ -59,7 +61,7 @@ export function ClientRow({ client, now, onDelete }: ClientRowProps) {
       <div>
         <div className="font-mono text-sm text-slate-100">{client.clientId}</div>
         <div className="text-xs text-slate-400 mt-0.5">{client.name}</div>
-        <div className="text-xs text-slate-500">created {timeAgo(client.createdAt, now)}</div>
+        <div className="text-xs text-slate-500">{t('stash.createdAt', { when: timeAgo(client.createdAt, now) })}</div>
       </div>
       <button
         type="button"
@@ -67,7 +69,7 @@ export function ClientRow({ client, now, onDelete }: ClientRowProps) {
         className="text-xs text-slate-400 hover:text-red-300 underline"
         data-testid={`delete-${client.clientId}`}
       >
-        revoke
+        {t('stash.revoke')}
       </button>
     </li>
   );
@@ -80,6 +82,7 @@ interface NewClientFormProps {
 }
 
 export function NewClientForm({ onSubmit, busy, error }: NewClientFormProps) {
+  const { t } = useT();
   const [clientId, setClientId] = useState('');
   const [name, setName] = useState('');
   return (
@@ -97,8 +100,8 @@ export function NewClientForm({ onSubmit, busy, error }: NewClientFormProps) {
           type="text"
           value={clientId}
           onChange={(e) => setClientId(e.target.value)}
-          placeholder="client_id (e.g. ext-laptop)"
-          aria-label="Client ID"
+          placeholder={t('stash.newClientIdPlaceholder')}
+          aria-label={t('stash.clientIdLabel')}
           className="rounded bg-slate-950 border border-slate-800 px-3 py-2 text-sm font-mono text-slate-100 focus:border-stash-500 focus:outline-none"
           data-testid="new-client-id"
         />
@@ -106,8 +109,8 @@ export function NewClientForm({ onSubmit, busy, error }: NewClientFormProps) {
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="Friendly name"
-          aria-label="Name"
+          placeholder={t('stash.friendlyName')}
+          aria-label={t('stash.nameLabel')}
           className="rounded bg-slate-950 border border-slate-800 px-3 py-2 text-sm text-slate-100 focus:border-stash-500 focus:outline-none"
           data-testid="new-client-name"
         />
@@ -120,7 +123,7 @@ export function NewClientForm({ onSubmit, busy, error }: NewClientFormProps) {
           className="rounded bg-stash-600 hover:bg-stash-500 disabled:opacity-50 disabled:cursor-not-allowed px-3 py-1.5 text-sm font-semibold text-white"
           data-testid="new-client-submit"
         >
-          {busy ? 'Issuing…' : 'Issue token'}
+          {busy ? t('stash.issuing') : t('stash.issueTokenBtn')}
         </button>
       </div>
     </form>
@@ -134,10 +137,11 @@ interface IssuedSecretProps {
 }
 
 export function IssuedSecret({ clientId, hmacSecret, onDismiss }: IssuedSecretProps) {
+  const { t } = useT();
   return (
     <div className="card border-stash-700 bg-stash-900/30 p-3" data-testid="issued-secret">
       <div className="text-sm font-semibold text-stash-200">
-        Save this now — it won&apos;t be shown again.
+        {t('stash.saveSecretNow')}
       </div>
       <dl className="mt-2 text-xs font-mono text-slate-200 space-y-1">
         <div>
@@ -157,7 +161,7 @@ export function IssuedSecret({ clientId, hmacSecret, onDismiss }: IssuedSecretPr
         className="mt-2 text-xs text-slate-300 hover:text-slate-100 underline"
         data-testid="dismiss-issued"
       >
-        Dismiss
+        {t('stash.dismiss')}
       </button>
     </div>
   );
@@ -168,6 +172,7 @@ export function IssuedSecret({ clientId, hmacSecret, onDismiss }: IssuedSecretPr
 function AdminPage() {
   const { clients } = Route.useLoaderData();
   const router = useRouter();
+  const { t } = useT();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [issued, setIssued] = useState<{ clientId: string; hmacSecret: string } | null>(null);
@@ -188,7 +193,7 @@ function AdminPage() {
   }
 
   async function handleDelete(clientId: string) {
-    if (!confirm(`Revoke "${clientId}"?  Any clients using this secret will stop working.`)) return;
+    if (!confirm(t('stash.revokeConfirm', { clientId }))) return;
     setBusy(true);
     try {
       await deleteClient({ data: { clientId } });
@@ -203,9 +208,9 @@ function AdminPage() {
     <>
       <Header />
       <div className="max-w-3xl mx-auto p-4">
-        <h1 className="text-lg font-semibold text-slate-200 mb-1">API clients</h1>
+        <h1 className="text-lg font-semibold text-slate-200 mb-1">{t('stash.apiClients')}</h1>
         <p className="text-xs text-slate-500 mb-4">
-          HMAC tokens for CLI + browser extension + third-party automation.
+          {t('stash.apiClientsSubtitle')}
         </p>
         {issued ? (
           <div className="mb-4">
@@ -221,7 +226,7 @@ function AdminPage() {
         </div>
         {clients.length === 0 ? (
           <p className="text-sm text-slate-400" data-testid="no-clients">
-            No tokens yet.
+            {t('stash.noTokensSimple')}
           </p>
         ) : (
           <ul className="space-y-2" data-testid="clients-list">

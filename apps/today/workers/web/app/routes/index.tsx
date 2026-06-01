@@ -12,6 +12,7 @@ import {
 import { getDb, getEnv } from '~/server/auth-runtime.server';
 import { readSessionToken, verifySessionToken } from '~/server/session.server';
 import { clockTime, humanMinutes, timeAgo } from '~/lib/format';
+import { useT } from '@allenlabs/i18n/react';
 
 /* v8 ignore start */
 // Server function: today payload.  Verifies the JWT, then dispatches to
@@ -47,7 +48,18 @@ const KIND_LABEL: Record<OneNextActionKind, string> = {
   inbox: 'FROM INBOX',
 };
 
-export function kindLabel(kind: OneNextActionKind): string {
+const KIND_KEY: Record<OneNextActionKind, string> = {
+  focus: 'today.kind.focus',
+  overdue: 'today.kind.overdue',
+  'due-today': 'today.kind.dueToday',
+  inbox: 'today.kind.inbox',
+};
+
+// When a translator `t` is supplied (from the component), returns the
+// localized label; otherwise falls back to the English literal so the pure
+// unit test (which calls kindLabel(kind) with no translator) keeps passing.
+export function kindLabel(kind: OneNextActionKind, t?: (key: string) => string): string {
+  if (t) return t(KIND_KEY[kind]);
   return KIND_LABEL[kind];
 }
 
@@ -67,6 +79,7 @@ interface HeroCardProps {
 }
 
 export function HeroCard({ action, activeFocus }: HeroCardProps) {
+  const { t } = useT();
   if (!action) {
     return (
       <section
@@ -74,12 +87,11 @@ export function HeroCard({ action, activeFocus }: HeroCardProps) {
         data-testid="hero-empty"
       >
         <div className="text-sm uppercase tracking-widest text-slate-500 mb-4">
-          🎯 ONE NEXT ACTION
+          🎯 {t('today.oneNextAction')}
         </div>
-        <h1 className="text-3xl text-slate-300 mb-3">Quiet today.</h1>
+        <h1 className="text-3xl text-slate-300 mb-3">{t('today.quiet')}</h1>
         <p className="text-slate-500 max-w-md mx-auto">
-          Nothing assigned, nothing in your inbox, nothing on the timer.
-          Maybe take a real break?
+          {t('today.quietHint')}
         </p>
       </section>
     );
@@ -91,7 +103,7 @@ export function HeroCard({ action, activeFocus }: HeroCardProps) {
       data-kind={action.kind}
     >
       <div className="text-sm uppercase tracking-widest text-slate-400 mb-4">
-        🎯 ONE NEXT ACTION · <span className="text-amber-400">{kindLabel(action.kind)}</span>
+        🎯 {t('today.oneNextAction')} · <span className="text-amber-400">{kindLabel(action.kind, t)}</span>
       </div>
       <h1 className="text-4xl sm:text-5xl font-semibold text-slate-100 mb-8 leading-tight max-w-3xl mx-auto break-words">
         {action.label}
@@ -101,7 +113,7 @@ export function HeroCard({ action, activeFocus }: HeroCardProps) {
         className="inline-block rounded bg-amber-600 hover:bg-amber-500 px-6 py-3 text-base font-medium text-white"
         data-testid="hero-cta"
       >
-        Take me there
+        {t('today.takeMeThere')}
       </a>
       {activeFocus ? <ActiveFocusFooter activeFocus={activeFocus} /> : null}
     </section>
@@ -114,6 +126,7 @@ interface ActiveFocusFooterProps {
 }
 
 export function ActiveFocusFooter({ activeFocus, nowOverride }: ActiveFocusFooterProps) {
+  const { t } = useT();
   const [now, setNow] = useState<number>(nowOverride ?? Date.now());
   useEffect(() => {
     /* v8 ignore next 5 — exercised by deploy smoke; the interval just
@@ -133,7 +146,7 @@ export function ActiveFocusFooter({ activeFocus, nowOverride }: ActiveFocusFoote
         {m}:{String(s).padStart(2, '0')}
       </span>
       <span className="mx-2">·</span>
-      <span>ends at {clockTime(activeFocus.endsAt)}</span>
+      <span>{t('today.endsAt', { time: clockTime(activeFocus.endsAt) })}</span>
     </div>
   );
 }
@@ -146,6 +159,7 @@ const SPARK_WIDTH = 140;
 const SPARK_HEIGHT = 32;
 
 export function Sparkline({ days }: SparklineProps) {
+  const { t } = useT();
   const max = maxHeatmap(days);
   const cellWidth = SPARK_WIDTH / Math.max(1, days.length);
   return (
@@ -154,7 +168,7 @@ export function Sparkline({ days }: SparklineProps) {
       height={SPARK_HEIGHT}
       viewBox={`0 0 ${SPARK_WIDTH} ${SPARK_HEIGHT}`}
       role="img"
-      aria-label="7-day focus sparkline"
+      aria-label={t('today.sparklineLabel')}
       data-testid="sparkline"
     >
       {days.map((v, i) => {
@@ -205,15 +219,16 @@ interface FocusPanelProps {
 }
 
 export function FocusPanel({ focusToday, focusHeatmap }: FocusPanelProps) {
+  const { t } = useT();
   return (
     <Section
-      title="Focus today"
+      title={t('today.focusToday')}
       badge={humanMinutes(focusToday.totalMinutes)}
       testId="focus-panel"
     >
       <div className="flex items-end justify-between gap-4">
         <div>
-          <div className="text-xs text-slate-500">Sessions</div>
+          <div className="text-xs text-slate-500">{t('today.sessions')}</div>
           <div className="text-lg font-semibold text-slate-100">{focusToday.sessionCount}</div>
         </div>
         <Sparkline days={focusHeatmap.days} />
@@ -222,7 +237,7 @@ export function FocusPanel({ focusToday, focusHeatmap }: FocusPanelProps) {
         href="https://focus.allenlabs.org/"
         className="mt-3 inline-block text-xs text-amber-400 hover:underline"
       >
-        Open focus →
+        {t('today.openFocus')}
       </a>
     </Section>
   );
@@ -234,10 +249,11 @@ interface InboxPanelProps {
 }
 
 export function InboxPanel({ inboxCount, inboxUnread }: InboxPanelProps) {
+  const { t } = useT();
   return (
-    <Section title="Inbox" badge={inboxCount.unread} testId="inbox-panel">
+    <Section title={t('today.inbox')} badge={inboxCount.unread} testId="inbox-panel">
       {inboxUnread.length === 0 ? (
-        <p className="text-xs text-slate-500">Nothing unread.</p>
+        <p className="text-xs text-slate-500">{t('today.nothingUnread')}</p>
       ) : (
         <ul className="space-y-1" data-testid="inbox-list">
           {inboxUnread.slice(0, 5).map((it) => (
@@ -255,7 +271,7 @@ export function InboxPanel({ inboxCount, inboxUnread }: InboxPanelProps) {
         href="https://inbox.allenlabs.org/"
         className="mt-3 inline-block text-xs text-amber-400 hover:underline"
       >
-        Open inbox →
+        {t('today.openInbox')}
       </a>
     </Section>
   );
@@ -266,14 +282,15 @@ interface PmPanelProps {
 }
 
 export function PmPanel({ pmAssigned }: PmPanelProps) {
+  const { t } = useT();
   return (
     <Section
-      title="Assigned to me"
+      title={t('today.assignedToMe')}
       badge={pmAssigned.length}
       testId="pm-panel"
     >
       {pmAssigned.length === 0 ? (
-        <p className="text-xs text-slate-500">Nothing assigned.</p>
+        <p className="text-xs text-slate-500">{t('today.nothingAssigned')}</p>
       ) : (
         <ul className="space-y-2" data-testid="pm-list">
           {pmAssigned.slice(0, 8).map((i) => (
@@ -290,7 +307,7 @@ export function PmPanel({ pmAssigned }: PmPanelProps) {
               </a>
               <span className="ml-2 text-slate-500">
                 {i.projectIdentifier}
-                {i.dueDate ? <> · due {i.dueDate}</> : null}
+                {i.dueDate ? <> · {t('today.due', { date: i.dueDate })}</> : null}
               </span>
             </li>
           ))}
@@ -305,14 +322,15 @@ interface ActivityPanelProps {
 }
 
 export function ActivityPanel({ recentActivity }: ActivityPanelProps) {
+  const { t } = useT();
   return (
     <Section
-      title="Recent activity"
+      title={t('today.recentActivity')}
       badge={recentActivity.length}
       testId="activity-panel"
     >
       {recentActivity.length === 0 ? (
-        <p className="text-xs text-slate-500">No recent activity.</p>
+        <p className="text-xs text-slate-500">{t('today.noActivity')}</p>
       ) : (
         <ul className="space-y-1" data-testid="activity-list">
           {recentActivity.slice(0, 8).map((a) => (
@@ -343,13 +361,14 @@ export function ActivityPanel({ recentActivity }: ActivityPanelProps) {
    per-panel components, and pickOneNextAction. */
 function TodayPage() {
   const loaderData = Route.useLoaderData();
+  const { t } = useT();
 
   if (!loaderData) {
     return (
       <div className="max-w-3xl mx-auto p-6">
-        <p className="text-slate-400">Loading…</p>
+        <p className="text-slate-400">{t('state.loading')}</p>
         <a href="/auth/login" className="text-amber-400 hover:underline text-sm">
-          Sign in
+          {t('nav.signIn')}
         </a>
       </div>
     );
@@ -366,9 +385,9 @@ function TodayPage() {
         <ActivityPanel recentActivity={data.recentActivity} />
       </section>
       <footer className="mt-12 text-center text-xs text-slate-600">
-        Signed in as {data.me.login}.{' '}
+        {t('today.signedInAs', { name: data.me.login })}{' '}
         <a href="/auth/logout" className="hover:underline">
-          Sign out
+          {t('nav.signOut')}
         </a>
       </footer>
     </main>

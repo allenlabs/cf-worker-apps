@@ -8,12 +8,18 @@ vi.mock('@tanstack/react-router', () => ({
   useRouter: () => ({ invalidate: () => {} }),
 }));
 
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render as rtlRender, screen, fireEvent } from '@testing-library/react';
+import type { ReactElement } from 'react';
+import { I18nProvider } from '@allenlabs/i18n/react';
+import { appDict } from '~/i18n/dict';
 import {
   ClientRow,
   IssuedSecret,
   NewClientForm,
 } from '~/routes/admin.api-clients';
+
+const render = (ui: ReactElement) =>
+  rtlRender(<I18nProvider locale="en" dict={appDict}>{ui}</I18nProvider>);
 
 const NOW = Date.parse('2026-05-24T12:00:00Z');
 

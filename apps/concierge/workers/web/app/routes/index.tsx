@@ -2,6 +2,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
 import { getRequest } from '@tanstack/react-start/server';
 import { useState } from 'react';
+import { useT } from '@allenlabs/i18n/react';
 import { loadHomeImpl, type HomePayload } from '~/server/home';
 import { getDb, getEnv } from '~/server/auth-runtime.server';
 import { readSessionToken, verifySessionToken } from '~/server/session.server';
@@ -31,17 +32,18 @@ export const Route = createFileRoute('/')({
 function HomePage() {
   const data = Route.useLoaderData() as HomePayload | null;
   const [busy, setBusy] = useState(false);
+  const { t } = useT();
 
   if (!data) {
-    return <div className="p-6 text-slate-400">Loading…</div>;
+    return <div className="p-6 text-slate-400">{t('state.loading')}</div>;
   }
 
   return (
     <div className="max-w-2xl mx-auto p-6">
       <header className="mb-6">
-        <h1 className="text-lg font-semibold text-slate-200">Concierge</h1>
+        <h1 className="text-lg font-semibold text-slate-200">{t('concierge.title')}</h1>
         <p className="text-xs text-slate-500 mt-1">
-          Gentle AI nudges about what's unfinished — no streaks, no judgment.
+          {t('concierge.tagline')}
         </p>
       </header>
 
@@ -54,7 +56,7 @@ function HomePage() {
       <section className="mt-8">
         <div className="flex items-baseline justify-between mb-3">
           <h2 className="text-sm uppercase tracking-wide text-slate-400">
-            Recent nudges
+            {t('concierge.recentNudges')}
           </h2>
           <ManualTriggerButton busy={busy} setBusy={setBusy} />
         </div>
@@ -80,6 +82,7 @@ interface PreferencesPanelProps {
 }
 
 function PreferencesPanel({ preferences, busy, setBusy }: PreferencesPanelProps) {
+  const { t } = useT();
   const [enabled, setEnabled] = useState(preferences.enabled);
   const [cadence, setCadence] = useState(preferences.cadenceMinutes);
   const [qStart, setQStart] = useState(minutesToHHMM(preferences.quietStart));
@@ -106,7 +109,7 @@ function PreferencesPanel({ preferences, busy, setBusy }: PreferencesPanelProps)
   return (
     <section className="card p-4" data-testid="prefs">
       <h2 className="text-sm uppercase tracking-wide text-slate-400 mb-3">
-        Preferences
+        {t('concierge.preferences')}
       </h2>
       <label className="flex items-center gap-2 mb-3">
         <input
@@ -115,11 +118,11 @@ function PreferencesPanel({ preferences, busy, setBusy }: PreferencesPanelProps)
           onChange={(e) => setEnabled(e.target.checked)}
           data-testid="enabled-toggle"
         />
-        <span className="text-sm">Proactive nudges enabled</span>
+        <span className="text-sm">{t('concierge.prefsEnabled')}</span>
       </label>
       <div className="grid grid-cols-2 gap-3 text-sm">
         <label className="flex flex-col">
-          <span className="text-xs text-slate-500 mb-1">Cadence (min)</span>
+          <span className="text-xs text-slate-500 mb-1">{t('concierge.cadence')}</span>
           <input
             type="number"
             min={15}
@@ -131,7 +134,7 @@ function PreferencesPanel({ preferences, busy, setBusy }: PreferencesPanelProps)
         </label>
         <div className="grid grid-cols-2 gap-2">
           <label className="flex flex-col">
-            <span className="text-xs text-slate-500 mb-1">Quiet start</span>
+            <span className="text-xs text-slate-500 mb-1">{t('concierge.quietStart')}</span>
             <input
               type="time"
               value={qStart}
@@ -140,7 +143,7 @@ function PreferencesPanel({ preferences, busy, setBusy }: PreferencesPanelProps)
             />
           </label>
           <label className="flex flex-col">
-            <span className="text-xs text-slate-500 mb-1">Quiet end</span>
+            <span className="text-xs text-slate-500 mb-1">{t('concierge.quietEnd')}</span>
             <input
               type="time"
               value={qEnd}
@@ -157,13 +160,14 @@ function PreferencesPanel({ preferences, busy, setBusy }: PreferencesPanelProps)
         data-testid="save-prefs"
         className="mt-4 px-3 py-2 rounded bg-conci-600 hover:bg-conci-500 disabled:opacity-50 text-sm font-medium"
       >
-        Save preferences
+        {t('concierge.savePrefs')}
       </button>
     </section>
   );
 }
 
 function ManualTriggerButton({ busy, setBusy }: { busy: boolean; setBusy: (b: boolean) => void }) {
+  const { t } = useT();
   return (
     <button
       type="button"
@@ -180,7 +184,7 @@ function ManualTriggerButton({ busy, setBusy }: { busy: boolean; setBusy: (b: bo
       }}
       className="text-xs px-2 py-1 rounded border border-slate-700 hover:bg-slate-800"
     >
-      Trigger one now
+      {t('concierge.triggerOne')}
     </button>
   );
 }

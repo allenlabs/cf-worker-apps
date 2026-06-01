@@ -51,7 +51,7 @@ function HomePage({
         <HubSummary count={apps.length} />
         <section
           className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"
-          aria-label="App list"
+          aria-label={t('hub.appList')}
         >
           {apps.map((app) => (
             <AppCard key={app.slug} app={app} />

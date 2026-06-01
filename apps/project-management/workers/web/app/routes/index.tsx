@@ -1,6 +1,7 @@
 import { Link, createFileRoute } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
 import { getRequest } from '@tanstack/react-start/server';
+import { useT } from '@allenlabs/i18n/react';
 import { getDb, getEnv } from '~/server/auth-runtime.server';
 import { loadHomeImpl } from '~/server/home';
 import { readSessionToken, verifySessionToken } from '~/server/session.server';
@@ -29,18 +30,17 @@ export const Route = createFileRoute('/')({
 
 function HomePage() {
   const { projects, activities } = Route.useLoaderData();
+  const { t } = useT();
 
   if (projects.length === 0) {
     return (
       <section className="card p-10 max-w-2xl mx-auto text-center">
-        <h1 className="text-2xl font-semibold mb-3">Welcome to Project Management</h1>
+        <h1 className="text-2xl font-semibold mb-3">{t('home.welcomeTitle')}</h1>
         <p className="text-sm text-gray-600 mb-6">
-          A project groups issues, wiki pages, files, and activity for a single
-          piece of work. Create one to start tracking tasks, planning versions,
-          and collaborating with your team.
+          {t('home.welcomeBody')}
         </p>
         <Link to="/projects/new" className="btn-primary">
-          Create your first project
+          {t('home.createFirstProject')}
         </Link>
       </section>
     );
@@ -50,8 +50,8 @@ function HomePage() {
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <section className="lg:col-span-2 card p-4">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-semibold">Projects</h2>
-          <Link to="/projects/new" className="btn-primary">+ New project</Link>
+          <h2 className="text-lg font-semibold">{t('projects.title')}</h2>
+          <Link to="/projects/new" className="btn-primary">{t('home.newProject')}</Link>
         </div>
         <ul className="divide-y divide-gray-100">
           {projects.map((p) => (
@@ -65,9 +65,9 @@ function HomePage() {
         </ul>
       </section>
       <aside className="card p-4">
-        <h2 className="text-lg font-semibold mb-3">Activity</h2>
+        <h2 className="text-lg font-semibold mb-3">{t('activity.title')}</h2>
         {activities.length === 0 ? (
-          <p className="text-sm text-gray-500">Nothing yet.</p>
+          <p className="text-sm text-gray-500">{t('state.nothingYet')}</p>
         ) : (
           <ul className="text-sm space-y-2">
             {activities.map((a) => (

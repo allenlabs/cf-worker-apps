@@ -1,19 +1,21 @@
 import { Link } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
+import { useT } from '@allenlabs/i18n/react';
 
 interface HeaderProps {
   initialQuery?: string;
 }
 
 export function Header({ initialQuery }: HeaderProps) {
+  const { t } = useT();
   const [q, setQ] = useState(initialQuery ?? '');
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key !== '/') return;
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
       e.preventDefault();
       inputRef.current?.focus();
     }
@@ -38,9 +40,9 @@ export function Header({ initialQuery }: HeaderProps) {
             name="q"
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search (press /)"
+            placeholder={t('solved.header.searchPlaceholder')}
             className="w-full rounded bg-slate-800 border border-slate-700 px-3 py-1.5 text-sm text-slate-100 placeholder:text-slate-500 focus:border-solved-500 focus:outline-none"
-            aria-label="Search entries"
+            aria-label={t('solved.header.searchLabel')}
             data-testid="header-search"
           />
         </form>
@@ -49,7 +51,7 @@ export function Header({ initialQuery }: HeaderProps) {
           className="rounded bg-solved-600 hover:bg-solved-500 px-3 py-1.5 text-sm font-medium text-white no-underline hover:no-underline"
           data-testid="header-new"
         >
-          + New
+          {t('solved.header.new')}
         </Link>
       </div>
     </header>

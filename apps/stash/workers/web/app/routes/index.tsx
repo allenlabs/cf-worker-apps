@@ -11,6 +11,7 @@ import { getDb, getEnv } from '~/server/auth-runtime.server';
 import { readSessionToken, verifySessionToken } from '~/server/session.server';
 import { bodyPreview, languageLabel, paginationPages, timeAgo } from '~/lib/format';
 import { Header } from '~/components/Header';
+import { useT } from '@allenlabs/i18n/react';
 
 const HomeInput = z.object({ page: z.number().int().min(1).max(10_000).default(1) });
 
@@ -49,9 +50,10 @@ interface SnippetCardInnerProps {
 }
 
 export function SnippetCardInner({ snippet, now }: SnippetCardInnerProps) {
+  const { t } = useT();
   const ago = timeAgo(snippet.createdAt, now);
   const lang = languageLabel(snippet.language);
-  const title = snippet.title || bodyPreview(snippet.body, 80) || '(untitled)';
+  const title = snippet.title || bodyPreview(snippet.body, 80) || t('stash.untitled');
   return (
     <div className="block p-3 text-slate-100" data-testid={`card-${snippet.id}`}>
       <div className="flex items-baseline justify-between gap-3">
@@ -89,11 +91,12 @@ export function SnippetCard({ snippet, now }: SnippetCardInnerProps) {
 }
 
 export function EmptyState() {
+  const { t } = useT();
   return (
     <div className="card p-6 text-center text-sm text-slate-400" data-testid="empty-state">
-      <p className="mb-2 text-slate-200">Nothing stashed yet.</p>
+      <p className="mb-2 text-slate-200">{t('stash.emptyTitle')}</p>
       <p className="text-xs">
-        Paste your first snippet — click <Link to="/new" className="text-stash-300">+ New</Link>.
+        <Link to="/new" className="text-stash-300">{t('stash.new')}</Link>
       </p>
     </div>
   );
@@ -148,9 +151,10 @@ function HomePage() {
   const data = Route.useLoaderData() as HomePayload | null;
   const search = Route.useSearch();
   const page = search.page ?? 1;
+  const { t } = useT();
 
   if (!data) {
-    return <div className="p-6 text-slate-400">Loading…</div>;
+    return <div className="p-6 text-slate-400">{t('state.loading')}</div>;
   }
 
   return (

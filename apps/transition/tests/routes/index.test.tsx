@@ -18,11 +18,17 @@ vi.mock('@tanstack/react-start/server', () => ({
 }));
 
 import { render, screen } from '@testing-library/react';
+import { I18nProvider } from '@allenlabs/i18n/react';
+import { appDict } from '~/i18n/dict';
 import { EmptyLog } from '~/routes/index';
 
 describe('EmptyLog', () => {
   it('renders empty copy', () => {
-    render(<EmptyLog />);
+    render(
+      <I18nProvider locale="en" dict={appDict}>
+        <EmptyLog />
+      </I18nProvider>,
+    );
     expect(screen.getByTestId('empty-log').textContent).toContain('No transition rituals yet');
   });
 });

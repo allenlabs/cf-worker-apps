@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
 import { z } from 'zod';
+import { useT } from '@allenlabs/i18n/react';
 import { timeAgo } from '~/lib/format';
 import { listActivitiesImpl } from '~/server/activities';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
@@ -26,11 +27,12 @@ export const Route = createFileRoute('/projects/$identifier/activity')({
 
 function ProjectActivityPage() {
   const { activities } = Route.useLoaderData();
+  const { t } = useT();
   return (
     <div>
-      <h2 className="text-xl font-semibold mb-3">Activity</h2>
+      <h2 className="text-xl font-semibold mb-3">{t('activity.title')}</h2>
       {activities.length === 0 ? (
-        <p className="text-sm text-gray-500">No activity yet.</p>
+        <p className="text-sm text-gray-500">{t('activity.empty')}</p>
       ) : (
         <ul className="card divide-y divide-gray-100">
           {activities.map((a) => (

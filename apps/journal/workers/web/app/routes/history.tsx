@@ -4,6 +4,7 @@ import { statsImpl, type JournalStats } from '~/server/journal';
 import { getDb, requireUser } from '~/server/auth-runtime.server';
 import { Header } from '~/components/Header';
 import { Heatmap } from '~/components/Heatmap';
+import { useT } from '@allenlabs/i18n/react';
 
 /* v8 ignore start */
 const loadStats = createServerFn({ method: 'GET' }).handler(async () => {
@@ -34,23 +35,24 @@ export function StatTile({ label, value }: StatTileProps) {
 function HistoryPage() {
   const data = Route.useLoaderData() as JournalStats;
   const a = data.averages;
+  const { t } = useT();
   return (
     <>
       <Header />
       <div className="max-w-3xl mx-auto p-4 space-y-4">
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          <StatTile label="entries" value={String(data.total)} />
-          <StatTile label="avg mood" value={a.mood == null ? '—' : String(a.mood)} />
-          <StatTile label="avg energy" value={a.energy == null ? '—' : String(a.energy)} />
-          <StatTile label="avg focus" value={a.focus == null ? '—' : String(a.focus)} />
+          <StatTile label={t('journal.statEntries')} value={String(data.total)} />
+          <StatTile label={t('journal.statAvgMood')} value={a.mood == null ? '—' : String(a.mood)} />
+          <StatTile label={t('journal.statAvgEnergy')} value={a.energy == null ? '—' : String(a.energy)} />
+          <StatTile label={t('journal.statAvgFocus')} value={a.focus == null ? '—' : String(a.focus)} />
         </div>
         <p className="text-xs text-slate-500">
-          Last 90 days.  Missed days fade — they do not break a streak.
+          {t('journal.last90Days')}
         </p>
         <Heatmap cells={data.heatmap} />
         <p className="text-xs text-slate-500">
           <Link to="/entry/$date" params={{ date: data.heatmap.at(-1)?.date ?? '' }}>
-            view today
+            {t('journal.viewToday')}
           </Link>
         </p>
       </div>

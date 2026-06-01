@@ -10,6 +10,7 @@ import { getDb, getEnv } from '~/server/auth-runtime.server';
 import { readSessionToken, verifySessionToken } from '~/server/session.server';
 import { bodyPreview, timeAgo } from '~/lib/format';
 import { Header } from '~/components/Header';
+import { useT } from '@allenlabs/i18n/react';
 
 /* v8 ignore start */
 const loadHome = createServerFn({ method: 'GET' }).handler(async () => {
@@ -77,11 +78,12 @@ export function EntryCard({ entry, now }: EntryCardProps) {
 }
 
 export function EmptyState() {
+  const { t } = useT();
   return (
     <div className="card p-6 text-center text-sm text-slate-400" data-testid="empty-state">
-      <p className="mb-2 text-slate-200">Nothing solved yet.</p>
+      <p className="mb-2 text-slate-200">{t('solved.emptyTitle')}</p>
       <p className="text-xs">
-        Capture your first <Link to="/new" className="text-solved-300">aha moment</Link>.
+        {t('solved.emptyAhaPrefix')}<Link to="/new" className="text-solved-300">{t('solved.emptyAha')}</Link>.
       </p>
     </div>
   );
@@ -89,9 +91,10 @@ export function EmptyState() {
 
 function HomePage() {
   const data = Route.useLoaderData() as HomePayload | null;
+  const { t } = useT();
 
   if (!data) {
-    return <div className="p-6 text-slate-400">Loading…</div>;
+    return <div className="p-6 text-slate-400">{t('solved.loading')}</div>;
   }
 
   return (

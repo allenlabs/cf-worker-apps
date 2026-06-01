@@ -13,6 +13,7 @@ import { getRequest } from '@tanstack/react-start/server';
 import { readSessionToken, verifySessionToken } from '~/server/session.server';
 import { Header } from '~/components/Header';
 import { EventCard } from '~/components/EventCard';
+import { useT } from '@allenlabs/i18n/react';
 
 /* v8 ignore start */
 const loadHome = createServerFn({ method: 'GET' }).handler(async () => {
@@ -43,9 +44,10 @@ export const Route = createFileRoute('/')({
 });
 
 export function EmptyFeed() {
+  const { t } = useT();
   return (
     <div className="card p-4 text-sm text-slate-400" data-testid="empty-feed">
-      No wins captured yet.  When you ship something, send it here.
+      {t('dopamine.emptyFeed')}
     </div>
   );
 }
@@ -59,11 +61,12 @@ export function RandomWinPanel({
   onClick: () => void;
   busy?: boolean;
 }) {
+  const { t } = useT();
   return (
     <div className="card p-4 border-dopamine-700 bg-dopamine-900/20" data-testid="random-panel">
       <div className="flex items-baseline justify-between gap-2">
         <h2 className="text-sm font-semibold text-dopamine-200">
-          Remind me of a win
+          {t('dopamine.remindWin')}
         </h2>
         <button
           type="button"
@@ -72,7 +75,7 @@ export function RandomWinPanel({
           className="rounded bg-dopamine-600 hover:bg-dopamine-500 disabled:opacity-50 px-2.5 py-1 text-xs font-semibold text-white"
           data-testid="random-button"
         >
-          {busy ? 'thinking…' : highlight ? 'another' : 'pick one'}
+          {busy ? t('dopamine.thinking') : highlight ? t('dopamine.another') : t('dopamine.pickOne')}
         </button>
       </div>
       {highlight ? (
@@ -84,7 +87,7 @@ export function RandomWinPanel({
         </div>
       ) : (
         <p className="text-xs text-slate-500 mt-2" data-testid="random-empty">
-          Tap to surface a random highlight from the last 90 days.
+          {t('dopamine.randomEmpty')}
         </p>
       )}
     </div>
@@ -96,11 +99,12 @@ function HomePage() {
   const router = useRouter();
   const [highlight, setHighlight] = useState<EventRow | null>(null);
   const [busy, setBusy] = useState(false);
+  const { t } = useT();
 
   if (!data) {
     return (
       <div className="card p-4 text-sm text-slate-400 m-4" data-testid="no-session">
-        Signed out.
+        {t('state.signedOut')}
       </div>
     );
   }
@@ -123,7 +127,7 @@ function HomePage() {
       <Header />
       <div className="max-w-3xl mx-auto p-4 space-y-4">
         <RandomWinPanel highlight={highlight} onClick={handleRandom} busy={busy} />
-        <h1 className="text-base font-semibold text-slate-200">Recent</h1>
+        <h1 className="text-base font-semibold text-slate-200">{t('dopamine.recent')}</h1>
         {data.recent.length === 0 ? (
           <EmptyFeed />
         ) : (

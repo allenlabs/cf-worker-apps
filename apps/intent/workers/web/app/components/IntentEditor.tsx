@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useT } from '@allenlabs/i18n/react';
 import { relativeAgo } from '~/lib/format';
 
 interface IntentEditorProps {
@@ -8,6 +9,7 @@ interface IntentEditorProps {
 }
 
 export function IntentEditor({ initialText, updatedAt, onSave }: IntentEditorProps) {
+  const { t } = useT();
   const [text, setText] = useState<string>(initialText);
   const [savedText, setSavedText] = useState<string>(initialText);
   const [savedAt, setSavedAt] = useState<string>(updatedAt);
@@ -41,7 +43,7 @@ export function IntentEditor({ initialText, updatedAt, onSave }: IntentEditorPro
   return (
     <div className="space-y-3" data-testid="intent-editor">
       <label className="block text-xs text-slate-400">
-        What are you doing right now?
+        {t('intent.subtitle')}
       </label>
       <textarea
         ref={taRef}
@@ -52,14 +54,14 @@ export function IntentEditor({ initialText, updatedAt, onSave }: IntentEditorPro
         maxLength={280}
         className="w-full rounded bg-slate-950 border border-slate-800 px-3 py-2 text-base text-slate-100 focus:border-intent-500 focus:outline-none"
         data-testid="intent-input"
-        placeholder="(blank)"
+        placeholder={t('intent.editorPlaceholder')}
       />
       <div className="flex items-center justify-between text-xs">
         <span className="text-slate-500" data-testid="intent-meta">
           {savedAt
-            ? `last updated ${relativeAgo(savedAt)}`
-            : 'never set'}
-          {text !== savedText ? ' · unsaved' : ''}
+            ? t('intent.lastUpdated', { when: relativeAgo(savedAt) })
+            : t('intent.neverSet')}
+          {text !== savedText ? ` · ${t('intent.unsaved')}` : ''}
         </span>
         <button
           type="button"
@@ -68,13 +70,13 @@ export function IntentEditor({ initialText, updatedAt, onSave }: IntentEditorPro
           className="rounded bg-intent-600 hover:bg-intent-500 disabled:opacity-50 disabled:cursor-not-allowed px-3 py-1.5 text-sm font-semibold text-white"
           data-testid="save-button"
         >
-          {busy ? 'Saving…' : 'Save'}
+          {busy ? t('state.saving') : t('btn.save')}
         </button>
       </div>
       {error ? (
         <p className="text-sm text-red-400" data-testid="form-error">{error}</p>
       ) : null}
-      <p className="text-[11px] text-slate-600">{text.length}/280</p>
+      <p className="text-[11px] text-slate-600">{t('intent.charCount', { n: text.length })}</p>
     </div>
   );
 }

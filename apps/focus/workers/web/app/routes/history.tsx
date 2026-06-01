@@ -14,6 +14,7 @@ import { findUserBySsoImpl } from '~/server/users';
 import { getDb, getEnv } from '~/server/auth-runtime.server';
 import { readSessionToken, verifySessionToken } from '~/server/session.server';
 import { clockTime, humanMinutes } from '~/lib/format';
+import { useT } from '@allenlabs/i18n/react';
 
 /* v8 ignore start */
 const loadHistory = createServerFn({ method: 'GET' }).handler(async () => {
@@ -98,6 +99,7 @@ const CELL = 12;
 const GAP = 2;
 
 export function Heatmap({ days, onSelectDay }: HeatmapProps) {
+  const { t } = useT();
   // Lay out as 13 columns x 7 rows.  Each column is a week, oldest left.
   const weeks = Math.ceil(days.length / 7);
   const width = weeks * (CELL + GAP);
@@ -108,7 +110,7 @@ export function Heatmap({ days, onSelectDay }: HeatmapProps) {
       height={height}
       viewBox={`0 0 ${width} ${height}`}
       role="img"
-      aria-label="90-day focus heatmap"
+      aria-label={t('focus.heatmapLabel')}
       data-testid="heatmap"
     >
       {days.map((d, i) => {
@@ -128,7 +130,7 @@ export function Heatmap({ days, onSelectDay }: HeatmapProps) {
             data-testid={`cell-${d.date}`}
             onClick={() => onSelectDay(d.date)}
           >
-            <title>{`${d.date}: ${humanMinutes(d.minutes)} · ${d.sessions} session${d.sessions === 1 ? '' : 's'}`}</title>
+            <title>{t('focus.sessionTitle', { date: d.date, minutes: humanMinutes(d.minutes), sessions: t(d.sessions === 1 ? 'focus.sessionOne' : 'focus.sessionMany', { n: d.sessions }) })}</title>
           </rect>
         );
       })}
@@ -142,10 +144,11 @@ interface DayDetailProps {
 }
 
 export function DayDetail({ day, sessions }: DayDetailProps) {
+  const { t } = useT();
   if (sessions.length === 0) {
     return (
       <div className="card p-4 text-sm text-slate-400" data-testid="day-empty">
-        Nothing on {day}.  That's allowed.
+        {t('focus.dayEmpty', { day })}
       </div>
     );
   }
@@ -164,14 +167,14 @@ export function DayDetail({ day, sessions }: DayDetailProps) {
                   : 'bg-focus-900/60 text-focus-300'
               }`}
             >
-              {s.endedReason ?? 'in progress'}
+              {s.endedReason ?? t('focus.inProgress')}
             </span>
           </div>
           <div className="mt-1 text-xs text-slate-500 flex flex-wrap gap-2">
             <span>{clockTime(s.startedAt)}{s.endedAt ? ` → ${clockTime(s.endedAt)}` : ''}</span>
             <span>· {humanMinutes(s.targetMinutes)}</span>
             {s.distractionCount > 0 ? (
-              <span>· {s.distractionCount} wobble{s.distractionCount === 1 ? '' : 's'}</span>
+              <span>· {t(s.distractionCount === 1 ? 'focus.wobbleOne' : 'focus.wobbleMany', { n: s.distractionCount })}</span>
             ) : null}
             {s.satisfaction ? <span>· {'★'.repeat(s.satisfaction)}</span> : null}
           </div>
@@ -184,6 +187,7 @@ export function DayDetail({ day, sessions }: DayDetailProps) {
 
 function HistoryPage() {
   const data: HistoryPayload | null = Route.useLoaderData();
+  const { t } = useT();
   const [selected, setSelected] = useState<{ day: string; rows: FocusSessionRow[] } | null>(null);
   /* v8 ignore next 6 — the click→fetch happens on real navigation; unit
      tests cover the pure pieces (heatmap, day detail). */
@@ -193,18 +197,18 @@ function HistoryPage() {
   };
 
   if (!data) {
-    return <div className="p-6 text-slate-400">Loading…</div>;
+    return <div className="p-6 text-slate-400">{t('state.loading')}</div>;
   }
 
   return (
     <div className="max-w-3xl mx-auto p-6">
-      <h1 className="text-lg font-semibold text-slate-200 mb-1">History</h1>
+      <h1 className="text-lg font-semibold text-slate-200 mb-1">{t('focus.historyTitle')}</h1>
       <p className="text-xs text-slate-500 mb-4">
-        Last 90 days.  Missed days fade — they don't reset anything.
+        {t('focus.historySubtitle')}
       </p>
       <div className="mb-6 flex gap-6 text-xs text-slate-400">
-        <span>Total: <span className="text-slate-200">{humanMinutes(data.totalMinutes)}</span></span>
-        <span>Sessions: <span className="text-slate-200">{data.totalSessions}</span></span>
+        <span>{t('focus.total')} <span className="text-slate-200">{humanMinutes(data.totalMinutes)}</span></span>
+        <span>{t('focus.sessionsLabel')} <span className="text-slate-200">{data.totalSessions}</span></span>
       </div>
       <div className="overflow-x-auto mb-6">
         <Heatmap days={data.days} onSelectDay={pickDay} />
@@ -215,10 +219,10 @@ function HistoryPage() {
           <DayDetail day={selected.day} sessions={selected.rows} />
         </div>
       ) : (
-        <p className="text-xs text-slate-500">Click a cell to see that day's sessions.</p>
+        <p className="text-xs text-slate-500">{t('focus.clickCell')}</p>
       )}
       <div className="mt-8 text-xs text-slate-500">
-        <a href="/" className="hover:underline">← Back to focus</a>
+        <a href="/" className="hover:underline">{t('focus.backToFocus')}</a>
       </div>
     </div>
   );

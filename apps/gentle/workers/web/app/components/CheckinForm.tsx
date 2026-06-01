@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useT } from '@allenlabs/i18n/react';
 import type { CheckinRow } from '~/server/gentle';
 
 export interface CheckinFormValues {
@@ -19,12 +20,16 @@ interface CheckinFormProps {
   error?: string | null;
 }
 
-const TOGGLES: Array<{ key: keyof Omit<CheckinFormValues, 'note' | 'date'>; label: string; question: string }> = [
-  { key: 'slept_ok', label: 'slept', question: 'slept ok?' },
-  { key: 'meds',     label: 'meds',  question: 'took meds?' },
-  { key: 'ate',      label: 'ate',   question: 'ate?' },
-  { key: 'moved',    label: 'moved', question: 'moved a little?' },
-  { key: 'talked',   label: 'talked', question: 'talked to a human?' },
+const TOGGLES: Array<{
+  key: keyof Omit<CheckinFormValues, 'note' | 'date'>;
+  labelKey: string;
+  questionKey: string;
+}> = [
+  { key: 'slept_ok', labelKey: 'gentle.toggle.slept.label',  questionKey: 'gentle.toggle.slept.question' },
+  { key: 'meds',     labelKey: 'gentle.toggle.meds.label',   questionKey: 'gentle.toggle.meds.question' },
+  { key: 'ate',      labelKey: 'gentle.toggle.ate.label',    questionKey: 'gentle.toggle.ate.question' },
+  { key: 'moved',    labelKey: 'gentle.toggle.moved.label',  questionKey: 'gentle.toggle.moved.question' },
+  { key: 'talked',   labelKey: 'gentle.toggle.talked.label', questionKey: 'gentle.toggle.talked.question' },
 ];
 
 interface ToggleRowProps {
@@ -40,6 +45,7 @@ interface ToggleRowProps {
 // didn't know.  An explicit "no" still counts as engaging with the
 // check-in.
 export function ToggleRow({ label, question, value, testId, onChange }: ToggleRowProps) {
+  const { t } = useT();
   function pillCls(active: boolean): string {
     return active
       ? 'bg-gentle-600 border-gentle-500 text-white'
@@ -55,9 +61,9 @@ export function ToggleRow({ label, question, value, testId, onChange }: ToggleRo
           className={`h-8 px-3 rounded text-sm font-medium border ${pillCls(value === true)}`}
           data-testid={`${testId}-yes`}
           aria-pressed={value === true}
-          aria-label={`${question} — yes`}
+          aria-label={t('gentle.toggle.ariaYes', { question })}
         >
-          yes
+          {t('gentle.toggle.yes')}
         </button>
         <button
           type="button"
@@ -65,9 +71,9 @@ export function ToggleRow({ label, question, value, testId, onChange }: ToggleRo
           className={`h-8 px-3 rounded text-sm font-medium border ${pillCls(value === false)}`}
           data-testid={`${testId}-no`}
           aria-pressed={value === false}
-          aria-label={`${question} — no`}
+          aria-label={t('gentle.toggle.ariaNo', { question })}
         >
-          no
+          {t('gentle.toggle.no')}
         </button>
       </div>
     </div>
@@ -75,6 +81,7 @@ export function ToggleRow({ label, question, value, testId, onChange }: ToggleRo
 }
 
 export function CheckinForm({ initial, date, onSubmit, busy, error }: CheckinFormProps) {
+  const { t } = useT();
   const [sleptOk, setSleptOk] = useState<boolean | null>(initial?.sleptOk ?? null);
   const [meds, setMeds] = useState<boolean | null>(initial?.meds ?? null);
   const [ate, setAte] = useState<boolean | null>(initial?.ate ?? null);
@@ -107,20 +114,20 @@ export function CheckinForm({ initial, date, onSubmit, busy, error }: CheckinFor
       data-testid="checkin-form"
     >
       <div className="space-y-2">
-        {TOGGLES.map((t) => (
+        {TOGGLES.map((tog) => (
           <ToggleRow
-            key={t.key}
-            label={t.label}
-            question={t.question}
-            value={values[t.key] ?? null}
-            testId={t.key}
-            onChange={setters[t.key]!}
+            key={tog.key}
+            label={t(tog.labelKey)}
+            question={t(tog.questionKey)}
+            value={values[tog.key] ?? null}
+            testId={tog.key}
+            onChange={setters[tog.key]!}
           />
         ))}
       </div>
       <div>
         <label className="block text-xs text-slate-400 mb-1">
-          anything to note? (optional)
+          {t('gentle.noteLabel')}
         </label>
         <textarea
           value={note}
@@ -128,7 +135,7 @@ export function CheckinForm({ initial, date, onSubmit, busy, error }: CheckinFor
           rows={2}
           className="w-full rounded bg-slate-950 border border-slate-800 px-3 py-2 text-sm text-slate-100 focus:border-gentle-500 focus:outline-none"
           data-testid="note-input"
-          placeholder="one line is plenty"
+          placeholder={t('gentle.notePlaceholder')}
         />
       </div>
       {error ? <p className="text-sm text-red-400" data-testid="form-error">{error}</p> : null}
@@ -139,7 +146,7 @@ export function CheckinForm({ initial, date, onSubmit, busy, error }: CheckinFor
           className="rounded bg-gentle-600 hover:bg-gentle-500 disabled:opacity-50 px-4 py-2 text-sm font-semibold text-white"
           data-testid="save-button"
         >
-          {busy ? 'Saving…' : initial ? 'Update' : 'Save'}
+          {busy ? t('state.saving') : initial ? t('gentle.update') : t('btn.save')}
         </button>
       </div>
     </form>

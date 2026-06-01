@@ -2,6 +2,7 @@ import { createFileRoute, getRouteApi } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
 import { useState } from 'react';
 import { z } from 'zod';
+import { useT } from '@allenlabs/i18n/react';
 import { notifyError, notifySuccess } from '~/lib/toast';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { listMembersImpl } from '~/server/members';
@@ -31,6 +32,7 @@ export const Route = createFileRoute('/projects/$identifier/issues/new')({
 function NewIssuePage() {
   const project = parentRoute.useLoaderData();
   const { members } = Route.useLoaderData();
+  const { t } = useT();
   const [form, setForm] = useState({
     trackerId: project.trackers[0]?.id ?? 1,
     subject: '',
@@ -66,7 +68,7 @@ function NewIssuePage() {
           doneRatio: Number(form.doneRatio),
         },
       });
-      notifySuccess(`Issue #${created.id} created`);
+      notifySuccess(t('issueNew.createdToast', { id: created.id }));
       // Full-page redirect, NOT router.navigate(). Client-side router
       // transitions into a loader-backed route currently hang on this
       // TanStack Start build (same bug worked around with `reloadDocument`
@@ -78,7 +80,7 @@ function NewIssuePage() {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);
-      notifyError(`Could not create issue: ${message}`);
+      notifyError(t('issueNew.createError', { msg: message }));
     } finally {
       setBusy(false);
     }
@@ -86,11 +88,11 @@ function NewIssuePage() {
 
   return (
     <div className="card p-6">
-      <h2 className="text-xl font-semibold mb-4">New issue</h2>
+      <h2 className="text-xl font-semibold mb-4">{t('issueNew.title')}</h2>
       <form onSubmit={handle} className="space-y-3">
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="label">Tracker</label>
+            <label className="label">{t('issue.tracker')}</label>
             <select
               className="select"
               value={form.trackerId}
@@ -102,13 +104,13 @@ function NewIssuePage() {
             </select>
           </div>
           <div>
-            <label className="label">Assignee</label>
+            <label className="label">{t('issue.assignee')}</label>
             <select
               className="select"
               value={form.assignedToId}
               onChange={(e) => setForm({ ...form, assignedToId: e.target.value })}
             >
-              <option value="">— unassigned —</option>
+              <option value="">{t('issueNew.unassigned')}</option>
               {members.map((m) => (
                 <option key={m.id} value={m.userId}>{m.login}</option>
               ))}
@@ -116,7 +118,7 @@ function NewIssuePage() {
           </div>
         </div>
         <div>
-          <label className="label">Subject</label>
+          <label className="label">{t('issue.subject')}</label>
           <input
             className="input"
             value={form.subject}
@@ -125,7 +127,7 @@ function NewIssuePage() {
           />
         </div>
         <div>
-          <label className="label">Description (Markdown)</label>
+          <label className="label">{t('issueNew.descriptionMarkdown')}</label>
           <textarea
             className="textarea font-mono text-sm"
             rows={10}
@@ -135,33 +137,33 @@ function NewIssuePage() {
         </div>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <div>
-            <label className="label">Category</label>
+            <label className="label">{t('issue.category')}</label>
             <select
               className="select"
               value={form.categoryId}
               onChange={(e) => setForm({ ...form, categoryId: e.target.value })}
             >
-              <option value="">—</option>
+              <option value="">{t('btn.dash')}</option>
               {project.categories.map((c) => (
                 <option key={c.id} value={c.id}>{c.name}</option>
               ))}
             </select>
           </div>
           <div>
-            <label className="label">Target version</label>
+            <label className="label">{t('issue.version')}</label>
             <select
               className="select"
               value={form.fixedVersionId}
               onChange={(e) => setForm({ ...form, fixedVersionId: e.target.value })}
             >
-              <option value="">—</option>
+              <option value="">{t('btn.dash')}</option>
               {project.versions.map((v) => (
                 <option key={v.id} value={v.id}>{v.name}</option>
               ))}
             </select>
           </div>
           <div>
-            <label className="label">Start date</label>
+            <label className="label">{t('issue.startDate')}</label>
             <input
               type="date"
               className="input"
@@ -170,7 +172,7 @@ function NewIssuePage() {
             />
           </div>
           <div>
-            <label className="label">Due date</label>
+            <label className="label">{t('issue.dueDate')}</label>
             <input
               type="date"
               className="input"
@@ -179,7 +181,7 @@ function NewIssuePage() {
             />
           </div>
           <div>
-            <label className="label">Estimated hours</label>
+            <label className="label">{t('issue.estimatedHours')}</label>
             <input
               type="number"
               step="0.25"
@@ -190,7 +192,7 @@ function NewIssuePage() {
             />
           </div>
           <div>
-            <label className="label">% done</label>
+            <label className="label">{t('issue.doneRatio')}</label>
             <input
               type="number"
               min="0"
@@ -205,7 +207,7 @@ function NewIssuePage() {
         {error ? <p className="text-sm text-red-700">{error}</p> : null}
         <div className="pt-2">
           <button className="btn-primary" disabled={busy}>
-            {busy ? 'Creating…' : 'Create'}
+            {busy ? t('btn.creating') : t('btn.create')}
           </button>
         </div>
       </form>

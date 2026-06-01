@@ -1,6 +1,7 @@
 import { createFileRoute, useRouter } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
 import { useState } from 'react';
+import { useT } from '@allenlabs/i18n/react';
 import {
   issueApiClientImpl,
   issueApiClientSchema,
@@ -42,6 +43,7 @@ interface IssueFormProps {
 }
 
 export function IssueForm({ busy, onSubmit }: IssueFormProps) {
+  const { t } = useT();
   const [clientId, setClientId] = useState('');
   const [name, setName] = useState('');
   return (
@@ -56,11 +58,11 @@ export function IssueForm({ busy, onSubmit }: IssueFormProps) {
       }}
       className="card p-4 mb-6"
     >
-      <h2 className="text-sm font-semibold text-slate-200 mb-3">Issue a new token</h2>
+      <h2 className="text-sm font-semibold text-slate-200 mb-3">{t('rl.issueToken')}</h2>
       <div className="flex flex-col gap-2 sm:flex-row">
         <input
           name="clientId"
-          placeholder="cli, browser-ext, …"
+          placeholder={t('rl.clientIdPlaceholder')}
           value={clientId}
           onChange={(e) => setClientId(e.target.value)}
           className="rounded bg-slate-800 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 flex-1"
@@ -68,7 +70,7 @@ export function IssueForm({ busy, onSubmit }: IssueFormProps) {
         />
         <input
           name="name"
-          placeholder="Friendly label"
+          placeholder={t('rl.friendlyLabel')}
           value={name}
           onChange={(e) => setName(e.target.value)}
           className="rounded bg-slate-800 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 flex-1"
@@ -80,7 +82,7 @@ export function IssueForm({ busy, onSubmit }: IssueFormProps) {
           className="rounded bg-rl-600 hover:bg-rl-500 disabled:opacity-50 px-4 py-2 text-sm font-semibold text-white"
           data-testid="issue-submit"
         >
-          Issue
+          {t('rl.issue')}
         </button>
       </div>
     </form>
@@ -93,10 +95,11 @@ interface SecretReveal {
 }
 
 export function SecretBanner({ secret }: { secret: SecretReveal }) {
+  const { t } = useT();
   return (
     <div className="card p-4 mb-6 border-rl-600" data-testid="secret-banner">
       <p className="text-sm text-rl-300 mb-2">
-        New token issued.  Copy now — you won&apos;t see this secret again.
+        {t('rl.secretIssued')}
       </p>
       <div className="text-xs text-slate-400 mb-1">client_id</div>
       <code className="block break-all text-sm text-slate-100 mb-2" data-testid="secret-client-id">
@@ -115,10 +118,11 @@ export function ClientList({
 }: {
   clients: Array<{ id: number; clientId: string; name: string; createdAt: string }>;
 }) {
+  const { t } = useT();
   if (clients.length === 0) {
     return (
       <div className="card p-4 text-sm text-slate-400" data-testid="clients-empty">
-        No tokens yet.  Issue one above.
+        {t('rl.noTokens')}
       </div>
     );
   }
@@ -151,12 +155,13 @@ function ApiClientsPage() {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [secret, setSecret] = useState<SecretReveal | null>(null);
+  const { t } = useT();
 
   return (
     <div className="max-w-2xl mx-auto p-6">
-      <h1 className="text-lg font-semibold text-slate-200 mb-1">API tokens</h1>
+      <h1 className="text-lg font-semibold text-slate-200 mb-1">{t('rl.apiTokens')}</h1>
       <p className="text-xs text-slate-500 mb-6">
-        HMAC-signed clients for CLI / browser extension / automation.
+        {t('rl.apiTokensSubtitle')}
       </p>
       {secret ? <SecretBanner secret={secret} /> : null}
       <IssueForm

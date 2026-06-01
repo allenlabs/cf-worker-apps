@@ -8,8 +8,14 @@ vi.mock('@tanstack/react-router', () => ({
   ),
 }));
 
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render as rtlRender, screen, fireEvent } from '@testing-library/react';
+import type { ReactElement } from 'react';
+import { I18nProvider } from '@allenlabs/i18n/react';
+import { appDict } from '~/i18n/dict';
 import { Header } from '~/components/Header';
+
+const render = (ui: ReactElement) =>
+  rtlRender(<I18nProvider locale="en" dict={appDict}>{ui}</I18nProvider>);
 
 describe('Header', () => {
   it('renders the logo + search box + new link', () => {

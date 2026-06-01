@@ -18,11 +18,17 @@ vi.mock('@tanstack/react-start/server', () => ({
 }));
 
 import { render, screen } from '@testing-library/react';
+import { I18nProvider } from '@allenlabs/i18n/react';
+import { appDict } from '~/i18n/dict';
 import { NoSession } from '~/routes/index';
 
 describe('NoSession', () => {
   it('renders signed-out copy', () => {
-    render(<NoSession />);
+    render(
+      <I18nProvider locale="en" dict={appDict}>
+        <NoSession />
+      </I18nProvider>,
+    );
     expect(screen.getByTestId('no-session').textContent).toContain('Signed out');
   });
 });
