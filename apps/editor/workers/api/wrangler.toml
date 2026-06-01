@@ -1,0 +1,31 @@
+name = "editor-api"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Smart Placement: relocate near Hyperdrive → Hetzner Postgres (Helsinki).
+[placement]
+mode = "smart"
+workers_dev = true
+
+# Custom domain — DNS + SSL handled by Cloudflare (allenlabs.org on-account).
+[[routes]]
+pattern = "editor-api.allenlabs.org"
+custom_domain = true
+
+# Hyperdrive → Hetzner Postgres (`allenlabs` DB, `editor` schema). Shared
+# Hyperdrive config id, same as PM / inbox.
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "0b76cf08a44443d39d12f0d51ed059f5"
+
+[vars]
+APP_NAME = "Editor"
+COLLAB_URL = "wss://allenlabs-collab.allenlim.workers.dev/editor"
+
+# Secrets — set via `wrangler secret put` (never commit values):
+#   wrangler secret put EDITOR_HMAC_SECRET --config workers/api/wrangler.toml
+#       (MUST match the same secret on editor-web)
+#   wrangler secret put COLLAB_HMAC_SECRET --config workers/api/wrangler.toml
+#       (MUST equal the allenlabs-collab worker's token-signing secret)
+#   wrangler secret put OTEL_ACCESS_ID / OTEL_ACCESS_SECRET / OTEL_BEARER_TOKEN

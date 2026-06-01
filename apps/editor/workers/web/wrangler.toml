@@ -1,0 +1,31 @@
+name = "editor-web"
+# `npm run build` (TanStack Start vite plugin) emits the complete worker at
+# dist/server/server.js. We bypass @cloudflare/vite-plugin (see vite.config.ts)
+# and deploy that file directly with `--assets dist/client`.
+main = "../../dist/server/server.js"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[placement]
+mode = "smart"
+workers_dev = true
+
+assets = { directory = "../../dist/client", binding = "ASSETS" }
+
+# Custom domain — DNS + SSL handled by Cloudflare (allenlabs.org on-account).
+[[routes]]
+pattern = "editor.allenlabs.org"
+custom_domain = true
+
+[vars]
+APP_NAME = "Editor"
+AUTH_WEB_URL = "https://auth.allen.company"
+AUTH_API_URL = "https://auth-api.allen.company"
+EDITOR_API_URL = "https://editor-api.allenlabs.org"
+PUBLIC_BASE_URL = "https://editor.allenlabs.org"
+
+# No KV / D1 bindings — v1 drops suite-wide session revocation (see
+# session.server.ts). Secrets — set via `wrangler secret put`:
+#   wrangler secret put EDITOR_HMAC_SECRET --config workers/web/wrangler.toml
+#       (MUST match the same secret on editor-api)
+#   wrangler secret put OTEL_ACCESS_ID / OTEL_ACCESS_SECRET / OTEL_BEARER_TOKEN
