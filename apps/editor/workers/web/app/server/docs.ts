@@ -206,6 +206,20 @@ export function archivePageImpl(
   return apiPostImpl<{ ok: boolean }>(env, '/v1/pages/archive', userBody(user, { id }), deps);
 }
 
+export function uploadFileImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { filename: string; contentType: string; dataBase64: string },
+  deps?: ApiClientDeps,
+): Promise<{ url: string; key: string }> {
+  return apiPostImpl<{ url: string; key: string }>(
+    env,
+    '/v1/files/upload',
+    userBody(user, input),
+    deps,
+  );
+}
+
 // ---------- createServerFn wrappers ----------
 /* v8 ignore start */
 
@@ -351,6 +365,23 @@ export const archivePage = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
     const user = await requireUser();
     return archivePageImpl(getEnv(), user, data.id);
+  });
+
+// Image upload — the client reads File→base64 and posts it here; we inject the
+// verified user and forward to editor-api, returning the public URL.
+export const uploadFile = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        filename: z.string().max(255).default('image'),
+        contentType: z.string().min(1).max(128),
+        dataBase64: z.string().min(1),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return uploadFileImpl(getEnv(), user, data);
   });
 
 /* v8 ignore stop */

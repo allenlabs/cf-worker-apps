@@ -8,6 +8,13 @@ describe('DEFAULT_SLASH_ITEMS', () => {
     expect(new Set(titles).size).toBe(titles.length); // unique
     for (const it of DEFAULT_SLASH_ITEMS) expect(typeof it.command).toBe('function');
   });
+
+  it('includes the Phase 2 rich blocks', () => {
+    const titles = DEFAULT_SLASH_ITEMS.map((i) => i.title);
+    expect(titles).toEqual(
+      expect.arrayContaining(['Callout', 'Toggle', 'Image', 'Table', 'Columns', 'Bookmark']),
+    );
+  });
 });
 
 describe('filterSlashItems', () => {

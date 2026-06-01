@@ -29,6 +29,7 @@ import {
   pageTreeImpl,
   updatePageImpl,
 } from './pages';
+import { prepareUpload, publicUrlFor } from './files';
 import { mintCollabToken } from '../lib/hmac';
 import type { AppBindings } from '../context';
 
@@ -168,6 +169,32 @@ v1Router.post('/pages/archive', async (c) => {
   const ok = await archivePageImpl(c.get('db'), parsed.data.id);
   if (!ok) return c.json({ error: 'not found' }, 404);
   return c.json({ ok: true }, 200);
+});
+
+// ---------- file upload (image → R2) ----------
+
+const uploadSchema = z.object({
+  filename: z.string().max(255).optional(),
+  contentType: z.string().min(1).max(128),
+  dataBase64: z.string().min(1),
+});
+v1Router.post('/files/upload', async (c) => {
+  // userId is already verified by the HMAC middleware; presence is enough here.
+  const parsed = uploadSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const prepared = prepareUpload(parsed.data, () => crypto.randomUUID());
+  if ('ok' in prepared && prepared.ok === false) {
+    return c.json({ error: prepared.error }, prepared.status);
+  }
+  const { bytes, key, contentType } = prepared as {
+    bytes: Uint8Array;
+    key: string;
+    contentType: string;
+  };
+  await c.env.FILES.put(key, bytes, { httpMetadata: { contentType } });
+  return c.json({ url: publicUrlFor(key), key }, 200);
 });
 
 // ---------- mention search (unchanged) ----------

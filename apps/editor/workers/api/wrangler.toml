@@ -19,6 +19,12 @@ custom_domain = true
 binding = "HYPERDRIVE"
 id = "0b76cf08a44443d39d12f0d51ed059f5"
 
+# R2 bucket for uploaded images (APAC). Written by POST /v1/files/upload and
+# served publicly by GET /files/*.
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "editor-allenlabs-files"
+
 [vars]
 APP_NAME = "Editor"
 COLLAB_URL = "wss://allenlabs-collab.allenlim.workers.dev/editor"

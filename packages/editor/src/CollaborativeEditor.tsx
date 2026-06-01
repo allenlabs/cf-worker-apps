@@ -3,6 +3,16 @@ import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
 import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
+import Image from '@tiptap/extension-image';
+import Link from '@tiptap/extension-link';
+import Underline from '@tiptap/extension-underline';
+import Highlight from '@tiptap/extension-highlight';
+import { TextStyle } from '@tiptap/extension-text-style';
+import { Color } from '@tiptap/extension-color';
+import Table from '@tiptap/extension-table';
+import TableRow from '@tiptap/extension-table-row';
+import TableHeader from '@tiptap/extension-table-header';
+import TableCell from '@tiptap/extension-table-cell';
 import Collaboration from '@tiptap/extension-collaboration';
 import CollaborationCursor from '@tiptap/extension-collaboration-cursor';
 import * as Y from 'yjs';
@@ -10,7 +20,13 @@ import { WebsocketProvider } from 'y-websocket';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { SlashCommand } from './extensions/slash';
 import { makeMention } from './extensions/mention';
-import type { EditorProps } from './lib/types';
+import { Callout } from './extensions/callout';
+import { Toggle, ToggleSummary } from './extensions/toggle';
+import { Bookmark } from './extensions/bookmark';
+import { Columns, Column } from './extensions/columns';
+import { BubbleToolbar } from './extensions/bubble-toolbar';
+import { DEFAULT_SLASH_ITEMS } from './lib/slash-items';
+import type { EditorProps, SlashItem } from './lib/types';
 
 /** Deterministic pastel cursor color from a name, so a user is the same hue
  * for everyone without coordinating a palette. */
@@ -18,6 +34,55 @@ function colorFor(name: string): string {
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360;
   return `hsl(${h}, 70%, 55%)`;
+}
+
+/** An editor handle narrow enough for the image helpers (avoids importing the
+ * full TipTap Editor type just for `chain().setImage`). */
+type ImageEditor = {
+  chain: () => { focus: () => { setImage: (a: { src: string }) => { run: () => boolean } } };
+};
+
+/** Upload a file then insert it as an image node. Swallows failures so a bad
+ * upload never wedges the editor. */
+async function insertUploadedImage(
+  editor: ImageEditor,
+  upload: (file: File) => Promise<string>,
+  file: File,
+): Promise<void> {
+  try {
+    const url = await upload(file);
+    editor.chain().focus().setImage({ src: url }).run();
+  } catch {
+    /* upload failed — leave the doc untouched */
+  }
+}
+
+/** Open a hidden file picker, then upload + insert the chosen image. */
+function pickAndUploadImage(
+  editor: ImageEditor,
+  upload: (file: File) => Promise<string>,
+): void {
+  if (typeof document === 'undefined') return;
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  input.style.display = 'none';
+  input.addEventListener('change', () => {
+    const file = input.files?.[0];
+    if (file) void insertUploadedImage(editor, upload, file);
+    input.remove();
+  });
+  document.body.appendChild(input);
+  input.click();
+}
+
+/** First image file in a clipboard/drag payload, if any. */
+function imageFileFrom(data: DataTransfer | null): File | null {
+  if (!data) return null;
+  for (const item of Array.from(data.files)) {
+    if (item.type.startsWith('image/')) return item;
+  }
+  return null;
 }
 
 /**
@@ -67,6 +132,25 @@ export function CollaborativeEditor(props: EditorProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collab?.url, collab?.docId]);
 
+  const { uploadImage } = props;
+
+  // Slash items: clone the defaults and, when an uploader is wired, swap the
+  // "Image" item's command for a hidden-file-input upload flow.
+  const slashItems = useMemo<SlashItem[]>(() => {
+    if (!uploadImage) return DEFAULT_SLASH_ITEMS;
+    return DEFAULT_SLASH_ITEMS.map((it) =>
+      it.title === 'Image'
+        ? {
+            ...it,
+            command: ({ editor, range }) => {
+              editor.chain().focus().deleteRange(range).run();
+              pickAndUploadImage(editor, uploadImage);
+            },
+          }
+        : it,
+    );
+  }, [uploadImage]);
+
   const extensions = useMemo<Extensions>(() => {
     const ext: Extensions = [
       // History conflicts with Yjs undo; disable it in collab mode.
@@ -76,7 +160,26 @@ export function CollaborativeEditor(props: EditorProps) {
       }),
       TaskList,
       TaskItem.configure({ nested: true }),
-      SlashCommand,
+      // Marks + media.
+      Underline,
+      Link.configure({ openOnClick: false, autolink: true, HTMLAttributes: { class: 'ae-link' } }),
+      Highlight.configure({ multicolor: true }),
+      TextStyle,
+      Color,
+      Image.configure({ HTMLAttributes: { class: 'ae-image' } }),
+      // Tables.
+      Table.configure({ resizable: true }),
+      TableRow,
+      TableHeader,
+      TableCell,
+      // Custom blocks.
+      Callout,
+      Toggle,
+      ToggleSummary,
+      Bookmark,
+      Columns,
+      Column,
+      SlashCommand.configure({ items: slashItems }),
     ];
     if (props.mention) ext.push(makeMention(props.mention));
     if (collab && provider && ydocRef.current) {
@@ -90,7 +193,11 @@ export function CollaborativeEditor(props: EditorProps) {
     }
     return ext;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [collab, provider, props.mention, props.placeholder]);
+  }, [collab, provider, props.mention, props.placeholder, slashItems]);
+
+  // The paste/drop handlers need the editor instance, but it doesn't exist yet
+  // when we build the config. A ref (kept current below) breaks that cycle.
+  const editorRef = useRef<ImageEditor | null>(null);
 
   const editor = useEditor(
     {
@@ -98,10 +205,34 @@ export function CollaborativeEditor(props: EditorProps) {
       editable: props.editable ?? true,
       content: collab ? undefined : props.value ?? '',
       immediatelyRender: false,
+      editorProps: {
+        // Paste/drop image files → upload → insert. Only intercept when there's
+        // an actual image file and an uploader; otherwise fall through to the
+        // default handlers (so pasting text/HTML still works).
+        handlePaste: (_view, event) => {
+          const ed = editorRef.current;
+          if (!uploadImage || !ed) return false;
+          const file = imageFileFrom(event.clipboardData);
+          if (!file) return false;
+          event.preventDefault();
+          void insertUploadedImage(ed, uploadImage, file);
+          return true;
+        },
+        handleDrop: (_view, event) => {
+          const ed = editorRef.current;
+          if (!uploadImage || !ed) return false;
+          const file = imageFileFrom((event as DragEvent).dataTransfer);
+          if (!file) return false;
+          event.preventDefault();
+          void insertUploadedImage(ed, uploadImage, file);
+          return true;
+        },
+      },
       onUpdate: ({ editor }) => props.onUpdate?.(editor.getHTML()),
     },
     [extensions, props.editable],
   );
+  editorRef.current = editor;
 
   // In collab mode the editor can't initialise until the provider exists
   // (Collaboration extension needs the doc). Show a lightweight placeholder.
@@ -114,10 +245,13 @@ export function CollaborativeEditor(props: EditorProps) {
   }
 
   return (
-    <EditorContent
-      editor={editor}
-      className={props.className}
-      data-testid="editor-content"
-    />
+    <>
+      {editor ? <BubbleToolbar editor={editor} /> : null}
+      <EditorContent
+        editor={editor}
+        className={props.className}
+        data-testid="editor-content"
+      />
+    </>
   );
 }

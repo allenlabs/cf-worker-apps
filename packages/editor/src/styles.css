@@ -121,3 +121,189 @@
   font-size: 0.75rem;
   color: #6b7280;
 }
+
+/* Links + highlight + images */
+.ProseMirror .ae-link,
+.ProseMirror a {
+  color: #2563eb;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.ProseMirror mark {
+  background: #fde68a;
+  border-radius: 0.2rem;
+  padding: 0 0.1em;
+}
+.ProseMirror img.ae-image,
+.ProseMirror img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.375rem;
+  display: block;
+}
+.ProseMirror img.ProseMirror-selectednode {
+  outline: 2px solid #6366f1;
+}
+
+/* Callout */
+.ae-callout {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  margin: 0.5rem 0;
+}
+.ae-callout-emoji {
+  font-size: 1.2rem;
+  line-height: 1.5;
+  user-select: none;
+}
+.ae-callout-body {
+  flex: 1;
+  min-width: 0;
+}
+.ae-callout-body > :first-child {
+  margin-top: 0;
+}
+.ae-callout-body > :last-child {
+  margin-bottom: 0;
+}
+
+/* Toggle (collapsible) */
+.ae-toggle {
+  margin: 0.25rem 0;
+}
+.ae-toggle-caret {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #6b7280;
+  font-size: 0.8rem;
+  padding: 0 0.25rem 0 0;
+  user-select: none;
+}
+.ae-toggle-summary {
+  display: inline;
+  font-weight: 500;
+}
+.ae-toggle > .ae-toggle-content {
+  margin-left: 1.1rem;
+}
+.ae-toggle[data-open='false'] > .ae-toggle-content > :not(.ae-toggle-summary) {
+  display: none;
+}
+/* Hide non-summary children when closed (NodeView path). */
+.ae-toggle[data-open='false'] .ae-toggle-content > *:nth-child(n + 2) {
+  display: none;
+}
+
+/* Bookmark card */
+.ae-bookmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  text-decoration: none;
+  color: #111827;
+  margin: 0.25rem 0;
+  max-width: 100%;
+}
+.ae-bookmark:hover {
+  background: #f9fafb;
+}
+.ae-bookmark-favicon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+.ae-bookmark-host {
+  font-size: 0.875rem;
+  color: #374151;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Columns */
+.ae-columns {
+  display: flex;
+  gap: 1rem;
+  margin: 0.5rem 0;
+}
+.ae-column {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Tables */
+.ProseMirror table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+  margin: 0.5rem 0;
+  overflow: hidden;
+}
+.ProseMirror table td,
+.ProseMirror table th {
+  border: 1px solid #d1d5db;
+  padding: 0.4rem 0.6rem;
+  vertical-align: top;
+  position: relative;
+}
+.ProseMirror table th {
+  background: #f3f4f6;
+  font-weight: 600;
+  text-align: left;
+}
+.ProseMirror table .selectedCell::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(99, 102, 241, 0.15);
+  pointer-events: none;
+}
+.ProseMirror table .column-resize-handle {
+  position: absolute;
+  right: -2px;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: #6366f1;
+  cursor: col-resize;
+}
+
+/* Bubble (selection) toolbar */
+.ae-bubble-menu {
+  display: flex;
+  gap: 0.1rem;
+  background: #111827;
+  border-radius: 0.5rem;
+  padding: 0.2rem;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25);
+}
+.ae-bubble-btn {
+  background: none;
+  border: none;
+  color: #e5e7eb;
+  cursor: pointer;
+  border-radius: 0.3rem;
+  padding: 0.25rem 0.45rem;
+  font-size: 0.875rem;
+  line-height: 1;
+}
+.ae-bubble-btn:hover {
+  background: #374151;
+}
+.ae-bubble-btn.ae-bubble-active {
+  background: #4f46e5;
+  color: #fff;
+}
+.ae-bubble-hl {
+  background: #fde68a;
+  color: #111827;
+  border-radius: 0.2rem;
+  padding: 0 0.15rem;
+}

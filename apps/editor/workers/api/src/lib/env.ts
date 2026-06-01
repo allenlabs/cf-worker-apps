@@ -3,6 +3,9 @@
 export interface Env {
   HYPERDRIVE: Hyperdrive;
 
+  // R2 bucket for uploaded images (served publicly via GET /files/*).
+  FILES: R2Bucket;
+
   APP_NAME: string;
 
   // Real-time collab backend (allenlabs-collab Durable Object). The API

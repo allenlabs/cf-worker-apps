@@ -75,6 +75,61 @@ export const DEFAULT_SLASH_ITEMS: SlashItem[] = [
     command: ({ editor, range }) =>
       editor.chain().focus().deleteRange(range).setHorizontalRule().run(),
   },
+  {
+    title: 'Callout',
+    hint: 'Highlighted note block',
+    keywords: ['note', 'info', 'tip', 'aside', 'box'],
+    command: ({ editor, range }) =>
+      editor.chain().focus().deleteRange(range).setCallout().run(),
+  },
+  {
+    title: 'Toggle',
+    hint: 'Collapsible section',
+    keywords: ['collapse', 'details', 'expand', 'accordion'],
+    command: ({ editor, range }) =>
+      editor.chain().focus().deleteRange(range).setToggle().run(),
+  },
+  {
+    title: 'Image',
+    hint: 'Upload or embed by URL',
+    keywords: ['img', 'picture', 'photo', 'embed'],
+    // Default behaviour prompts for a URL. CollaborativeEditor overrides this
+    // with an upload flow when an `uploadImage` handler is provided.
+    command: ({ editor, range }) => {
+      const url = typeof window !== 'undefined' ? window.prompt('Image URL') : null;
+      editor.chain().focus().deleteRange(range).run();
+      if (url) editor.chain().focus().setImage({ src: url }).run();
+    },
+  },
+  {
+    title: 'Table',
+    hint: '3×3 grid with header row',
+    keywords: ['grid', 'spreadsheet', 'cells', 'rows', 'columns'],
+    command: ({ editor, range }) =>
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertTable({ rows: 3, cols: 3, withHeaderRow: true })
+        .run(),
+  },
+  {
+    title: 'Columns',
+    hint: '2-column layout',
+    keywords: ['column', 'layout', 'split', 'side'],
+    command: ({ editor, range }) =>
+      editor.chain().focus().deleteRange(range).setColumns().run(),
+  },
+  {
+    title: 'Bookmark',
+    hint: 'Link card from a URL',
+    keywords: ['link', 'url', 'card', 'embed'],
+    command: ({ editor, range }) => {
+      const url = typeof window !== 'undefined' ? window.prompt('Bookmark URL') : null;
+      editor.chain().focus().deleteRange(range).run();
+      if (url) editor.chain().focus().setBookmark({ url }).run();
+    },
+  },
 ];
 
 /** Case-insensitive filter over title + keywords. Pure, so it's unit-tested. */

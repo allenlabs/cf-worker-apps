@@ -11,11 +11,34 @@ import {
   listWorkspaces,
   searchMentions,
   updatePage,
+  uploadFile,
   type CollabToken,
   type PageFull,
   type PageNode,
   type Workspace,
 } from '~/server/docs';
+
+/** Read a File to a bare base64 string (no data: prefix). */
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result);
+      resolve(result.includes(',') ? result.slice(result.indexOf(',') + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+/** Editor upload handler: File → base64 → server fn → public URL. */
+async function uploadImageFile(file: File): Promise<string> {
+  const dataBase64 = await fileToBase64(file);
+  const { url } = await uploadFile({
+    data: { filename: file.name, contentType: file.type, dataBase64 },
+  });
+  return url;
+}
 
 export const Route = createFileRoute('/p/$pageId')({
   beforeLoad: async () => {
@@ -166,6 +189,7 @@ function PageView() {
                 const results = await searchMentions({ data: { q } });
                 return results;
               }}
+              uploadImage={uploadImageFile}
               onUpdate={handleUpdate}
             />
           ) : (

@@ -43,6 +43,11 @@ export interface EditorProps {
   placeholder?: string;
   collab?: CollabConfig;
   mention?: MentionSource;
+  /**
+   * Upload an image file and resolve to its public URL. Wired into paste/drop
+   * and the "Image" slash item. If omitted, images can only be added by URL.
+   */
+  uploadImage?: (file: File) => Promise<string>;
   /** Called with the current HTML on every change (for snapshotting to a DB). */
   onUpdate?: (html: string) => void;
   className?: string;
