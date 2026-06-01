@@ -120,6 +120,7 @@ function NewIssuePage() {
         <div>
           <label className="label">{t('issue.subject')}</label>
           <input
+            data-testid="issue-subject"
             className="input"
             value={form.subject}
             onChange={(e) => setForm({ ...form, subject: e.target.value })}
@@ -206,7 +207,7 @@ function NewIssuePage() {
         </div>
         {error ? <p className="text-sm text-red-700">{error}</p> : null}
         <div className="pt-2">
-          <button className="btn-primary" disabled={busy}>
+          <button data-testid="issue-submit" className="btn-primary" disabled={busy}>
             {busy ? t('btn.creating') : t('btn.create')}
           </button>
         </div>

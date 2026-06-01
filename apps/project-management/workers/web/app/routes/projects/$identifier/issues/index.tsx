@@ -12,6 +12,7 @@ const parentRoute = getRouteApi('/projects/$identifier');
 
 const SEARCH = {
   status: ['open', 'closed', 'all'] as const,
+  assignee: ['any', 'me'] as const,
 };
 
 // Inline server fn — TanStack Start 1.168.9 dispatch bug workaround.
@@ -21,6 +22,9 @@ const loadIssues = createServerFn({ method: 'GET' })
       .object({
         identifier: z.string(),
         statusFilter: z.enum(['open', 'closed', 'all']),
+        // 'any' = no assignee filter; 'me' resolves to the current user's
+        // local id server-side (the client never learns the numeric id).
+        assignee: z.enum(['any', 'me']),
         q: z.string().optional(),
         sort: z.enum(['updated', 'priority', 'id']),
       })
@@ -35,6 +39,7 @@ const loadIssues = createServerFn({ method: 'GET' })
     const issues = await listIssuesImpl(db, {
       projectId: project.id,
       statusFilter: data.statusFilter,
+      assignee: data.assignee === 'me' && me ? me.id : undefined,
       q: data.q,
       sort: data.sort,
     });
@@ -46,6 +51,9 @@ export const Route = createFileRoute('/projects/$identifier/issues/')({
     status: (SEARCH.status as readonly string[]).includes(String(s.status))
       ? (s.status as 'open' | 'closed' | 'all')
       : 'open',
+    assignee: (SEARCH.assignee as readonly string[]).includes(String(s.assignee))
+      ? (s.assignee as 'any' | 'me')
+      : 'any',
     q: s.q ? String(s.q) : undefined,
     sort: s.sort ? (String(s.sort) as 'updated' | 'priority' | 'id') : 'updated',
   }),
@@ -55,6 +63,7 @@ export const Route = createFileRoute('/projects/$identifier/issues/')({
       data: {
         identifier: params.identifier,
         statusFilter: deps.status,
+        assignee: deps.assignee,
         q: deps.q,
         sort: deps.sort,
       },
@@ -92,6 +101,18 @@ function IssuesIndexPage() {
             <option value="open">{t('issuesList.statusOpen')}</option>
             <option value="closed">{t('issuesList.statusClosed')}</option>
             <option value="all">{t('issuesList.statusAll')}</option>
+          </select>
+        </div>
+        <div>
+          <label className="label">{t('issue.assignee')}</label>
+          <select
+            data-testid="filter-assignee"
+            className="select"
+            value={search.assignee}
+            onChange={(e) => navigate({ search: (s) => ({ ...s, assignee: e.target.value as any }) })}
+          >
+            <option value="any">{t('issuesList.statusAll')}</option>
+            <option value="me">{t('issue.assigneeMe')}</option>
           </select>
         </div>
         <div>
@@ -151,7 +172,7 @@ function IssuesIndexPage() {
           </thead>
           <tbody>
             {issues.map((i) => (
-              <tr key={i.id}>
+              <tr key={i.id} data-testid={`issue-row-${i.id}`}>
                 <td className="font-mono text-xs">#{i.id}</td>
                 <td><TrackerBadge name={i.trackerName} color={i.trackerColor} /></td>
                 <td><StatusBadge name={i.statusName} color={i.statusColor} closed={i.statusIsClosed} /></td>
