@@ -15,6 +15,30 @@ describe('DEFAULT_SLASH_ITEMS', () => {
       expect.arrayContaining(['Callout', 'Toggle', 'Image', 'Table', 'Columns', 'Bookmark']),
     );
   });
+
+  it('includes the Phase 13 blocks (math/embed/media/toc/breadcrumb)', () => {
+    const titles = DEFAULT_SLASH_ITEMS.map((i) => i.title);
+    expect(titles).toEqual(
+      expect.arrayContaining([
+        'Equation',
+        'Embed',
+        'Video',
+        'Audio',
+        'File',
+        'Table of contents',
+        'Breadcrumb',
+      ]),
+    );
+  });
+
+  it('gives every Phase 13 item an icon', () => {
+    const phase13 = ['Equation', 'Embed', 'Video', 'Audio', 'File', 'Table of contents', 'Breadcrumb'];
+    for (const title of phase13) {
+      const item = DEFAULT_SLASH_ITEMS.find((i) => i.title === title);
+      expect(item, title).toBeDefined();
+      expect(item!.icon, title).toBeTruthy();
+    }
+  });
 });
 
 describe('filterSlashItems', () => {
@@ -24,9 +48,10 @@ describe('filterSlashItems', () => {
   });
 
   it('matches on title (case-insensitive)', () => {
-    const r = filterSlashItems(DEFAULT_SLASH_ITEMS, 'HEAD');
-    expect(r.length).toBe(3);
-    expect(r.every((i) => i.title.startsWith('Heading'))).toBe(true);
+    const r = filterSlashItems(DEFAULT_SLASH_ITEMS, 'HEADING');
+    expect(r.filter((i) => i.title.startsWith('Heading'))).toHaveLength(3);
+    // "heading" also appears as a keyword on the Table of contents item.
+    expect(r.map((i) => i.title)).toContain('Table of contents');
   });
 
   it('matches on keywords', () => {

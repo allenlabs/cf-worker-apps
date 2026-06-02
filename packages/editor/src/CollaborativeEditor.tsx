@@ -30,12 +30,22 @@ import { BubbleToolbar } from './extensions/bubble-toolbar';
 import { DragHandle } from './extensions/block-menu';
 import { MarkdownRules } from './extensions/markdown-rules';
 import { SyncedBlock } from './extensions/synced-block';
+import { InlineMath, MathBlock } from './extensions/math';
+import { Embed } from './extensions/embed';
+import { Video, Audio, FileBlock } from './extensions/media';
+import { HeadingId } from './extensions/heading-id';
+import { TableOfContents } from './extensions/toc';
+import { Breadcrumb } from './extensions/breadcrumb';
 import {
   DEFAULT_SLASH_ITEMS,
   makeChildPageSlashItem,
   makeSyncedBlockSlashItem,
 } from './lib/slash-items';
 import type { EditorProps, SlashItem } from './lib/types';
+// KaTeX stylesheet — equations render via katex.renderToString, which produces
+// markup that depends on this CSS. Imported here so any host of the package
+// gets math styling without extra wiring (the package marks *.css sideEffects).
+import 'katex/dist/katex.min.css';
 
 /** Deterministic pastel cursor color from a name, so a user is the same hue
  * for everyone without coordinating a palette. */
@@ -94,6 +104,39 @@ function imageFileFrom(data: DataTransfer | null): File | null {
   return null;
 }
 
+/** Result of {@link EditorProps.uploadFile}. */
+type UploadFileFn = (file: File) => Promise<{ url: string; name: string }>;
+
+/**
+ * Open a hidden file picker, upload the chosen file via the generic
+ * `uploadFile` handler, then call `insert` with the result. Swallows failures
+ * so a bad upload never wedges the editor. Used by Video/Audio/File slash items.
+ */
+function pickAndUploadFile(
+  upload: UploadFileFn,
+  accept: string,
+  insert: (res: { url: string; name: string; size?: number }) => void,
+): void {
+  if (typeof document === 'undefined') return;
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = accept;
+  input.style.display = 'none';
+  input.addEventListener('change', () => {
+    const file = input.files?.[0];
+    if (file) {
+      void upload(file)
+        .then((res) => insert({ url: res.url, name: res.name, size: file.size }))
+        .catch(() => {
+          /* upload failed — leave the doc untouched */
+        });
+    }
+    input.remove();
+  });
+  document.body.appendChild(input);
+  input.click();
+}
+
 /**
  * Collaborative, block-based rich-text editor.
  *
@@ -141,7 +184,7 @@ export function CollaborativeEditor(props: EditorProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collab?.url, collab?.docId]);
 
-  const { uploadImage, onCreateChildPage } = props;
+  const { uploadImage, uploadFile, onCreateChildPage } = props;
 
   // Child-page click → navigate. Kept in a ref so the node's (config-time)
   // click handler always sees the latest navigation callback without
@@ -168,6 +211,46 @@ export function CollaborativeEditor(props: EditorProps) {
           : it,
       );
     }
+    // When a generic uploader is wired, route Video/Audio/File through a hidden
+    // file picker → upload → insert the matching media node (vs. a URL prompt).
+    if (uploadFile) {
+      items = items.map((it) => {
+        if (it.title === 'Video') {
+          return {
+            ...it,
+            command: ({ editor, range }) => {
+              editor.chain().focus().deleteRange(range).run();
+              pickAndUploadFile(uploadFile, 'video/*', ({ url }) =>
+                editor.chain().focus().setVideo({ src: url }).run(),
+              );
+            },
+          };
+        }
+        if (it.title === 'Audio') {
+          return {
+            ...it,
+            command: ({ editor, range }) => {
+              editor.chain().focus().deleteRange(range).run();
+              pickAndUploadFile(uploadFile, 'audio/*', ({ url }) =>
+                editor.chain().focus().setAudio({ src: url }).run(),
+              );
+            },
+          };
+        }
+        if (it.title === 'File') {
+          return {
+            ...it,
+            command: ({ editor, range }) => {
+              editor.chain().focus().deleteRange(range).run();
+              pickAndUploadFile(uploadFile, '*/*', ({ url, name, size }) =>
+                editor.chain().focus().setFile({ src: url, name, size }).run(),
+              );
+            },
+          };
+        }
+        return it;
+      });
+    }
     if (onCreateChildPage) {
       items = [...items, makeChildPageSlashItem(onCreateChildPage)];
     }
@@ -182,7 +265,7 @@ export function CollaborativeEditor(props: EditorProps) {
       ];
     }
     return items;
-  }, [uploadImage, onCreateChildPage, props.syncedBlock, props.blockMenuT]);
+  }, [uploadImage, uploadFile, onCreateChildPage, props.syncedBlock, props.blockMenuT]);
 
   const extensions = useMemo<Extensions>(() => {
     const isEditable = props.editable ?? true;
@@ -220,8 +303,27 @@ export function CollaborativeEditor(props: EditorProps) {
       Bookmark,
       Columns,
       Column,
+      // Phase 13: equations, embeds, media, TOC. All normal nodes → sync via
+      // Yjs in collab mode. HeadingId gives headings stable ids for the TOC.
+      InlineMath,
+      MathBlock,
+      Embed,
+      Video,
+      Audio,
+      FileBlock,
+      HeadingId,
+      TableOfContents,
       SlashCommand.configure({ items: slashItems }),
     ];
+    // Breadcrumb: registered whenever the host supplies a trail or navigation,
+    // so the "Breadcrumb" slash item has a node to insert. Clicks route through
+    // the same onOpenPage ref as child pages.
+    ext.push(
+      Breadcrumb.configure({
+        items: props.breadcrumb?.items ?? [],
+        onOpenPage: (pageId: string) => onOpenPageRef.current?.(pageId),
+      }),
+    );
     // Inline comments: a normal mark, so it rides through Yjs in collab mode.
     if (props.comments) ext.push(Comment);
     // Child pages: the node is present whenever creation OR navigation is wired.
@@ -285,6 +387,7 @@ export function CollaborativeEditor(props: EditorProps) {
     !!onCreateChildPage,
     !!props.onOpenPage,
     props.syncedBlock,
+    props.breadcrumb,
   ]);
 
   // The paste/drop handlers need the editor instance, but it doesn't exist yet

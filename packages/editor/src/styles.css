@@ -527,3 +527,193 @@
   font-size: 0.85rem;
   min-height: 1.2rem;
 }
+
+/* ---------- Phase 13: math, embeds, media, TOC, breadcrumb ---------- */
+
+/* Inline + block math (KaTeX). The katex stylesheet itself is imported by the
+   package (CollaborativeEditor) — these are only the editing affordances. */
+.ae-inline-math {
+  cursor: pointer;
+}
+.ae-inline-math .ae-math-render {
+  padding: 0 0.1rem;
+  border-radius: 0.2rem;
+}
+.ae-inline-math .ae-math-render:hover {
+  background: #eef2ff;
+}
+.ae-math-block {
+  margin: 0.5rem 0;
+  text-align: center;
+}
+.ae-math-render-block {
+  cursor: pointer;
+  padding: 0.5rem;
+  border-radius: 0.375rem;
+}
+.ae-math-render-block:hover {
+  background: #f9fafb;
+}
+.ae-math-empty {
+  color: #9ca3af;
+  font-style: italic;
+}
+.ae-math-error {
+  color: #dc2626;
+}
+.ae-math-input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+  border: 1px solid #c7d2fe;
+  border-radius: 0.375rem;
+  padding: 0.25rem 0.4rem;
+  outline: none;
+  background: #f8fafc;
+  color: #0f172a;
+}
+.ae-math-input-inline {
+  min-width: 6rem;
+}
+.ae-math-input-block {
+  display: block;
+  width: 100%;
+  resize: vertical;
+  text-align: left;
+}
+
+/* Embed (responsive 16:9 iframe) */
+.ae-embed {
+  margin: 0.5rem 0;
+}
+.ae-embed-frame {
+  position: relative;
+  width: 100%;
+  padding-top: 56.25%; /* 16:9 */
+  border-radius: 0.5rem;
+  overflow: hidden;
+  background: #000;
+}
+.ae-embed-iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+.ProseMirror .ae-embed.ProseMirror-selectednode {
+  outline: 2px solid #6366f1;
+  border-radius: 0.5rem;
+}
+
+/* Video + audio players */
+.ae-video,
+.ae-audio {
+  margin: 0.5rem 0;
+}
+.ae-video-el {
+  max-width: 100%;
+  border-radius: 0.5rem;
+  display: block;
+}
+.ae-audio-el {
+  width: 100%;
+}
+
+/* File download card */
+.ae-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  text-decoration: none;
+  color: #111827;
+  margin: 0.25rem 0;
+  max-width: 100%;
+}
+.ae-file:hover {
+  background: #f9fafb;
+}
+.ae-file-icon {
+  flex: none;
+  font-size: 1.1rem;
+}
+.ae-file-name {
+  font-size: 0.875rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ae-file-size {
+  font-size: 0.75rem;
+  color: #9ca3af;
+  flex: none;
+}
+
+/* Table of contents */
+.ae-toc {
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.25rem;
+  border-left: 2px solid #e5e7eb;
+}
+.ae-toc-empty {
+  color: #9ca3af;
+  font-size: 0.875rem;
+  font-style: italic;
+  margin: 0;
+}
+.ae-toc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.ae-toc-item {
+  margin: 0.05rem 0;
+}
+.ae-toc-link {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #4b5563;
+  font-size: 0.875rem;
+  text-align: left;
+  padding: 0.1rem 0.25rem;
+  border-radius: 0.25rem;
+  text-decoration: none;
+}
+.ae-toc-link:hover {
+  color: #111827;
+  text-decoration: underline;
+  background: #f3f4f6;
+}
+.ae-toc-link[data-level='1'] {
+  font-weight: 600;
+}
+
+/* Breadcrumb trail */
+.ae-breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  color: #6b7280;
+  margin: 0.4rem 0;
+}
+.ae-breadcrumb-crumb {
+  color: #6b7280;
+  text-decoration: none;
+  cursor: pointer;
+}
+.ae-breadcrumb-crumb:hover {
+  color: #111827;
+  text-decoration: underline;
+}
+.ae-breadcrumb-sep {
+  color: #d1d5db;
+}
+.ae-breadcrumb-empty {
+  color: #9ca3af;
+  font-style: italic;
+}

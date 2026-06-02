@@ -97,6 +97,22 @@ const editor: Dict = {
     'synced.blockHint': 'Content mirrored across pages',
     'synced.badge': 'Synced',
 
+    // Phase 13 blocks (equations / embeds / media / TOC / breadcrumb)
+    'block.equation': 'Equation',
+    'block.equationHint': 'Display math (KaTeX)',
+    'block.embed': 'Embed',
+    'block.embedHint': 'YouTube, Vimeo, Figma, Maps…',
+    'block.video': 'Video',
+    'block.videoHint': 'Upload or embed by URL',
+    'block.audio': 'Audio',
+    'block.audioHint': 'Upload or embed by URL',
+    'block.file': 'File',
+    'block.fileHint': 'Upload or link a file',
+    'block.toc': 'Table of contents',
+    'block.tocHint': 'Live outline of headings',
+    'block.breadcrumb': 'Breadcrumb',
+    'block.breadcrumbHint': 'Page ancestor trail',
+
     // Share popover (public + invite)
     'share.toWeb': 'Share to web',
     'share.anyoneCanView': 'Anyone with the link can view this page.',
@@ -255,6 +271,22 @@ const editor: Dict = {
     'synced.block': '동기화 블록',
     'synced.blockHint': '여러 페이지에 미러링되는 콘텐츠',
     'synced.badge': '동기화됨',
+
+    // Phase 13 blocks (equations / embeds / media / TOC / breadcrumb)
+    'block.equation': '수식',
+    'block.equationHint': '디스플레이 수식 (KaTeX)',
+    'block.embed': '임베드',
+    'block.embedHint': 'YouTube, Vimeo, Figma, 지도…',
+    'block.video': '동영상',
+    'block.videoHint': '업로드 또는 URL로 삽입',
+    'block.audio': '오디오',
+    'block.audioHint': '업로드 또는 URL로 삽입',
+    'block.file': '파일',
+    'block.fileHint': '파일 업로드 또는 링크',
+    'block.toc': '목차',
+    'block.tocHint': '제목의 실시간 개요',
+    'block.breadcrumb': '경로 탐색',
+    'block.breadcrumbHint': '페이지 상위 경로',
 
     // Share popover
     'share.toWeb': '웹에 공유',

@@ -9,6 +9,22 @@ export { Comment, commentThreadIdAt } from './extensions/comment';
 export { ChildPage, childPageLabel, CHILD_PAGE_DEFAULT_ICON } from './extensions/child-page';
 export { SyncedBlock, syncRoom } from './extensions/synced-block';
 export type { SyncedBlockConfig, SyncedBlockOptions } from './extensions/synced-block';
+export { InlineMath, MathBlock, INLINE_MATH_INPUT_REGEX } from './extensions/math';
+export { Embed } from './extensions/embed';
+export { Video, Audio, FileBlock, formatFileSize, fileNameFromUrl } from './extensions/media';
+export { HeadingId, collectHeadings } from './extensions/heading-id';
+export { TableOfContents } from './extensions/toc';
+export { Breadcrumb, breadcrumbLabel } from './extensions/breadcrumb';
+export type { BreadcrumbItem, BreadcrumbOptions } from './extensions/breadcrumb';
+export { renderMath } from './lib/math';
+export {
+  normalizeEmbed,
+  isBareUrl,
+  isAutoEmbedUrl,
+} from './lib/embed';
+export type { EmbedProvider, NormalizedEmbed } from './lib/embed';
+export { slugifyHeading, ensureHeadingId } from './lib/headings';
+export type { TocEntry } from './lib/headings';
 export { BubbleToolbar } from './extensions/bubble-toolbar';
 export { DragHandle } from './extensions/block-menu';
 export { MarkdownRules, TODO_INPUT_REGEX } from './extensions/markdown-rules';

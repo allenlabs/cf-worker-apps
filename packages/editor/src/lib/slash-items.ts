@@ -146,6 +146,76 @@ export const DEFAULT_SLASH_ITEMS: SlashItem[] = [
       if (url) editor.chain().focus().setBookmark({ url }).run();
     },
   },
+  {
+    title: 'Equation',
+    icon: '∑',
+    hint: 'Display math (KaTeX)',
+    keywords: ['math', 'latex', 'katex', 'formula', 'tex'],
+    command: ({ editor, range }) =>
+      editor.chain().focus().deleteRange(range).setMathBlock().run(),
+  },
+  {
+    title: 'Embed',
+    icon: '🔗',
+    hint: 'YouTube, Vimeo, Figma, Maps…',
+    keywords: ['iframe', 'youtube', 'vimeo', 'figma', 'map', 'video', 'embed'],
+    command: ({ editor, range }) => {
+      const url = typeof window !== 'undefined' ? window.prompt('Embed URL') : null;
+      editor.chain().focus().deleteRange(range).run();
+      if (url) editor.chain().focus().setEmbed({ url }).run();
+    },
+  },
+  {
+    title: 'Video',
+    icon: '🎬',
+    hint: 'Upload or embed by URL',
+    keywords: ['movie', 'mp4', 'media', 'clip'],
+    // Default behaviour prompts for a URL; CollaborativeEditor overrides this
+    // with an upload flow when an `uploadFile` handler is provided.
+    command: ({ editor, range }) => {
+      const url = typeof window !== 'undefined' ? window.prompt('Video URL') : null;
+      editor.chain().focus().deleteRange(range).run();
+      if (url) editor.chain().focus().setVideo({ src: url }).run();
+    },
+  },
+  {
+    title: 'Audio',
+    icon: '🎵',
+    hint: 'Upload or embed by URL',
+    keywords: ['sound', 'mp3', 'media', 'music', 'voice'],
+    command: ({ editor, range }) => {
+      const url = typeof window !== 'undefined' ? window.prompt('Audio URL') : null;
+      editor.chain().focus().deleteRange(range).run();
+      if (url) editor.chain().focus().setAudio({ src: url }).run();
+    },
+  },
+  {
+    title: 'File',
+    icon: '📎',
+    hint: 'Upload or link a file',
+    keywords: ['attachment', 'download', 'document', 'pdf'],
+    command: ({ editor, range }) => {
+      const url = typeof window !== 'undefined' ? window.prompt('File URL') : null;
+      editor.chain().focus().deleteRange(range).run();
+      if (url) editor.chain().focus().setFile({ src: url }).run();
+    },
+  },
+  {
+    title: 'Table of contents',
+    icon: '🗂',
+    hint: 'Live outline of headings',
+    keywords: ['toc', 'outline', 'contents', 'index', 'headings'],
+    command: ({ editor, range }) =>
+      editor.chain().focus().deleteRange(range).setTableOfContents().run(),
+  },
+  {
+    title: 'Breadcrumb',
+    icon: '⤳',
+    hint: 'Page ancestor trail',
+    keywords: ['path', 'trail', 'ancestors', 'navigation', 'parent'],
+    command: ({ editor, range }) =>
+      editor.chain().focus().deleteRange(range).setBreadcrumb().run(),
+  },
 ];
 
 /**

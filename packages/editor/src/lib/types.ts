@@ -95,6 +95,20 @@ export interface EditorProps {
    * and the "Image" slash item. If omitted, images can only be added by URL.
    */
   uploadImage?: (file: File) => Promise<string>;
+  /**
+   * Upload an arbitrary file and resolve to its public URL + name. Wired into
+   * the "Video" / "Audio" / "File" slash items (each opens a file picker, then
+   * inserts the matching media node). If omitted, those blocks fall back to a
+   * URL prompt.
+   */
+  uploadFile?: (file: File) => Promise<{ url: string; name: string }>;
+  /**
+   * Breadcrumb trail for the "Breadcrumb" block — the page's ancestors
+   * (root → parent), supplied by the host from the page tree. Clicking a crumb
+   * routes through {@link EditorProps.onOpenPage}. Omit to render a "Top level"
+   * placeholder.
+   */
+  breadcrumb?: { items: { id: string; title: string }[] };
   /** Called with the current HTML on every change (for snapshotting to a DB). */
   onUpdate?: (html: string) => void;
   /** Inline comments. Omit to disable the Comment mark + bubble button entirely. */

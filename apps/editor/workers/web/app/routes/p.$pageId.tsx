@@ -65,6 +65,23 @@ async function uploadImageFile(file: File): Promise<string> {
   return url;
 }
 
+/**
+ * Generic upload handler for the Video/Audio/File blocks. Same R2 upload as the
+ * image path, but returns `{ url, name }` (the editor's `uploadFile` shape) so
+ * the file card can show the original filename.
+ */
+async function uploadAnyFile(file: File): Promise<{ url: string; name: string }> {
+  const dataBase64 = await fileToBase64(file);
+  const { url } = await uploadFile({
+    data: {
+      filename: file.name || 'file',
+      contentType: file.type || 'application/octet-stream',
+      dataBase64,
+    },
+  });
+  return { url, name: file.name || 'file' };
+}
+
 export const Route = createFileRoute('/p/$pageId')({
   beforeLoad: async () => {
     if (typeof document !== 'undefined') return;
@@ -591,6 +608,10 @@ function PageView() {
                 return results;
               }}
               uploadImage={uploadImageFile}
+              uploadFile={uploadAnyFile}
+              breadcrumb={{
+                items: ancestors.map((a) => ({ id: a.id, title: a.title })),
+              }}
               onUpdate={handleUpdate}
               onCreateChildPage={async (childTitle) => {
                 const created = await createPage({
