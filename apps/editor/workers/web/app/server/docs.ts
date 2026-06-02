@@ -71,6 +71,10 @@ export interface PageFull {
   restricted: boolean; // Phase 10 — only owner + invited people can access
   fullWidth: boolean; // Phase 14 — render the page container edge-to-edge
   locked: boolean; // Phase 14 — read-only for everyone when true
+  isWiki: boolean; // Phase 15 — page is a wiki home (directory of sub-pages)
+  verified: boolean; // Phase 15 — marked verified
+  verifiedBy: string | null; // Phase 15 — who verified
+  verifiedAt: string | null; // Phase 15 — when verified (ISO)
 }
 
 // ---------- per-user sharing + teamspaces (Phase 9) ----------
@@ -215,13 +219,51 @@ export interface DbProperty {
   position: number;
 }
 
+// Phase 15: filter / sort / group builder model (mirrors db-filter.ts on the api).
+export type FilterConjunction = 'and' | 'or';
+
+export type FilterOp =
+  | 'contains'
+  | 'not_contains'
+  | 'equals'
+  | 'not_equals'
+  | 'is_empty'
+  | 'is_not_empty'
+  | 'gt'
+  | 'gte'
+  | 'lt'
+  | 'lte'
+  | 'is'
+  | 'is_not'
+  | 'has'
+  | 'has_not'
+  | 'checked'
+  | 'unchecked'
+  | 'before'
+  | 'after'
+  | 'on'
+  | 'within_days';
+
+export interface FilterCondition {
+  propId: string;
+  op: FilterOp;
+  value?: JsonValue;
+}
+
+export interface FilterGroup {
+  conjunction: FilterConjunction;
+  conditions: (FilterCondition | FilterGroup)[];
+}
+
 export interface DbViewConfig {
-  filters?: { propId: string; value?: JsonValue }[];
+  filters?: { propId: string; op?: string; value?: JsonValue }[]; // legacy flat
+  filterGroup?: FilterGroup; // Phase 15: nested AND/OR group
   sorts?: { propId: string; dir?: 'asc' | 'desc' }[];
-  groupBy?: string; // board: select/status prop to column by
+  groupBy?: string; // board + Phase 15 table grouping: select/status prop
   datePropId?: string; // calendar/timeline: date prop to place rows by
   cardPropId?: string; // gallery: prop shown as the card preview
   visible?: string[];
+  subItemsEnabled?: boolean; // Phase 15: nest sub-item rows in table view
 }
 
 export interface DbView {
@@ -231,6 +273,7 @@ export interface DbView {
   type: string; // 'table' | 'board'
   config: DbViewConfig;
   position: number;
+  sourceDatabaseId: string | null; // Phase 15: linked view reads this DB's rows
 }
 
 export interface DbSchema {
@@ -272,6 +315,25 @@ export interface DbRow {
   rollups?: Record<string, JsonValue>;
   // Phase 7: formula prop id → read-only computed value (or { __error } sentinel).
   formulas?: Record<string, JsonValue>;
+  // Phase 15: this row's parent row WITHIN the same DB (sub-items), or null.
+  subItemParentId?: string | null;
+}
+
+/** Phase 15 — a database's row template (hidden seed page). */
+export interface DbTemplate {
+  id: string;
+  title: string;
+}
+
+/** Phase 15 — one child page in a wiki directory listing. */
+export interface WikiEntry {
+  id: string;
+  title: string;
+  icon: string | null;
+  verified: boolean;
+  verifiedBy: string | null;
+  verifiedAt: string | null;
+  updatedAt: string;
 }
 
 // ---------- page version history (Phase 5) ----------
@@ -529,7 +591,13 @@ export function propDeleteImpl(
 export function viewAddImpl(
   env: ApiClientEnv,
   user: CurrentUser,
-  input: { databaseId: string; type: ViewType; name?: string; config?: Record<string, unknown> },
+  input: {
+    databaseId: string;
+    type: ViewType;
+    name?: string;
+    config?: Record<string, unknown>;
+    sourceDatabaseId?: string | null;
+  },
   deps?: ApiClientDeps,
 ): Promise<DbView> {
   return apiPostImpl<DbView>(env, '/v1/db/view/add', userBody(user, input), deps);
@@ -538,7 +606,7 @@ export function viewAddImpl(
 export function viewUpdateImpl(
   env: ApiClientEnv,
   user: CurrentUser,
-  input: { id: string; name?: string; config?: Record<string, unknown> },
+  input: { id: string; name?: string; config?: Record<string, unknown>; sourceDatabaseId?: string | null },
   deps?: ApiClientDeps,
 ): Promise<{ ok: boolean }> {
   return apiPostImpl<{ ok: boolean }>(env, '/v1/db/view/update', userBody(user, input), deps);
@@ -556,7 +624,7 @@ export function viewDeleteImpl(
 export function dbRowsImpl(
   env: ApiClientEnv,
   user: CurrentUser,
-  input: { databaseId: string; viewId?: string },
+  input: { databaseId: string; viewId?: string; sourceDatabaseId?: string | null },
   deps?: ApiClientDeps,
 ): Promise<DbRow[]> {
   return apiPostImpl<DbRow[]>(env, '/v1/db/rows', userBody(user, input), deps);
@@ -565,10 +633,90 @@ export function dbRowsImpl(
 export function rowAddImpl(
   env: ApiClientEnv,
   user: CurrentUser,
-  input: { databaseId: string; title?: string },
+  input: { databaseId: string; title?: string; templateId?: string | null; subItemParentId?: string | null },
   deps?: ApiClientDeps,
 ): Promise<DbRow> {
   return apiPostImpl<DbRow>(env, '/v1/db/row/add', userBody(user, input), deps);
+}
+
+/** Phase 15 — set/clear a row's sub-item parent (cycle-guarded server-side). */
+export function rowSetSubItemImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { id: string; parentId: string | null },
+  deps?: ApiClientDeps,
+): Promise<{ ok: boolean }> {
+  return apiPostImpl<{ ok: boolean }>(env, '/v1/db/row/set-sub-item', userBody(user, input), deps);
+}
+
+// ---------- row templates + wiki/verify impls (Phase 15) ----------
+
+export function templatesListImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  databaseId: string,
+  deps?: ApiClientDeps,
+): Promise<DbTemplate[]> {
+  return apiPostImpl<DbTemplate[]>(env, '/v1/db/templates/list', userBody(user, { databaseId }), deps);
+}
+
+export function templateCreateImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { databaseId: string; name?: string },
+  deps?: ApiClientDeps,
+): Promise<DbTemplate> {
+  return apiPostImpl<DbTemplate>(env, '/v1/db/templates/create', userBody(user, input), deps);
+}
+
+export function templateRenameImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { id: string; name: string },
+  deps?: ApiClientDeps,
+): Promise<{ ok: boolean }> {
+  return apiPostImpl<{ ok: boolean }>(env, '/v1/db/templates/rename', userBody(user, input), deps);
+}
+
+export function templateDeleteImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  id: string,
+  deps?: ApiClientDeps,
+): Promise<{ ok: boolean }> {
+  return apiPostImpl<{ ok: boolean }>(env, '/v1/db/templates/delete', userBody(user, { id }), deps);
+}
+
+export function setWikiImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { id: string; isWiki: boolean },
+  deps?: ApiClientDeps,
+): Promise<{ isWiki: boolean }> {
+  return apiPostImpl<{ isWiki: boolean }>(env, '/v1/pages/set-wiki', userBody(user, input), deps);
+}
+
+export function verifyPageImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { id: string; verified: boolean },
+  deps?: ApiClientDeps,
+): Promise<{ verified: boolean; verifiedBy: string | null; verifiedAt: string | null }> {
+  return apiPostImpl<{ verified: boolean; verifiedBy: string | null; verifiedAt: string | null }>(
+    env,
+    '/v1/pages/verify',
+    userBody(user, input),
+    deps,
+  );
+}
+
+export function wikiEntriesImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  id: string,
+  deps?: ApiClientDeps,
+): Promise<WikiEntry[]> {
+  return apiPostImpl<WikiEntry[]>(env, '/v1/pages/wiki-entries', userBody(user, { id }), deps);
 }
 
 export function rowUpdateImpl(
@@ -1204,6 +1352,7 @@ export const viewAdd = createServerFn({ method: 'POST' })
         type: viewTypeSchema,
         name: z.string().max(120).optional(),
         config: z.record(z.string(), z.unknown()).optional(),
+        sourceDatabaseId: z.string().uuid().nullish(),
       })
       .parse(d),
   )
@@ -1219,6 +1368,7 @@ export const viewUpdate = createServerFn({ method: 'POST' })
         id: z.string().uuid(),
         name: z.string().max(120).optional(),
         config: z.record(z.string(), z.unknown()).optional(),
+        sourceDatabaseId: z.string().uuid().nullish(),
       })
       .parse(d),
   )
@@ -1236,7 +1386,13 @@ export const viewDelete = createServerFn({ method: 'POST' })
 
 export const dbRows = createServerFn({ method: 'GET' })
   .inputValidator((d: unknown) =>
-    z.object({ databaseId: z.string().uuid(), viewId: z.string().uuid().optional() }).parse(d),
+    z
+      .object({
+        databaseId: z.string().uuid(),
+        viewId: z.string().uuid().optional(),
+        sourceDatabaseId: z.string().uuid().nullish(),
+      })
+      .parse(d),
   )
   .handler(async ({ data }) => {
     const user = await requireUser();
@@ -1245,11 +1401,82 @@ export const dbRows = createServerFn({ method: 'GET' })
 
 export const rowAdd = createServerFn({ method: 'POST' })
   .inputValidator((d: unknown) =>
-    z.object({ databaseId: z.string().uuid(), title: z.string().max(255).optional() }).parse(d),
+    z
+      .object({
+        databaseId: z.string().uuid(),
+        title: z.string().max(255).optional(),
+        templateId: z.string().uuid().nullish(),
+        subItemParentId: z.string().uuid().nullish(),
+      })
+      .parse(d),
   )
   .handler(async ({ data }) => {
     const user = await requireUser();
     return rowAddImpl(getEnv(), user, data);
+  });
+
+export const rowSetSubItem = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z.object({ id: z.string().uuid(), parentId: z.string().uuid().nullable() }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return rowSetSubItemImpl(getEnv(), user, data);
+  });
+
+export const templatesList = createServerFn({ method: 'GET' })
+  .inputValidator((d: unknown) => z.object({ databaseId: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return templatesListImpl(getEnv(), user, data.databaseId);
+  });
+
+export const templateCreate = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z.object({ databaseId: z.string().uuid(), name: z.string().max(120).optional() }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return templateCreateImpl(getEnv(), user, data);
+  });
+
+export const templateRename = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z.object({ id: z.string().uuid(), name: z.string().min(1).max(120) }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return templateRenameImpl(getEnv(), user, data);
+  });
+
+export const templateDelete = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return templateDeleteImpl(getEnv(), user, data.id);
+  });
+
+export const setWiki = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) => z.object({ id: z.string().uuid(), isWiki: z.boolean() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return setWikiImpl(getEnv(), user, data);
+  });
+
+export const verifyPage = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z.object({ id: z.string().uuid(), verified: z.boolean() }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return verifyPageImpl(getEnv(), user, data);
+  });
+
+export const wikiEntries = createServerFn({ method: 'GET' })
+  .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return wikiEntriesImpl(getEnv(), user, data.id);
   });
 
 export const rowUpdate = createServerFn({ method: 'POST' })

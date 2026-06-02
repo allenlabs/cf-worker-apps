@@ -22,6 +22,12 @@ import {
   type Ast,
   type FormulaValue,
 } from './formula';
+import {
+  applyFilterGroup,
+  applySorts,
+  normalizeFilterGroup,
+  type SortSpec,
+} from './db-filter';
 
 /**
  * Wrap a plain object as a jsonb parameter. postgres.js' `sql.json` types its
@@ -91,6 +97,8 @@ export interface DbView {
   type: string; // 'table' | 'board'
   config: Record<string, unknown>;
   position: number;
+  // Phase 15: a LINKED view reads another database's rows (null = own DB).
+  sourceDatabaseId: string | null;
 }
 
 export interface DbSchema {
@@ -129,13 +137,20 @@ export interface DbRow {
   rollups?: Record<string, unknown>;
   // Phase 7: formula prop id → computed read-only value (or { __error } sentinel).
   formulas?: Record<string, unknown>;
+  // Phase 15: this row's parent row WITHIN the same DB (sub-items), or null.
+  subItemParentId?: string | null;
 }
 
 interface ViewConfig {
+  // Legacy flat filters (Phase 3); still honored via normalizeFilterGroup.
   filters?: { propId: string; op?: string; value?: unknown }[];
+  // Phase 15: nested AND/OR filter group.
+  filterGroup?: unknown;
   sorts?: { propId: string; dir?: 'asc' | 'desc' }[];
   groupBy?: string;
   visible?: string[];
+  // Phase 15: enable sub-item (hierarchical row) nesting in this view.
+  subItemsEnabled?: boolean;
 }
 
 // ---------- helpers ----------
@@ -309,14 +324,20 @@ export async function listViewsImpl(sql: Sql, databaseId: string): Promise<DbVie
       type: string;
       config: Record<string, unknown>;
       position: number;
+      sourceDatabaseId: string | null;
     }[]
   >`
-    SELECT id, database_id AS "databaseId", name, type, config, position
+    SELECT id, database_id AS "databaseId", name, type, config, position,
+           source_database_id AS "sourceDatabaseId"
     FROM editor.db_views
     WHERE database_id = ${databaseId}
     ORDER BY position ASC, name ASC
   `;
-  return rows.map((r) => ({ ...r, position: Number(r.position) }));
+  return rows.map((r) => ({
+    ...r,
+    position: Number(r.position),
+    sourceDatabaseId: r.sourceDatabaseId ?? null,
+  }));
 }
 
 // ---------- properties ----------
@@ -385,7 +406,14 @@ export async function deletePropertyImpl(sql: Sql, id: string): Promise<boolean>
 
 export async function addViewImpl(
   sql: Sql,
-  input: { databaseId: string; type: string; name?: string; config?: Record<string, unknown> },
+  input: {
+    databaseId: string;
+    type: string;
+    name?: string;
+    config?: Record<string, unknown>;
+    // Phase 15: a LINKED view reads another DB's rows (null/omit = own DB).
+    sourceDatabaseId?: string | null;
+  },
 ): Promise<DbView> {
   const [maxRow] = await sql<{ maxPos: number | null }[]>`
     SELECT MAX(position) AS "maxPos" FROM editor.db_views WHERE database_id = ${input.databaseId}
@@ -410,24 +438,28 @@ export async function addViewImpl(
       type: string;
       config: Record<string, unknown>;
       position: number;
+      sourceDatabaseId: string | null;
     }[]
   >`
-    INSERT INTO editor.db_views (database_id, name, type, config, position)
-    VALUES (${input.databaseId}, ${name}, ${type}, ${jsonb(sql, input.config ?? {})}, ${position})
-    RETURNING id, database_id AS "databaseId", name, type, config, position
+    INSERT INTO editor.db_views (database_id, name, type, config, position, source_database_id)
+    VALUES (${input.databaseId}, ${name}, ${type}, ${jsonb(sql, input.config ?? {})}, ${position},
+            ${input.sourceDatabaseId ?? null})
+    RETURNING id, database_id AS "databaseId", name, type, config, position,
+              source_database_id AS "sourceDatabaseId"
   `;
   if (!row) throw new Error('addViewImpl: insert returned no row');
-  return { ...row, position: Number(row.position) };
+  return { ...row, position: Number(row.position), sourceDatabaseId: row.sourceDatabaseId ?? null };
 }
 
 export async function updateViewImpl(
   sql: Sql,
   id: string,
-  patch: { name?: string; config?: Record<string, unknown> },
+  patch: { name?: string; config?: Record<string, unknown>; sourceDatabaseId?: string | null },
 ): Promise<boolean> {
   const assign: Record<string, unknown> = {};
   if (typeof patch.name === 'string') assign.name = patch.name.trim() || 'View';
   if (patch.config !== undefined) assign.config = jsonb(sql, patch.config);
+  if (patch.sourceDatabaseId !== undefined) assign.source_database_id = patch.sourceDatabaseId;
   if (Object.keys(assign).length === 0) {
     return (await viewDatabaseImpl(sql, id)) !== null;
   }
@@ -523,26 +555,6 @@ export function computeRollup(fn: string, values: unknown[]): unknown {
       // Unknown/unsupported fn → degrade to a count so the cell still renders.
       return values.length;
   }
-}
-
-/** Compare two cell values for sorting; null/undefined sort last. */
-function compareValues(a: unknown, b: unknown): number {
-  const an = a === null || a === undefined || a === '';
-  const bn = b === null || b === undefined || b === '';
-  if (an && bn) return 0;
-  if (an) return 1;
-  if (bn) return -1;
-  if (typeof a === 'number' && typeof b === 'number') return a - b;
-  return String(a).localeCompare(String(b));
-}
-
-/** True iff the row passes a single equality/contains filter clause. */
-function passesFilter(row: DbRow, clause: { propId: string; value?: unknown }): boolean {
-  if (clause.value === undefined || clause.value === null || clause.value === '') return true;
-  const cell = row.props[clause.propId];
-  if (Array.isArray(cell)) return cell.map(String).includes(String(clause.value));
-  if (typeof cell === 'boolean') return cell === Boolean(clause.value);
-  return String(cell ?? '').toLowerCase().includes(String(clause.value).toLowerCase());
 }
 
 /**
@@ -848,15 +860,57 @@ function resolveFormulas(rows: DbRow[], properties: DbProperty[]): void {
 export { isFormulaError };
 
 /**
- * Return non-archived rows of a database. Applies the named view's simple
- * filters + sorts in app-space (props live in jsonb; keeping it correct beats
- * clever SQL). The implicit "title" sort key is supported via propId='title'.
+ * Apply a view's persisted filter group + multi-level sorts to an already-built
+ * row list. Pure (the heavy lifting lives in db-filter); `now` anchors relative
+ * date operators. Exported so the predicate path is unit-testable without SQL.
+ */
+export function applyViewConfig(rows: DbRow[], config: ViewConfig, now: number): DbRow[] {
+  let out = rows;
+  const group = normalizeFilterGroup(config);
+  if (group) out = applyFilterGroup(out, group, now);
+  const sorts: SortSpec[] = (config.sorts ?? []).filter(
+    (s): s is SortSpec => typeof s.propId === 'string',
+  );
+  out = applySorts(out, sorts);
+  return out;
+}
+
+export interface DbRowsOptions {
+  viewId?: string;
+  /**
+   * Phase 15: read rows from this SOURCE database instead of `databaseId`
+   * (linked database views). The view config (filters/sorts/group) still comes
+   * from `viewId` — which may live on a different DB.
+   */
+  sourceDatabaseId?: string | null;
+  /** Injected clock for the relative date filter operators (tests). */
+  now?: number;
+}
+
+/**
+ * Return non-archived rows of a database. Applies the named view's filter group
+ * + multi-level sorts in app-space (props live in jsonb; keeping it correct
+ * beats clever SQL). The implicit "title" sort key uses propId='title'.
+ *
+ * Phase 15:
+ *   - TEMPLATES (is_template=true) are excluded from the listing.
+ *   - Each row carries `subItemParentId` (its parent row within the same DB).
+ *   - `sourceDatabaseId` makes a linked view read another DB's rows while still
+ *     loading its own view config from `viewId`.
  */
 export async function dbRowsImpl(
   sql: Sql,
   databaseId: string,
-  viewId?: string,
+  viewIdOrOpts?: string | DbRowsOptions,
 ): Promise<DbRow[]> {
+  const opts: DbRowsOptions =
+    typeof viewIdOrOpts === 'string' ? { viewId: viewIdOrOpts } : viewIdOrOpts ?? {};
+  const viewId = opts.viewId;
+  const now = opts.now ?? Date.now();
+  // A linked view reads the source DB's rows; the schema (props/relations) for
+  // resolution must match the rows being read, so use the effective DB id.
+  const rowsDbId = opts.sourceDatabaseId ?? databaseId;
+
   // Join the user directory so created_by / last_edited_by auto cells can show
   // a name. Pages don't track a separate editor, so created_by and
   // last_edited_by both resolve to the page owner (best available signal).
@@ -869,14 +923,17 @@ export async function dbRowsImpl(
       lastEditedTime: string;
       ownerId: string;
       ownerName: string | null;
+      subItemParentId: string | null;
     }[]
   >`
     SELECT p.id, p.title, p.db_props AS props,
            p.created_at AS "createdTime", p.updated_at AS "lastEditedTime",
-           p.owner_id AS "ownerId", u.name AS "ownerName"
+           p.owner_id AS "ownerId", u.name AS "ownerName",
+           p.sub_item_parent_id AS "subItemParentId"
     FROM editor.pages p
     LEFT JOIN editor.users u ON u.user_id = p.owner_id
-    WHERE p.database_id = ${databaseId} AND p.archived = false
+    WHERE p.database_id = ${rowsDbId} AND p.archived = false
+      AND p.is_template = false
     ORDER BY p.position ASC, p.created_at ASC
   `;
   let rows: DbRow[] = raw.map((r) => ({
@@ -889,66 +946,227 @@ export async function dbRowsImpl(
       createdById: r.ownerId ?? null,
       createdByName: r.ownerName || r.ownerId || null,
     },
+    subItemParentId: r.subItemParentId ?? null,
   }));
 
   // Phase 6: resolve relation chips + compute rollups with BATCHED queries.
-  await resolveRelationsAndRollups(sql, databaseId, rows);
+  await resolveRelationsAndRollups(sql, rowsDbId, rows);
 
   // Phase 7: compute formula properties (after relations/rollups so formulas
   // can reference their computed values). Reuses the property list once.
-  const properties = await listPropertiesImpl(sql, databaseId);
+  const properties = await listPropertiesImpl(sql, rowsDbId);
   resolveFormulas(rows, properties);
 
   if (!viewId) return rows;
+  // The view may belong to a different DB (linked view), so look it up by id.
   const [view] = await sql<{ config: ViewConfig | null }[]>`
-    SELECT config FROM editor.db_views WHERE id = ${viewId} AND database_id = ${databaseId} LIMIT 1
+    SELECT config FROM editor.db_views WHERE id = ${viewId} LIMIT 1
   `;
   const config = view?.config ?? {};
-
-  for (const clause of config.filters ?? []) {
-    rows = rows.filter((r) => passesFilter(r, clause));
-  }
-
-  const sorts = config.sorts ?? [];
-  if (sorts.length > 0) {
-    rows = [...rows].sort((ra, rb) => {
-      for (const s of sorts) {
-        const va = s.propId === 'title' ? ra.title : ra.props[s.propId];
-        const vb = s.propId === 'title' ? rb.title : rb.props[s.propId];
-        const cmp = compareValues(va, vb);
-        if (cmp !== 0) return s.dir === 'desc' ? -cmp : cmp;
-      }
-      return 0;
-    });
-  }
+  rows = applyViewConfig(rows, config, now);
   return rows;
+}
+
+/**
+ * Resolve a linked view's source database id (the DB whose rows it reads).
+ * Returns null when the view doesn't exist or is a normal (non-linked) view.
+ */
+export async function viewSourceDatabaseImpl(sql: Sql, viewId: string): Promise<string | null> {
+  const [row] = await sql<{ sourceDatabaseId: string | null }[]>`
+    SELECT source_database_id AS "sourceDatabaseId" FROM editor.db_views WHERE id = ${viewId} LIMIT 1
+  `;
+  return row?.sourceDatabaseId ?? null;
 }
 
 export async function addRowImpl(
   sql: Sql,
   ownerId: string,
-  input: { databaseId: string; title?: string },
+  input: {
+    databaseId: string;
+    title?: string;
+    // Phase 15: seed the new row by DEEP-COPYING this template's db_props +
+    // snapshot_html (the template must be a template_of this database).
+    templateId?: string | null;
+    // Phase 15: nest the new row under a parent row (sub-items).
+    subItemParentId?: string | null;
+  },
 ): Promise<DbRow> {
   // Rows are pages parented to the database page, with kind='page'.
   const [wsRow] = await sql<{ workspaceId: string }[]>`
     SELECT workspace_id AS "workspaceId" FROM editor.pages WHERE id = ${input.databaseId} LIMIT 1
   `;
   if (!wsRow) throw new Error('addRowImpl: database page not found');
+
+  // Resolve a template (if any) belonging to this DB, for the seed copy.
+  let seedProps: Record<string, unknown> = {};
+  let seedHtml = '';
+  let seedTitle = input.title?.trim() || 'Untitled';
+  if (input.templateId) {
+    const [tpl] = await sql<
+      { title: string; props: Record<string, unknown> | null; snapshotHtml: string }[]
+    >`
+      SELECT title, db_props AS props, snapshot_html AS "snapshotHtml"
+      FROM editor.pages
+      WHERE id = ${input.templateId} AND template_of = ${input.databaseId}
+        AND is_template = true AND archived = false
+      LIMIT 1
+    `;
+    if (tpl) {
+      seedProps = tpl.props ?? {};
+      seedHtml = tpl.snapshotHtml ?? '';
+      // Only adopt the template's title when the caller didn't supply one.
+      if (!input.title?.trim()) seedTitle = tpl.title?.trim() || 'Untitled';
+    }
+  }
+
   const created = await createPageImpl(sql, ownerId, {
     workspaceId: wsRow.workspaceId,
     parentId: input.databaseId,
-    title: input.title?.trim() || 'Untitled',
+    title: seedTitle,
   });
-  await sql`UPDATE editor.pages SET database_id = ${input.databaseId} WHERE id = ${created.id}`;
+  // Set database_id + (deep-copied) seed props + content + optional sub-item parent.
+  await sql`
+    UPDATE editor.pages
+    SET database_id = ${input.databaseId},
+        db_props = ${jsonb(sql, seedProps)},
+        snapshot_html = ${seedHtml},
+        sub_item_parent_id = ${input.subItemParentId ?? null}
+    WHERE id = ${created.id}
+  `;
   // Freshly-created row: meta is filled on the next /db/rows read; return a
   // best-effort placeholder so the shape stays consistent.
   const nowIso = new Date().toISOString();
   return {
     id: created.id,
     title: created.title,
-    props: {},
+    props: seedProps,
     meta: { createdTime: nowIso, lastEditedTime: nowIso, createdById: ownerId, createdByName: null },
+    subItemParentId: input.subItemParentId ?? null,
   };
+}
+
+// ---------- sub-items (Phase 15) ----------
+
+/**
+ * True iff making `parentId` the sub-item parent of `rowId` would create a
+ * cycle — i.e. `rowId` is itself an ancestor of (or equal to) `parentId` in the
+ * sub_item_parent_id chain. Walks UP from parentId; a depth cap guards against
+ * an already-corrupt loop. Pure walk over editor.pages.
+ */
+export async function subItemCycleImpl(
+  sql: Sql,
+  rowId: string,
+  parentId: string,
+): Promise<boolean> {
+  let current: string | null = parentId;
+  for (let depth = 0; current && depth < 1000; depth++) {
+    if (current === rowId) return true;
+    const lookupId: string = current;
+    const [row] = await sql<{ parentId: string | null }[]>`
+      SELECT sub_item_parent_id AS "parentId" FROM editor.pages WHERE id = ${lookupId} LIMIT 1
+    `;
+    current = row?.parentId ?? null;
+  }
+  return false;
+}
+
+/**
+ * Set (or clear, with null) a row's sub-item parent. Refuses a self-parent or a
+ * cycle (throws). Returns false when the row isn't a database row. Both rows
+ * must belong to the SAME database.
+ */
+export async function setSubItemParentImpl(
+  sql: Sql,
+  rowId: string,
+  parentId: string | null,
+): Promise<boolean> {
+  const rowDb = await rowDatabaseImpl(sql, rowId);
+  if (!rowDb) return false;
+  if (parentId !== null) {
+    if (parentId === rowId) throw new Error('setSubItemParentImpl: a row cannot be its own sub-item parent');
+    const parentDb = await rowDatabaseImpl(sql, parentId);
+    if (parentDb !== rowDb) throw new Error('setSubItemParentImpl: parent must be in the same database');
+    if (await subItemCycleImpl(sql, rowId, parentId)) {
+      throw new Error('setSubItemParentImpl: cycle — parent is a descendant of the row');
+    }
+  }
+  const rows = await sql`
+    UPDATE editor.pages SET sub_item_parent_id = ${parentId}, updated_at = now()
+    WHERE id = ${rowId} AND database_id IS NOT NULL AND archived = false
+    RETURNING id
+  `;
+  return rows.length > 0;
+}
+
+// ---------- row templates (Phase 15) ----------
+
+export interface DbTemplate {
+  id: string;
+  title: string;
+}
+
+/** List a database's row templates (hidden pages with is_template=true). */
+export async function listTemplatesImpl(sql: Sql, databaseId: string): Promise<DbTemplate[]> {
+  const rows = await sql<{ id: string; title: string }[]>`
+    SELECT id, title FROM editor.pages
+    WHERE template_of = ${databaseId} AND is_template = true AND archived = false
+    ORDER BY created_at ASC
+  `;
+  return rows.map((r) => ({ id: r.id, title: r.title }));
+}
+
+/**
+ * Create a row template for a database: a hidden page (is_template=true,
+ * template_of=<dbId>) parented to the DB so it cascades on delete but is
+ * EXCLUDED from row listings + the page tree (database_id is set).
+ */
+export async function createTemplateImpl(
+  sql: Sql,
+  ownerId: string,
+  input: { databaseId: string; name?: string },
+): Promise<DbTemplate> {
+  const [wsRow] = await sql<{ workspaceId: string }[]>`
+    SELECT workspace_id AS "workspaceId" FROM editor.pages WHERE id = ${input.databaseId} LIMIT 1
+  `;
+  if (!wsRow) throw new Error('createTemplateImpl: database page not found');
+  const created = await createPageImpl(sql, ownerId, {
+    workspaceId: wsRow.workspaceId,
+    parentId: input.databaseId,
+    title: input.name?.trim() || 'New template',
+  });
+  await sql`
+    UPDATE editor.pages
+    SET database_id = ${input.databaseId}, is_template = true, template_of = ${input.databaseId}
+    WHERE id = ${created.id}
+  `;
+  return { id: created.id, title: created.title };
+}
+
+/** Rename a row template. Returns false when not a template of any DB. */
+export async function renameTemplateImpl(sql: Sql, id: string, name: string): Promise<boolean> {
+  const rows = await sql`
+    UPDATE editor.pages SET title = ${name.trim() || 'Template'}, updated_at = now()
+    WHERE id = ${id} AND is_template = true
+    RETURNING id
+  `;
+  return rows.length > 0;
+}
+
+/** Delete a row template (hard delete; templates aren't user content). */
+export async function deleteTemplateImpl(sql: Sql, id: string): Promise<boolean> {
+  const rows = await sql`
+    DELETE FROM editor.pages WHERE id = ${id} AND is_template = true RETURNING id
+  `;
+  return rows.length > 0;
+}
+
+/** Resolve the database a template belongs to (null when not a template). */
+export async function templateDatabaseImpl(sql: Sql, id: string): Promise<string | null> {
+  const [row] = await sql<{ databaseId: string | null }[]>`
+    SELECT template_of AS "databaseId" FROM editor.pages
+    WHERE id = ${id} AND is_template = true LIMIT 1
+  `;
+  return row?.databaseId ?? null;
 }
 
 /**

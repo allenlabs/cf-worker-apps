@@ -7,6 +7,12 @@ export { Bookmark } from './extensions/bookmark';
 export { Columns, Column } from './extensions/columns';
 export { Comment, commentThreadIdAt } from './extensions/comment';
 export { ChildPage, childPageLabel, CHILD_PAGE_DEFAULT_ICON } from './extensions/child-page';
+export {
+  LinkedDatabase,
+  linkedDatabaseLabel,
+  LINKED_DATABASE_ICON,
+} from './extensions/linked-database';
+export type { LinkedDatabaseOptions } from './extensions/linked-database';
 export { SyncedBlock, syncRoom } from './extensions/synced-block';
 export type { SyncedBlockConfig, SyncedBlockOptions } from './extensions/synced-block';
 export { InlineMath, MathBlock, INLINE_MATH_INPUT_REGEX } from './extensions/math';
@@ -45,6 +51,7 @@ export {
   DEFAULT_SLASH_ITEMS,
   filterSlashItems,
   makeChildPageSlashItem,
+  makeLinkedDatabaseSlashItem,
   makeSyncedBlockSlashItem,
 } from './lib/slash-items';
 export type {

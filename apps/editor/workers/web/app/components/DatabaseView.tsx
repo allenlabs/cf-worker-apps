@@ -8,8 +8,9 @@
 // re-fetch the affected slice (schema and/or rows) after each change. v1 keeps
 // state local + optimistic-free for correctness.
 
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useT } from '@allenlabs/i18n/react';
+import { groupRowsForView, buildSubItemTree, flattenSubItems } from '~/lib/db-view';
 import {
   AUTO_PROPERTY_TYPES,
   dbList as dbListFn,
@@ -19,8 +20,12 @@ import {
   relatedRows as relatedRowsFn,
   rowAdd as rowAddFn,
   rowDelete as rowDeleteFn,
+  rowSetSubItem as rowSetSubItemFn,
   rowUpdate as rowUpdateFn,
   searchMentions as searchMentionsFn,
+  templatesList as templatesListFn,
+  templateCreate as templateCreateFn,
+  templateDelete as templateDeleteFn,
   uploadFile as uploadFileFn,
   viewAdd as viewAddFn,
   viewUpdate as viewUpdateFn,
@@ -28,8 +33,12 @@ import {
   type DbProperty,
   type DbRow,
   type DbSchema,
+  type DbTemplate,
   type DbView,
   type FileRef,
+  type FilterCondition,
+  type FilterGroup,
+  type FilterOp,
   type JsonValue,
   type PropertyType,
   type RelationChip,
@@ -64,6 +73,47 @@ const DATE_TYPES = new Set(['date']);
 const FILE_TYPES = new Set(['files']);
 
 const ADDABLE_VIEW_TYPES: ViewType[] = ['table', 'board', 'list', 'gallery', 'calendar', 'timeline'];
+
+// ---------- filter operator metadata (Phase 15) ----------
+
+/** Operators available for each property type (drives the filter builder). */
+function operatorsForType(type: string): FilterOp[] {
+  switch (type) {
+    case 'number':
+      return ['equals', 'not_equals', 'gt', 'gte', 'lt', 'lte', 'is_empty', 'is_not_empty'];
+    case 'checkbox':
+      return ['checked', 'unchecked'];
+    case 'select':
+    case 'status':
+    case 'person':
+      return ['is', 'is_not', 'is_empty', 'is_not_empty'];
+    case 'multi_select':
+    case 'relation':
+      return ['has', 'has_not', 'is_empty', 'is_not_empty'];
+    case 'date':
+    case 'created_time':
+    case 'last_edited_time':
+      return ['on', 'before', 'after', 'within_days', 'is_empty', 'is_not_empty'];
+    default:
+      // text / url / email / phone / formula / rollup / title
+      return ['contains', 'not_contains', 'equals', 'not_equals', 'is_empty', 'is_not_empty'];
+  }
+}
+
+/** Operators that take no value input. */
+const VALUELESS_OPS = new Set<FilterOp>(['is_empty', 'is_not_empty', 'checked', 'unchecked']);
+
+/** Property options for the builder dropdowns: the implicit title + every prop. */
+function filterablePropOptions(properties: DbProperty[]): { id: string; name: string; type: string }[] {
+  return [{ id: 'title', name: 'title', type: 'title' }, ...properties.map((p) => ({ id: p.id, name: p.name, type: p.type }))];
+}
+
+/** Select/status options across the schema, for the `is`/`has` value picker. */
+function valueOptionsFor(properties: DbProperty[], propId: string): SelectOption[] {
+  const p = properties.find((x) => x.id === propId);
+  if (!p) return [];
+  return p.config.options ?? [];
+}
 
 // ---------- shared value rendering ----------
 
@@ -192,6 +242,14 @@ interface DatabaseViewProps {
   initialSchema: DbSchema;
   /** When false, the user is a viewer: hide +row/+property/+view + read-only cells. */
   editable?: boolean;
+  /**
+   * Phase 15 — LINKED database embed: read this source DB's rows (and add rows
+   * to it) instead of `databaseId`'s. The view config (filters/sorts/group)
+   * still comes from `databaseId`'s views. Omit for a normal full-page DB.
+   */
+  sourceDatabaseId?: string | null;
+  /** Phase 15 — compact embed mode (linked view): tighter chrome. */
+  embed?: boolean;
 }
 
 /** View-type → i18n key for its display label (chrome, not user data). */
@@ -209,6 +267,8 @@ export function DatabaseView({
   workspaceId,
   initialSchema,
   editable = true,
+  sourceDatabaseId = null,
+  embed = false,
 }: DatabaseViewProps) {
   const { t } = useT();
   const [schema, setSchema] = useState<DbSchema>(initialSchema);
@@ -217,6 +277,8 @@ export function DatabaseView({
   );
   const [rows, setRows] = useState<DbRow[]>([]);
   const [loading, setLoading] = useState(true);
+  // Phase 15: row templates for the "New ▾" split button.
+  const [templates, setTemplates] = useState<DbTemplate[]>([]);
 
   const activeView = useMemo(
     () => schema.views.find((v) => v.id === activeViewId) ?? schema.views[0],
@@ -233,24 +295,67 @@ export function DatabaseView({
     setLoading(true);
     try {
       const effectiveViewId = viewId ?? (activeViewId || undefined);
-      const next = await dbRowsFn({ data: { databaseId, viewId: effectiveViewId } });
+      const next = await dbRowsFn({
+        data: { databaseId, viewId: effectiveViewId, sourceDatabaseId },
+      });
       setRows(next);
     } finally {
       setLoading(false);
     }
   }
 
+  // Templates seed rows of the database we actually write to (source for a
+  // linked embed, else the page's own DB).
+  const writeDbId = sourceDatabaseId ?? databaseId;
+
   useEffect(() => {
     void refreshRows(activeViewId || undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeViewId]);
 
-  async function handleAddRow(initialProps?: Record<string, JsonValue>) {
-    const created = await rowAddFn({ data: { databaseId } });
+  useEffect(() => {
+    if (!editable) return;
+    let cancelled = false;
+    void templatesListFn({ data: { databaseId: writeDbId } }).then((tpls) => {
+      if (!cancelled) setTemplates(tpls);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [writeDbId, editable]);
+
+  async function handleAddRow(initialProps?: Record<string, JsonValue>, templateId?: string) {
+    const created = await rowAddFn({
+      data: { databaseId: writeDbId, templateId: templateId ?? null },
+    });
     if (initialProps && Object.keys(initialProps).length > 0) {
       await rowUpdateFn({ data: { id: created.id, props: initialProps } });
     }
     await refreshRows();
+  }
+
+  async function handleAddSubItem(parentId: string) {
+    const created = await rowAddFn({ data: { databaseId: writeDbId, subItemParentId: parentId } });
+    void created;
+    await refreshRows();
+  }
+
+  async function handleSetSubItemParent(id: string, parentId: string | null) {
+    await rowSetSubItemFn({ data: { id, parentId } });
+    await refreshRows();
+  }
+
+  async function handleCreateTemplate() {
+    const tpl = await templateCreateFn({ data: { databaseId: writeDbId } });
+    setTemplates((prev) => [...prev, tpl]);
+    // Open the template page so the user can fill in its props + content.
+    if (typeof window !== 'undefined') window.location.href = `/p/${tpl.id}`;
+  }
+
+  async function handleDeleteTemplate(id: string) {
+    await templateDeleteFn({ data: { id } });
+    setTemplates((prev) => prev.filter((tpl) => tpl.id !== id));
   }
 
   async function handleRowPatch(id: string, patch: { title?: string; props?: Record<string, JsonValue> }) {
@@ -314,10 +419,12 @@ export function DatabaseView({
   }
 
   /** Shallow-merge a config patch into the active view's stored config. */
-  async function handleSetViewConfig(patch: Record<string, JsonValue>) {
+  async function handleSetViewConfig(patch: Record<string, unknown>) {
     if (!activeView) return;
     await viewUpdateFn({ data: { id: activeView.id, config: { ...activeView.config, ...patch } } });
     await refreshSchema();
+    // Filters/sorts/group changes re-query the rows.
+    await refreshRows();
   }
 
   async function handleAddOption(property: DbProperty, name: string): Promise<SelectOption> {
@@ -380,7 +487,21 @@ export function DatabaseView({
             </select>
           </div>
         ) : null}
+        {activeView.sourceDatabaseId ? (
+          <span className="ml-2 text-[10px] uppercase tracking-wide text-blue-600 bg-blue-50 rounded px-1.5 py-0.5">
+            {t('db.linkedBadge')}
+          </span>
+        ) : null}
       </div>
+
+      {/* Phase 15: filter / sort / group builder toolbar. */}
+      {editable ? (
+        <FilterSortGroupBar
+          view={activeView}
+          properties={schema.properties}
+          onSetConfig={(patch) => void handleSetViewConfig(patch)}
+        />
+      ) : null}
 
       {loading ? (
         <div className="text-sm text-gray-400 py-4">{t('db.loadingRows')}</div>
@@ -420,16 +541,500 @@ export function DatabaseView({
       ) : (
         <TableView
           workspaceId={workspaceId}
+          view={activeView}
           properties={schema.properties}
           rows={rows}
           editable={editable}
-          onAddRow={() => void handleAddRow()}
+          templates={templates}
+          onAddRow={(props, templateId) => void handleAddRow(props, templateId)}
           onPatchRow={(id, patch) => void handleRowPatch(id, patch)}
           onDeleteRow={(id) => void handleDeleteRow(id)}
           onAddProperty={(name, type, config) => void handleAddProperty(name, type, config)}
           onAddOption={handleAddOption}
+          onAddSubItem={(parentId) => void handleAddSubItem(parentId)}
+          onSetSubItemParent={(id, parentId) => void handleSetSubItemParent(id, parentId)}
+          onCreateTemplate={() => void handleCreateTemplate()}
+          onDeleteTemplate={(id) => void handleDeleteTemplate(id)}
+          onToggleSubItems={(enabled) => void handleSetViewConfig({ subItemsEnabled: enabled })}
         />
       )}
+    </div>
+  );
+}
+
+// ---------- Filter / Sort / Group builder bar (Phase 15) ----------
+
+interface FilterSortGroupBarProps {
+  view: DbView;
+  properties: DbProperty[];
+  onSetConfig: (patch: Record<string, unknown>) => void;
+}
+
+/** Normalize a view's stored filters into a FilterGroup for the builder. */
+function viewFilterGroup(view: DbView): FilterGroup {
+  const fg = view.config.filterGroup;
+  if (fg && Array.isArray(fg.conditions)) return fg;
+  const legacy = view.config.filters ?? [];
+  return {
+    conjunction: 'and',
+    conditions: legacy
+      .filter((c) => typeof c.propId === 'string')
+      .map((c) => ({ propId: c.propId, op: (c.op as FilterOp) ?? 'contains', value: c.value })),
+  };
+}
+
+function FilterSortGroupBar({ view, properties, onSetConfig }: FilterSortGroupBarProps) {
+  const { t } = useT();
+  const [open, setOpen] = useState<'filter' | 'sort' | 'group' | null>(null);
+  const group = viewFilterGroup(view);
+  const sorts = view.config.sorts ?? [];
+  const groupBy = view.config.groupBy ?? '';
+  const propOpts = filterablePropOptions(properties);
+  const filterCount = group.conditions.length;
+
+  const tab = (key: 'filter' | 'sort' | 'group', label: string, count: number) => (
+    <button
+      className={`px-2 py-1 rounded text-xs ${
+        open === key ? 'bg-gray-100 text-gray-900' : 'text-gray-500 hover:text-gray-800'
+      }`}
+      onClick={() => setOpen((v) => (v === key ? null : key))}
+    >
+      {label}
+      {count > 0 ? <span className="ml-1 text-blue-600">{count}</span> : null}
+    </button>
+  );
+
+  return (
+    <div className="mb-2 text-sm">
+      <div className="flex items-center gap-1">
+        {tab('filter', t('db.filter'), filterCount)}
+        {tab('sort', t('db.sort'), sorts.length)}
+        {tab('group', t('db.group'), groupBy ? 1 : 0)}
+      </div>
+
+      {open === 'filter' ? (
+        <FilterBuilder
+          group={group}
+          propOpts={propOpts}
+          properties={properties}
+          onChange={(next) => onSetConfig({ filterGroup: next, filters: [] })}
+          onClose={() => setOpen(null)}
+        />
+      ) : open === 'sort' ? (
+        <SortBuilder
+          sorts={sorts}
+          propOpts={propOpts}
+          onChange={(next) => onSetConfig({ sorts: next })}
+          onClose={() => setOpen(null)}
+        />
+      ) : open === 'group' ? (
+        <div className="mt-1 p-2 border border-gray-200 rounded bg-white inline-flex items-center gap-2">
+          <span className="text-xs text-gray-500">{t('db.groupBy')}</span>
+          <select
+            className="border border-gray-300 rounded px-1 py-0.5 text-xs"
+            value={groupBy}
+            onChange={(e) => onSetConfig({ groupBy: e.target.value })}
+          >
+            <option value="">{t('db.groupNone')}</option>
+            {properties
+              .filter((p) => SELECT_TYPES.has(p.type) || p.type === 'checkbox' || p.type === 'person')
+              .map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+          </select>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** AND/OR multi-condition filter builder (one level of nesting supported). */
+function FilterBuilder({
+  group,
+  propOpts,
+  properties,
+  onChange,
+  onClose,
+}: {
+  group: FilterGroup;
+  propOpts: { id: string; name: string; type: string }[];
+  properties: DbProperty[];
+  onChange: (next: FilterGroup) => void;
+  onClose: () => void;
+}) {
+  const { t } = useT();
+
+  const setConjunction = (conjunction: 'and' | 'or') => onChange({ ...group, conjunction });
+  const addCondition = () =>
+    onChange({
+      ...group,
+      conditions: [...group.conditions, { propId: 'title', op: 'contains', value: '' }],
+    });
+  const addNestedGroup = () =>
+    onChange({
+      ...group,
+      conditions: [
+        ...group.conditions,
+        { conjunction: 'or', conditions: [{ propId: 'title', op: 'contains', value: '' }] },
+      ],
+    });
+  const removeAt = (i: number) =>
+    onChange({ ...group, conditions: group.conditions.filter((_, j) => j !== i) });
+  const updateAt = (i: number, next: FilterCondition | FilterGroup) =>
+    onChange({ ...group, conditions: group.conditions.map((c, j) => (j === i ? next : c)) });
+
+  return (
+    <div className="mt-1 p-2 border border-gray-200 rounded bg-white max-w-2xl">
+      <div className="flex items-center gap-2 mb-2 text-xs text-gray-500">
+        <span>{t('db.where')}</span>
+        <select
+          className="border border-gray-300 rounded px-1 py-0.5"
+          value={group.conjunction}
+          onChange={(e) => setConjunction(e.target.value as 'and' | 'or')}
+          aria-label={t('db.where')}
+        >
+          <option value="and">{t('db.conjAnd')}</option>
+          <option value="or">{t('db.conjOr')}</option>
+        </select>
+      </div>
+      <div className="flex flex-col gap-1">
+        {group.conditions.map((cond, i) =>
+          'conditions' in cond ? (
+            <div key={i} className="border-l-2 border-gray-200 pl-2">
+              <div className="flex items-center justify-between text-[11px] text-gray-400 mb-1">
+                <span>{cond.conjunction === 'or' ? t('db.conjOr') : t('db.conjAnd')}</span>
+                <button className="hover:text-red-600" onClick={() => removeAt(i)}>
+                  {t('db.removeRule')}
+                </button>
+              </div>
+              {cond.conditions.map((sub, j) =>
+                'conditions' in sub ? null : (
+                  <ConditionRow
+                    key={j}
+                    cond={sub}
+                    propOpts={propOpts}
+                    properties={properties}
+                    onChange={(next) =>
+                      updateAt(i, {
+                        ...cond,
+                        conditions: cond.conditions.map((s, k) => (k === j ? next : s)),
+                      })
+                    }
+                    onRemove={() =>
+                      updateAt(i, {
+                        ...cond,
+                        conditions: cond.conditions.filter((_, k) => k !== j),
+                      })
+                    }
+                  />
+                ),
+              )}
+              <button
+                className="text-[11px] text-gray-400 hover:text-gray-700 mt-1"
+                onClick={() =>
+                  updateAt(i, {
+                    ...cond,
+                    conditions: [...cond.conditions, { propId: 'title', op: 'contains', value: '' }],
+                  })
+                }
+              >
+                {t('db.addFilter')}
+              </button>
+            </div>
+          ) : (
+            <ConditionRow
+              key={i}
+              cond={cond}
+              propOpts={propOpts}
+              properties={properties}
+              onChange={(next) => updateAt(i, next)}
+              onRemove={() => removeAt(i)}
+            />
+          ),
+        )}
+      </div>
+      <div className="flex items-center gap-3 mt-2">
+        <button className="text-xs text-gray-500 hover:text-gray-800" onClick={addCondition}>
+          {t('db.addFilter')}
+        </button>
+        <button className="text-xs text-gray-500 hover:text-gray-800" onClick={addNestedGroup}>
+          {t('db.addFilterGroup')}
+        </button>
+        <button className="ml-auto text-xs text-blue-600 hover:text-blue-800" onClick={onClose}>
+          {t('db.done')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** One leaf filter condition row: property → operator → value. */
+function ConditionRow({
+  cond,
+  propOpts,
+  properties,
+  onChange,
+  onRemove,
+}: {
+  cond: FilterCondition;
+  propOpts: { id: string; name: string; type: string }[];
+  properties: DbProperty[];
+  onChange: (next: FilterCondition) => void;
+  onRemove: () => void;
+}) {
+  const { t } = useT();
+  const propType = propOpts.find((p) => p.id === cond.propId)?.type ?? 'text';
+  const ops = operatorsForType(propType);
+  const valueless = VALUELESS_OPS.has(cond.op);
+  const selectOptions = valueOptionsFor(properties, cond.propId);
+
+  return (
+    <div className="flex items-center gap-1 text-xs">
+      <select
+        className="border border-gray-300 rounded px-1 py-0.5"
+        value={cond.propId}
+        onChange={(e) => {
+          const nextType = propOpts.find((p) => p.id === e.target.value)?.type ?? 'text';
+          const nextOps = operatorsForType(nextType);
+          onChange({ propId: e.target.value, op: nextOps[0]!, value: '' });
+        }}
+      >
+        {propOpts.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.id === 'title' ? t('db.title') : p.name}
+          </option>
+        ))}
+      </select>
+      <select
+        className="border border-gray-300 rounded px-1 py-0.5"
+        value={cond.op}
+        onChange={(e) => onChange({ ...cond, op: e.target.value as FilterOp })}
+      >
+        {ops.map((op) => (
+          <option key={op} value={op}>
+            {t(`db.op.${op}`)}
+          </option>
+        ))}
+      </select>
+      {valueless ? null : selectOptions.length > 0 ? (
+        <select
+          className="border border-gray-300 rounded px-1 py-0.5"
+          value={typeof cond.value === 'string' ? cond.value : ''}
+          onChange={(e) => onChange({ ...cond, value: e.target.value })}
+        >
+          <option value="">—</option>
+          {selectOptions.map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.name}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <input
+          className="border border-gray-300 rounded px-1 py-0.5 w-28"
+          placeholder={t('db.value')}
+          value={cond.value === null || cond.value === undefined ? '' : String(cond.value)}
+          onChange={(e) =>
+            onChange({
+              ...cond,
+              value:
+                propType === 'number' && e.target.value !== ''
+                  ? Number(e.target.value)
+                  : e.target.value,
+            })
+          }
+        />
+      )}
+      <button className="text-gray-300 hover:text-red-600" onClick={onRemove} aria-label={t('db.removeRule')}>
+        ✕
+      </button>
+    </div>
+  );
+}
+
+/** Multi-level sort builder. */
+function SortBuilder({
+  sorts,
+  propOpts,
+  onChange,
+  onClose,
+}: {
+  sorts: { propId: string; dir?: 'asc' | 'desc' }[];
+  propOpts: { id: string; name: string; type: string }[];
+  onChange: (next: { propId: string; dir?: 'asc' | 'desc' }[]) => void;
+  onClose: () => void;
+}) {
+  const { t } = useT();
+  const add = () => onChange([...sorts, { propId: 'title', dir: 'asc' }]);
+  const removeAt = (i: number) => onChange(sorts.filter((_, j) => j !== i));
+  const updateAt = (i: number, next: { propId: string; dir?: 'asc' | 'desc' }) =>
+    onChange(sorts.map((s, j) => (j === i ? next : s)));
+  const move = (i: number, delta: number) => {
+    const j = i + delta;
+    if (j < 0 || j >= sorts.length) return;
+    const next = [...sorts];
+    [next[i], next[j]] = [next[j]!, next[i]!];
+    onChange(next);
+  };
+
+  return (
+    <div className="mt-1 p-2 border border-gray-200 rounded bg-white max-w-lg">
+      <div className="flex flex-col gap-1">
+        {sorts.map((s, i) => (
+          <div key={i} className="flex items-center gap-1 text-xs">
+            <button className="text-gray-300 hover:text-gray-700" onClick={() => move(i, -1)} aria-label="up">
+              ↑
+            </button>
+            <button className="text-gray-300 hover:text-gray-700" onClick={() => move(i, 1)} aria-label="down">
+              ↓
+            </button>
+            <select
+              className="border border-gray-300 rounded px-1 py-0.5"
+              value={s.propId}
+              onChange={(e) => updateAt(i, { ...s, propId: e.target.value })}
+            >
+              {propOpts.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.id === 'title' ? t('db.title') : p.name}
+                </option>
+              ))}
+            </select>
+            <select
+              className="border border-gray-300 rounded px-1 py-0.5"
+              value={s.dir ?? 'asc'}
+              onChange={(e) => updateAt(i, { ...s, dir: e.target.value as 'asc' | 'desc' })}
+            >
+              <option value="asc">{t('db.sortAsc')}</option>
+              <option value="desc">{t('db.sortDesc')}</option>
+            </select>
+            <button className="text-gray-300 hover:text-red-600" onClick={() => removeAt(i)}>
+              ✕
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center gap-3 mt-2">
+        <button className="text-xs text-gray-500 hover:text-gray-800" onClick={add}>
+          {t('db.addSort')}
+        </button>
+        <button className="ml-auto text-xs text-blue-600 hover:text-blue-800" onClick={onClose}>
+          {t('db.done')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** "New ▾" split button: empty row + each template + manage templates. */
+function NewRowButton({
+  templates,
+  onAddRow,
+  onAddFromTemplate,
+  onCreateTemplate,
+  onDeleteTemplate,
+}: {
+  templates: DbTemplate[];
+  onAddRow: () => void;
+  onAddFromTemplate: (templateId: string) => void;
+  onCreateTemplate: () => void;
+  onDeleteTemplate: (id: string) => void;
+}) {
+  const { t } = useT();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+
+  return (
+    <div className="relative inline-flex items-center mt-2" ref={ref}>
+      <button
+        className="text-sm text-gray-500 hover:text-gray-800 px-2 py-1 border border-gray-200 rounded-l"
+        onClick={onAddRow}
+        data-testid="db-new-row"
+      >
+        ＋ {t('db.newRow')}
+      </button>
+      <button
+        className="text-sm text-gray-400 hover:text-gray-800 px-1 py-1 border border-l-0 border-gray-200 rounded-r"
+        onClick={() => setOpen((v) => !v)}
+        aria-label={t('db.newRowMenu')}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        data-testid="db-new-menu"
+      >
+        ▾
+      </button>
+      {open ? (
+        <div
+          role="menu"
+          className="absolute left-0 top-9 z-20 w-56 bg-white border border-gray-200 rounded shadow-lg p-1 text-sm"
+        >
+          <button
+            className="w-full text-left px-2 py-1 rounded hover:bg-gray-100"
+            role="menuitem"
+            onClick={() => {
+              onAddRow();
+              setOpen(false);
+            }}
+          >
+            {t('db.newEmpty')}
+          </button>
+          {templates.length > 0 ? (
+            <>
+              <div className="px-2 py-1 text-[11px] uppercase tracking-wide text-gray-400">
+                {t('db.templates')}
+              </div>
+              {templates.map((tpl) => (
+                <div key={tpl.id} className="flex items-center group">
+                  <button
+                    className="flex-1 text-left px-2 py-1 rounded hover:bg-gray-100 truncate"
+                    role="menuitem"
+                    onClick={() => {
+                      onAddFromTemplate(tpl.id);
+                      setOpen(false);
+                    }}
+                  >
+                    {tpl.title}
+                  </button>
+                  <a
+                    href={`/p/${tpl.id}`}
+                    className="px-1 text-gray-300 hover:text-gray-700 text-xs"
+                    title={t('db.renameTemplate')}
+                  >
+                    ✎
+                  </a>
+                  <button
+                    className="px-1 text-gray-300 hover:text-red-600 text-xs"
+                    onClick={() => onDeleteTemplate(tpl.id)}
+                    aria-label={t('db.deleteTemplate')}
+                  >
+                    🗑
+                  </button>
+                </div>
+              ))}
+            </>
+          ) : null}
+          <div className="my-1 border-t border-gray-100" />
+          <button
+            className="w-full text-left px-2 py-1 rounded hover:bg-gray-100 text-gray-600"
+            role="menuitem"
+            onClick={() => {
+              onCreateTemplate();
+              setOpen(false);
+            }}
+          >
+            {t('db.newTemplate')}
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -444,30 +1049,46 @@ async function propAddOptionViaUpdate(propertyId: string, options: SelectOption[
 
 interface TableViewProps {
   workspaceId: string;
+  view: DbView;
   properties: DbProperty[];
   rows: DbRow[];
   editable: boolean;
-  onAddRow: () => void;
+  templates: DbTemplate[];
+  onAddRow: (props?: Record<string, JsonValue>, templateId?: string) => void;
   onPatchRow: (id: string, patch: { title?: string; props?: Record<string, JsonValue> }) => void;
   onDeleteRow: (id: string) => void;
   onAddProperty: (name: string, type: PropertyType, config?: Record<string, JsonValue>) => void;
   onAddOption: (property: DbProperty, name: string) => Promise<SelectOption>;
+  onAddSubItem: (parentId: string) => void;
+  onSetSubItemParent: (id: string, parentId: string | null) => void;
+  onCreateTemplate: () => void;
+  onDeleteTemplate: (id: string) => void;
+  onToggleSubItems: (enabled: boolean) => void;
 }
 
 function TableView({
   workspaceId,
+  view,
   properties,
   rows,
   editable,
+  templates,
   onAddRow,
   onPatchRow,
   onDeleteRow,
   onAddProperty,
   onAddOption,
+  onAddSubItem,
+  onSetSubItemParent,
+  onCreateTemplate,
+  onDeleteTemplate,
+  onToggleSubItems,
 }: TableViewProps) {
+  const { t } = useT();
   const [addingProp, setAddingProp] = useState(false);
   const [newPropName, setNewPropName] = useState('');
   const [newPropType, setNewPropType] = useState<PropertyType>('text');
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
 
   function submitNewProp(config?: Record<string, JsonValue>) {
     const name = newPropName.trim();
@@ -482,12 +1103,141 @@ function TableView({
   const needsConfig =
     newPropType === 'relation' || newPropType === 'rollup' || newPropType === 'formula';
 
+  const subItemsEnabled = view.config.subItemsEnabled === true;
+  const groupBy = view.config.groupBy ?? '';
+  const colCount = properties.length + 2;
+
+  function toggleCollapse(id: string) {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  // One <tr> for a row (with optional indent + sub-item chevron/add controls).
+  function renderRow(row: DbRow, depth: number, hasChildren: boolean) {
+    const isCollapsed = collapsed.has(row.id);
+    return (
+      <tr key={row.id} className="border-b border-gray-100 hover:bg-gray-50 group">
+        <td className="py-1 px-2">
+          <div className="flex items-center gap-1" style={{ paddingLeft: `${depth * 1.25}rem` }}>
+            {subItemsEnabled ? (
+              hasChildren ? (
+                <button
+                  className="text-gray-400 hover:text-gray-700 text-xs w-4"
+                  onClick={() => toggleCollapse(row.id)}
+                  aria-label={isCollapsed ? t('db.expandRow') : t('db.collapseRow')}
+                >
+                  {isCollapsed ? '▸' : '▾'}
+                </button>
+              ) : (
+                <span className="w-4 inline-block" />
+              )
+            ) : null}
+            <a
+              href={`/p/${row.id}`}
+              className="no-underline text-gray-900 hover:underline truncate"
+            >
+              {row.title || 'Untitled'}
+            </a>
+            {editable && subItemsEnabled ? (
+              <button
+                className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-gray-700 text-xs"
+                onClick={() => onAddSubItem(row.id)}
+                title={t('db.addSubItem')}
+                aria-label={t('db.addSubItem')}
+              >
+                ＋
+              </button>
+            ) : null}
+            {editable && subItemsEnabled && row.subItemParentId ? (
+              <button
+                className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-gray-700 text-xs"
+                onClick={() => onSetSubItemParent(row.id, null)}
+                title={t('db.removeRule')}
+                aria-label={t('db.removeRule')}
+              >
+                ⇤
+              </button>
+            ) : null}
+            {editable ? (
+              <button
+                className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-600 text-xs"
+                onClick={() => onDeleteRow(row.id)}
+                title="Delete row"
+                aria-label="Delete row"
+              >
+                🗑
+              </button>
+            ) : null}
+          </div>
+        </td>
+        {properties.map((p) => (
+          <td key={p.id} className="py-1 px-2">
+            {!editable ? (
+              <span className="text-gray-700">{renderValueText(row, p) || '—'}</span>
+            ) : p.type === 'formula' ? (
+              <FormulaCell property={p} row={row} />
+            ) : AUTO_PROPERTY_TYPES.has(p.type) || p.type === 'rollup' ? (
+              <span className="text-gray-500">{renderValueText(row, p) || '—'}</span>
+            ) : p.type === 'relation' ? (
+              <RelationCell
+                property={p}
+                chips={row.relations?.[p.id] ?? []}
+                value={Array.isArray(row.props[p.id]) ? (row.props[p.id] as string[]) : []}
+                onChange={(ids) => onPatchRow(row.id, { props: { [p.id]: ids } })}
+              />
+            ) : (
+              <CellEditor
+                property={p}
+                value={row.props[p.id] ?? null}
+                onChange={(value) => onPatchRow(row.id, { props: { [p.id]: value } })}
+                onAddOption={(name) => onAddOption(p, name)}
+              />
+            )}
+          </td>
+        ))}
+        <td />
+      </tr>
+    );
+  }
+
+  // Decide what rows to render: grouped sections, a sub-item tree, or flat.
+  function renderBodyRows(scopedRows: DbRow[]) {
+    if (subItemsEnabled) {
+      const tree = buildSubItemTree(scopedRows);
+      return flattenSubItems(tree, collapsed).map((n) => renderRow(n.row, n.depth, n.hasChildren));
+    }
+    return scopedRows.map((row) => renderRow(row, 0, false));
+  }
+
+  const groupProp = groupBy ? properties.find((p) => p.id === groupBy) : undefined;
+  const groups = groupBy ? groupRowsForView(rows, groupBy) : null;
+
+  function groupLabel(key: string | null): string {
+    if (key === null) return t('db.noValue');
+    const opt = (groupProp?.config.options ?? []).find((o) => o.id === key);
+    return opt?.name ?? key;
+  }
+
   return (
     <div className="overflow-x-auto">
+      {editable ? (
+        <label className="flex items-center gap-1 text-xs text-gray-400 mb-1">
+          <input
+            type="checkbox"
+            checked={subItemsEnabled}
+            onChange={(e) => onToggleSubItems(e.target.checked)}
+          />
+          {t('db.enableSubItems')}
+        </label>
+      ) : null}
       <table className="w-full text-sm border-collapse">
         <thead>
           <tr className="border-b border-gray-200 text-left text-gray-500">
-            <th className="py-1.5 px-2 font-medium min-w-[12rem]">Name</th>
+            <th className="py-1.5 px-2 font-medium min-w-[12rem]">{t('db.title')}</th>
             {properties.map((p) => (
               <th key={p.id} className="py-1.5 px-2 font-medium min-w-[8rem]">
                 {p.name}
@@ -509,9 +1259,9 @@ function TableView({
                     value={newPropType}
                     onChange={(e) => setNewPropType(e.target.value as PropertyType)}
                   >
-                    {PROPERTY_TYPES.map((t) => (
-                      <option key={t.value} value={t.value}>
-                        {t.label}
+                    {PROPERTY_TYPES.map((pt) => (
+                      <option key={pt.value} value={pt.value}>
+                        {pt.label}
                       </option>
                     ))}
                   </select>
@@ -561,65 +1311,29 @@ function TableView({
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
-            <tr key={row.id} className="border-b border-gray-100 hover:bg-gray-50 group">
-              <td className="py-1 px-2">
-                <div className="flex items-center gap-2">
-                  <a
-                    href={`/p/${row.id}`}
-                    className="no-underline text-gray-900 hover:underline truncate"
-                  >
-                    {row.title || 'Untitled'}
-                  </a>
-                  {editable ? (
-                    <button
-                      className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-600 text-xs"
-                      onClick={() => onDeleteRow(row.id)}
-                      title="Delete row"
-                      aria-label="Delete row"
-                    >
-                      🗑
-                    </button>
-                  ) : null}
-                </div>
-              </td>
-              {properties.map((p) => (
-                <td key={p.id} className="py-1 px-2">
-                  {!editable ? (
-                    <span className="text-gray-700">{renderValueText(row, p) || '—'}</span>
-                  ) : p.type === 'formula' ? (
-                    <FormulaCell property={p} row={row} />
-                  ) : AUTO_PROPERTY_TYPES.has(p.type) || p.type === 'rollup' ? (
-                    <span className="text-gray-500">{renderValueText(row, p) || '—'}</span>
-                  ) : p.type === 'relation' ? (
-                    <RelationCell
-                      property={p}
-                      chips={row.relations?.[p.id] ?? []}
-                      value={Array.isArray(row.props[p.id]) ? (row.props[p.id] as string[]) : []}
-                      onChange={(ids) => onPatchRow(row.id, { props: { [p.id]: ids } })}
-                    />
-                  ) : (
-                    <CellEditor
-                      property={p}
-                      value={row.props[p.id] ?? null}
-                      onChange={(value) => onPatchRow(row.id, { props: { [p.id]: value } })}
-                      onAddOption={(name) => onAddOption(p, name)}
-                    />
-                  )}
-                </td>
-              ))}
-              <td />
-            </tr>
-          ))}
+          {groups
+            ? groups.map((g) => (
+                <Fragment key={g.key ?? '__none__'}>
+                  <tr className="bg-gray-50">
+                    <td colSpan={colCount} className="py-1 px-2 text-xs font-medium text-gray-600">
+                      {groupLabel(g.key)}{' '}
+                      <span className="text-gray-400">{g.rows.length}</span>
+                    </td>
+                  </tr>
+                  {renderBodyRows(g.rows)}
+                </Fragment>
+              ))
+            : renderBodyRows(rows)}
         </tbody>
       </table>
       {editable ? (
-        <button
-          className="mt-2 text-sm text-gray-500 hover:text-gray-800 px-2 py-1"
-          onClick={onAddRow}
-        >
-          ＋ New
-        </button>
+        <NewRowButton
+          templates={templates}
+          onAddRow={() => onAddRow()}
+          onAddFromTemplate={(templateId) => onAddRow(undefined, templateId)}
+          onCreateTemplate={onCreateTemplate}
+          onDeleteTemplate={onDeleteTemplate}
+        />
       ) : null}
     </div>
   );

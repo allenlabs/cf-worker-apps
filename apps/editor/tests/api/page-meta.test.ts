@@ -28,6 +28,10 @@ const FULL_PAGE = (over: Partial<PageFull> = {}): PageFull => ({
   restricted: false,
   fullWidth: false,
   locked: false,
+  isWiki: false,
+  verified: false,
+  verifiedBy: null,
+  verifiedAt: null,
   ...over,
 });
 

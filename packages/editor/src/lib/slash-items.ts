@@ -267,6 +267,40 @@ export function makeSyncedBlockSlashItem(opts?: { title?: string; hint?: string 
   };
 }
 
+/**
+ * Build the "Linked database view" slash item. Calls the host `onPick` to choose
+ * a source database; on resolution inserts a `linkedDatabase` node referencing
+ * it (no DB is moved). Kept pure (factory taking the pick hook) so it's
+ * unit-testable. A null/undefined resolution (user cancelled) inserts nothing.
+ * `title`/`hint` are optional host-translated labels.
+ */
+export function makeLinkedDatabaseSlashItem(
+  onPick: () => Promise<{ databaseId: string; title?: string; viewId?: string | null } | null>,
+  opts?: { title?: string; hint?: string },
+): SlashItem {
+  return {
+    title: opts?.title ?? 'Linked database view',
+    icon: '🔗',
+    hint: opts?.hint ?? 'Embed an existing database',
+    keywords: ['linked', 'database', 'db', 'view', 'embed', 'reference'],
+    command: ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range).run();
+      void onPick().then((picked) => {
+        if (!picked || !picked.databaseId) return;
+        editor
+          .chain()
+          .focus()
+          .setLinkedDatabase({
+            databaseId: picked.databaseId,
+            title: picked.title,
+            viewId: picked.viewId ?? null,
+          })
+          .run();
+      });
+    },
+  };
+}
+
 /** Case-insensitive filter over title + keywords. Pure, so it's unit-tested. */
 export function filterSlashItems(items: SlashItem[], query: string): SlashItem[] {
   const q = query.trim().toLowerCase();

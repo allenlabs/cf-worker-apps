@@ -13,6 +13,7 @@ import { PageMenu } from '~/components/PageMenu';
 import {
   collabToken,
   createPage,
+  dbList as dbListFn,
   dbSchema as dbSchemaFn,
   favList,
   favToggle,
@@ -24,6 +25,7 @@ import {
   setLocked as setLockedFn,
   setPublic as setPublicFn,
   setRestricted as setRestrictedFn,
+  setWiki as setWikiFn,
   sharePage as sharePageFn,
   sharedWithMe as sharedWithMeFn,
   syncRoomToken,
@@ -31,6 +33,9 @@ import {
   unsharePage as unsharePageFn,
   updatePage,
   uploadFile,
+  verifyPage as verifyPageFn,
+  viewAdd as viewAddFn,
+  wikiEntries as wikiEntriesFn,
   type CollabToken,
   type DbSchema,
   type FavoriteItem,
@@ -40,6 +45,7 @@ import {
   type SharedUser,
   type SharedWithMeItem,
   type Teamspace,
+  type WikiEntry,
   type Workspace,
 } from '~/server/docs';
 
@@ -103,6 +109,7 @@ export const Route = createFileRoute('/p/$pageId')({
         teamspaces: [] as Teamspace[],
         sharedWithMe: [] as SharedWithMeItem[],
         shares: [] as SharedUser[],
+        wikiEntries: [] as WikiEntry[],
         userName: '',
       };
     }
@@ -112,7 +119,7 @@ export const Route = createFileRoute('/p/$pageId')({
     const isDatabase = page.kind === 'database';
     // Database pages have no editor → skip the collab token; fetch the schema
     // (a row page is a normal page and still gets a collab editor).
-    const [token, workspaces, pages, schema, favorites, teamspaces, shared, shares] =
+    const [token, workspaces, pages, schema, favorites, teamspaces, shared, shares, wiki] =
       await Promise.all([
         isDatabase
           ? Promise.resolve(null as CollabToken | null)
@@ -126,6 +133,9 @@ export const Route = createFileRoute('/p/$pageId')({
         teamspacesList({ data: { workspaceId: page.workspaceId } }),
         sharedWithMeFn(),
         pageSharesFn({ data: { pageId: params.pageId } }),
+        page.isWiki
+          ? wikiEntriesFn({ data: { id: params.pageId } })
+          : Promise.resolve([] as WikiEntry[]),
       ]);
     return {
       page,
@@ -137,6 +147,7 @@ export const Route = createFileRoute('/p/$pageId')({
       teamspaces,
       sharedWithMe: shared,
       shares,
+      wikiEntries: wiki,
       userName: user?.name ?? 'user',
     };
   },
@@ -169,6 +180,7 @@ function PageView() {
     teamspaces,
     sharedWithMe,
     shares: initialShares,
+    wikiEntries: initialWikiEntries,
     userName,
   } = Route.useLoaderData();
   const { t } = useT();
@@ -177,6 +189,10 @@ function PageView() {
   // Phase 14: per-page presentation + lock.
   const [fullWidth, setFullWidth] = useState(page?.fullWidth ?? false);
   const [locked, setLockedState] = useState(page?.locked ?? false);
+  // Phase 15: wiki home + verified state.
+  const [isWiki, setIsWiki] = useState(page?.isWiki ?? false);
+  const [verified, setVerified] = useState(page?.verified ?? false);
+  const [verifiedBy, setVerifiedBy] = useState(page?.verifiedBy ?? null);
   // owner/edit may write; viewers are read-only (Phase 9).
   const canEdit = page?.role === 'owner' || page?.role === 'edit';
   // Phase 9 viewer share OR Phase 14 lock → the editor / inputs are read-only.
@@ -320,6 +336,63 @@ function PageView() {
     }
   }
 
+  // Phase 15: turn this page into / out of a wiki home. Full-page reload so the
+  // loader re-fetches the wiki entries directory.
+  async function handleToggleWiki() {
+    const next = !isWiki;
+    try {
+      await setWikiFn({ data: { id: pageId, isWiki: next } });
+      if (typeof window !== 'undefined') window.location.href = `/p/${pageId}`;
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Phase 15: mark this page verified / unverified.
+  async function handleToggleVerified() {
+    const next = !verified;
+    setVerified(next);
+    try {
+      const res = await verifyPageFn({ data: { id: pageId, verified: next } });
+      setVerified(res.verified);
+      setVerifiedBy(res.verifiedBy);
+    } catch {
+      setVerified(!next); // revert on failure
+    }
+  }
+
+  // Phase 15: pick a database to embed as a LINKED database view. Creates a
+  // linked view ON this page's nearest database context is out of scope; instead
+  // we anchor the linked view ON the source database itself (so it owns the
+  // saved view config) and reference it from the inserted node. v1 opens the
+  // source DB on click. Returns null to cancel.
+  async function handlePickLinkedDatabase(): Promise<{
+    databaseId: string;
+    title?: string;
+    viewId?: string | null;
+  } | null> {
+    if (typeof window === 'undefined') return null;
+    const dbs = await dbListFn({ data: { workspaceId } });
+    if (dbs.length === 0) {
+      window.alert(t('db.noViews'));
+      return null;
+    }
+    const list = dbs.map((d, i) => `${i + 1}. ${d.title || t('page.untitled')}`).join('\n');
+    const choice = window.prompt(`${t('db.pickSourceDb')}\n${list}`, '1');
+    const idx = choice ? Number(choice) - 1 : -1;
+    const chosen = dbs[idx];
+    if (!chosen) return null;
+    // Create a saved LINKED view on the chosen DB so its filters/sorts persist.
+    try {
+      const view = await viewAddFn({
+        data: { databaseId: chosen.id, type: 'table', name: t('db.linkedView'), sourceDatabaseId: chosen.id },
+      });
+      return { databaseId: chosen.id, title: chosen.title, viewId: view.id };
+    } catch {
+      return { databaseId: chosen.id, title: chosen.title, viewId: null };
+    }
+  }
+
   // Inline comments: user anchored a fresh selection → open the panel on a new
   // (empty) thread; the first reply persists it under this threadId.
   function handleCommentCreate(threadId: string, selectedText: string) {
@@ -436,8 +509,14 @@ function PageView() {
               fullWidth={fullWidth}
               locked={locked}
               canEdit={canEdit}
+              isOwner={isOwner}
+              isWiki={isWiki}
+              verified={verified}
+              isDatabase={isDatabase}
               onToggleFullWidth={() => void handleToggleFullWidth()}
               onToggleLocked={() => void handleToggleLocked()}
+              onToggleWiki={() => void handleToggleWiki()}
+              onToggleVerified={() => void handleToggleVerified()}
             />
 
             {shareOpen ? (
@@ -632,7 +711,20 @@ function PageView() {
               readOnly={readOnly}
               data-testid="page-title"
             />
+            {verified ? (
+              <span
+                className="shrink-0 self-center text-xs text-green-700 bg-green-50 border border-green-200 rounded px-1.5 py-0.5"
+                title={verifiedBy ? t('wiki.verifiedBy', { who: verifiedBy }) : t('wiki.verified')}
+                data-testid="verified-badge"
+              >
+                {t('verify.verified')}
+              </span>
+            ) : null}
           </div>
+
+          {isWiki ? (
+            <WikiDirectory entries={initialWikiEntries} canEdit={canEdit} />
+          ) : null}
 
           {isDatabase && schema ? (
             <DatabaseView
@@ -682,6 +774,7 @@ function PageView() {
                 // Full-page nav per repo lesson (SSR re-reads the cookie).
                 window.location.href = `/p/${id}`;
               }}
+              onPickLinkedDatabase={handlePickLinkedDatabase}
               comments={{
                 onCreate: handleCommentCreate,
                 onOpenThread: handleOpenThread,
@@ -718,5 +811,49 @@ function PageView() {
         <VersionHistoryPanel pageId={pageId} onClose={() => setHistoryOpen(false)} />
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Phase 15 — Wiki directory: a card grid of the page's direct sub-pages with
+ * each child's verified state + last-edited time. Rendered above the editor
+ * when the page is a wiki home.
+ */
+function WikiDirectory({ entries, canEdit }: { entries: WikiEntry[]; canEdit: boolean }) {
+  const { t } = useT();
+  void canEdit;
+  return (
+    <section className="my-4" data-testid="wiki-directory">
+      <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">
+        {t('wiki.title')}
+      </h2>
+      {entries.length === 0 ? (
+        <p className="text-sm text-gray-400">{t('wiki.empty')}</p>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+          {entries.map((e) => (
+            <a
+              key={e.id}
+              href={`/p/${e.id}`}
+              className="block no-underline border border-gray-200 dark:border-gray-700 rounded p-3 hover:shadow text-gray-900 dark:text-gray-100"
+            >
+              <div className="flex items-center gap-2">
+                <span className="shrink-0">{e.icon ?? '📄'}</span>
+                <span className="font-medium truncate">{e.title || t('page.untitled')}</span>
+                {e.verified ? (
+                  <span className="ml-auto text-[10px] text-green-700 bg-green-50 border border-green-200 rounded px-1">
+                    {t('wiki.verified')}
+                  </span>
+                ) : null}
+              </div>
+              <div className="text-xs text-gray-400 mt-1">
+                {t('wiki.lastEdited')}: {new Date(e.updatedAt).toLocaleDateString()}
+                {e.verified && e.verifiedBy ? ` · ${t('wiki.verifiedBy', { who: e.verifiedBy })}` : ''}
+              </div>
+            </a>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }

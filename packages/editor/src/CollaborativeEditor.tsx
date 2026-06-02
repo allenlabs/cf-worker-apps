@@ -26,6 +26,7 @@ import { Bookmark } from './extensions/bookmark';
 import { Columns, Column } from './extensions/columns';
 import { Comment, commentThreadIdAt } from './extensions/comment';
 import { ChildPage } from './extensions/child-page';
+import { LinkedDatabase } from './extensions/linked-database';
 import { BubbleToolbar } from './extensions/bubble-toolbar';
 import { DragHandle } from './extensions/block-menu';
 import { MarkdownRules } from './extensions/markdown-rules';
@@ -39,6 +40,7 @@ import { Breadcrumb } from './extensions/breadcrumb';
 import {
   DEFAULT_SLASH_ITEMS,
   makeChildPageSlashItem,
+  makeLinkedDatabaseSlashItem,
   makeSyncedBlockSlashItem,
 } from './lib/slash-items';
 import type { EditorProps, SlashItem } from './lib/types';
@@ -254,6 +256,18 @@ export function CollaborativeEditor(props: EditorProps) {
     if (onCreateChildPage) {
       items = [...items, makeChildPageSlashItem(onCreateChildPage)];
     }
+    // Linked database view: offered when the host wired a database picker.
+    if (props.onPickLinkedDatabase) {
+      const onPick = props.onPickLinkedDatabase;
+      const tr = props.blockMenuT;
+      items = [
+        ...items,
+        makeLinkedDatabaseSlashItem(
+          () => onPick(),
+          tr ? { title: tr('linkedDb.block'), hint: tr('linkedDb.blockHint') } : undefined,
+        ),
+      ];
+    }
     // Synced block: only offered when the host wired collab transport for it.
     if (props.syncedBlock) {
       const tr = props.blockMenuT;
@@ -265,7 +279,14 @@ export function CollaborativeEditor(props: EditorProps) {
       ];
     }
     return items;
-  }, [uploadImage, uploadFile, onCreateChildPage, props.syncedBlock, props.blockMenuT]);
+  }, [
+    uploadImage,
+    uploadFile,
+    onCreateChildPage,
+    props.onPickLinkedDatabase,
+    props.syncedBlock,
+    props.blockMenuT,
+  ]);
 
   const extensions = useMemo<Extensions>(() => {
     const isEditable = props.editable ?? true;
@@ -336,6 +357,16 @@ export function CollaborativeEditor(props: EditorProps) {
         }),
       );
     }
+    // Linked database view (Phase 15): register the node whenever the host can
+    // pick OR navigate, so existing linked-DB blocks render + route. A click
+    // opens the source database via the same onOpenPage host nav ref.
+    if (props.onPickLinkedDatabase || props.onOpenPage) {
+      ext.push(
+        LinkedDatabase.configure({
+          onOpenDatabase: (databaseId: string) => onOpenPageRef.current?.(databaseId),
+        }),
+      );
+    }
     // Synced blocks: register the node when the host wired collab transport for
     // it. The NodeView mounts a nested editor bound to `sync-<syncId>`.
     if (props.syncedBlock) {
@@ -386,6 +417,7 @@ export function CollaborativeEditor(props: EditorProps) {
     !!props.comments,
     !!onCreateChildPage,
     !!props.onOpenPage,
+    !!props.onPickLinkedDatabase,
     props.syncedBlock,
     props.breadcrumb,
   ]);

@@ -125,6 +125,19 @@ export interface EditorProps {
    */
   onOpenPage?: (pageId: string) => void;
   /**
+   * Pick an existing database to embed as a LINKED database view (Phase 15).
+   * When set, the editor registers the `linkedDatabase` node + a "Linked
+   * database view" slash item: choosing it calls this (the host shows a picker),
+   * then inserts a clickable linked-database card referencing the chosen DB
+   * (which is NOT moved). Resolve null to cancel. Clicking the card routes
+   * through {@link EditorProps.onOpenPage}.
+   */
+  onPickLinkedDatabase?: () => Promise<{
+    databaseId: string;
+    title?: string;
+    viewId?: string | null;
+  } | null>;
+  /**
    * Synced blocks. When set, the editor registers the `syncedBlock` node + a
    * "Synced block" slash item; each block mounts a nested collaborative editor
    * bound to its own `sync-<uuid>` room (mirrored across every page it appears

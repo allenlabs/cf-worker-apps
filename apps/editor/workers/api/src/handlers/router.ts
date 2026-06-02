@@ -34,7 +34,10 @@ import {
   pageTreeImpl,
   setLockedImpl,
   setRestrictedImpl,
+  setVerifiedImpl,
+  setWikiImpl,
   updatePageImpl,
+  wikiEntriesImpl,
 } from './pages';
 import {
   pageSharesImpl,
@@ -55,19 +58,26 @@ import {
   addRowImpl,
   addViewImpl,
   createDatabaseImpl,
+  createTemplateImpl,
   dbRowsImpl,
   dbSchemaImpl,
   deletePropertyImpl,
   deleteRowImpl,
+  deleteTemplateImpl,
   deleteViewImpl,
   listDatabasesImpl,
+  listTemplatesImpl,
   propertyDatabaseImpl,
   relatedRowsImpl,
+  renameTemplateImpl,
   rowDatabaseImpl,
+  setSubItemParentImpl,
+  templateDatabaseImpl,
   updatePropertyImpl,
   updateRowImpl,
   updateViewImpl,
   viewDatabaseImpl,
+  viewSourceDatabaseImpl,
 } from './db';
 import { prepareUpload, publicUrlFor } from './files';
 import {
@@ -539,6 +549,8 @@ const viewAddSchema = z.object({
   type: viewType,
   name: z.string().max(120).optional(),
   config: z.record(z.string(), z.unknown()).optional(),
+  // Phase 15: a LINKED view reads another database's rows.
+  sourceDatabaseId: z.string().uuid().nullish(),
 });
 v1Router.post('/db/view/add', async (c) => {
   const user = c.get('user');
@@ -549,11 +561,18 @@ v1Router.post('/db/view/add', async (c) => {
   if (!(await canEditPageImpl(c.get('db'), user.userId, parsed.data.databaseId))) {
     return c.json({ error: 'forbidden' }, 403);
   }
+  // A linked view's source must be a DB the user can read.
+  if (parsed.data.sourceDatabaseId) {
+    if (!(await canAccessPageImpl(c.get('db'), user.userId, parsed.data.sourceDatabaseId))) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+  }
   const view = await addViewImpl(c.get('db'), {
     databaseId: parsed.data.databaseId,
     type: parsed.data.type,
     name: parsed.data.name,
     config: parsed.data.config,
+    sourceDatabaseId: parsed.data.sourceDatabaseId ?? null,
   });
   return c.json(view, 200);
 });
@@ -562,6 +581,7 @@ const viewUpdateSchema = z.object({
   id: z.string().uuid(),
   name: z.string().max(120).optional(),
   config: z.record(z.string(), z.unknown()).optional(),
+  sourceDatabaseId: z.string().uuid().nullish(),
 });
 v1Router.post('/db/view/update', async (c) => {
   const user = c.get('user');
@@ -574,9 +594,15 @@ v1Router.post('/db/view/update', async (c) => {
   if (!(await canEditPageImpl(c.get('db'), user.userId, dbId))) {
     return c.json({ error: 'forbidden' }, 403);
   }
+  if (parsed.data.sourceDatabaseId) {
+    if (!(await canAccessPageImpl(c.get('db'), user.userId, parsed.data.sourceDatabaseId))) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+  }
   const ok = await updateViewImpl(c.get('db'), parsed.data.id, {
     name: parsed.data.name,
     config: parsed.data.config,
+    sourceDatabaseId: parsed.data.sourceDatabaseId,
   });
   if (!ok) return c.json({ error: 'not found' }, 404);
   return c.json({ ok: true }, 200);
@@ -601,6 +627,9 @@ v1Router.post('/db/view/delete', async (c) => {
 const dbRowsSchema = z.object({
   databaseId: z.string().uuid(),
   viewId: z.string().uuid().optional(),
+  // Phase 15: a linked view reads this source DB's rows (else resolved from the
+  // view's stored source_database_id).
+  sourceDatabaseId: z.string().uuid().nullish(),
 });
 v1Router.post('/db/rows', async (c) => {
   const user = c.get('user');
@@ -610,13 +639,30 @@ v1Router.post('/db/rows', async (c) => {
   }
   const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.databaseId);
   if (!can) return c.json({ error: 'not found' }, 404);
-  const rows = await dbRowsImpl(c.get('db'), parsed.data.databaseId, parsed.data.viewId);
+  // Resolve the source DB: explicit param, else the view's stored source.
+  let sourceDatabaseId = parsed.data.sourceDatabaseId ?? null;
+  if (!sourceDatabaseId && parsed.data.viewId) {
+    sourceDatabaseId = await viewSourceDatabaseImpl(c.get('db'), parsed.data.viewId);
+  }
+  // Reading another DB's rows requires read access to that source DB.
+  if (sourceDatabaseId) {
+    if (!(await canAccessPageImpl(c.get('db'), user.userId, sourceDatabaseId))) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+  }
+  const rows = await dbRowsImpl(c.get('db'), parsed.data.databaseId, {
+    viewId: parsed.data.viewId,
+    sourceDatabaseId,
+  });
   return c.json(rows, 200);
 });
 
 const rowAddSchema = z.object({
   databaseId: z.string().uuid(),
   title: z.string().max(255).optional(),
+  // Phase 15: seed the new row from a template + optionally nest as a sub-item.
+  templateId: z.string().uuid().nullish(),
+  subItemParentId: z.string().uuid().nullish(),
 });
 v1Router.post('/db/row/add', async (c) => {
   const user = c.get('user');
@@ -630,8 +676,103 @@ v1Router.post('/db/row/add', async (c) => {
   const row = await addRowImpl(c.get('db'), user.userId, {
     databaseId: parsed.data.databaseId,
     title: parsed.data.title,
+    templateId: parsed.data.templateId ?? null,
+    subItemParentId: parsed.data.subItemParentId ?? null,
   });
   return c.json(row, 200);
+});
+
+// Phase 15: set/clear a row's sub-item parent (cycle-guarded).
+const rowSubItemSchema = z.object({
+  id: z.string().uuid(),
+  parentId: z.string().uuid().nullable(),
+});
+v1Router.post('/db/row/set-sub-item', async (c) => {
+  const user = c.get('user');
+  const parsed = rowSubItemSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  if (!(await canEditPageImpl(c.get('db'), user.userId, parsed.data.id))) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+  try {
+    const ok = await setSubItemParentImpl(c.get('db'), parsed.data.id, parsed.data.parentId);
+    if (!ok) return c.json({ error: 'not found' }, 404);
+  } catch {
+    // Self-parent / cycle / cross-DB parent.
+    return c.json({ error: 'invalid' }, 400);
+  }
+  return c.json({ ok: true }, 200);
+});
+
+// ---------- row templates (Phase 15) ----------
+
+const tplListSchema = z.object({ databaseId: z.string().uuid() });
+v1Router.post('/db/templates/list', async (c) => {
+  const user = c.get('user');
+  const parsed = tplListSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  if (!(await canAccessPageImpl(c.get('db'), user.userId, parsed.data.databaseId))) {
+    return c.json({ error: 'not found' }, 404);
+  }
+  const templates = await listTemplatesImpl(c.get('db'), parsed.data.databaseId);
+  return c.json(templates, 200);
+});
+
+const tplCreateSchema = z.object({
+  databaseId: z.string().uuid(),
+  name: z.string().max(120).optional(),
+});
+v1Router.post('/db/templates/create', async (c) => {
+  const user = c.get('user');
+  const parsed = tplCreateSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  if (!(await canEditPageImpl(c.get('db'), user.userId, parsed.data.databaseId))) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+  const tpl = await createTemplateImpl(c.get('db'), user.userId, {
+    databaseId: parsed.data.databaseId,
+    name: parsed.data.name,
+  });
+  return c.json(tpl, 200);
+});
+
+const tplRenameSchema = z.object({ id: z.string().uuid(), name: z.string().min(1).max(120) });
+v1Router.post('/db/templates/rename', async (c) => {
+  const user = c.get('user');
+  const parsed = tplRenameSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const dbId = await templateDatabaseImpl(c.get('db'), parsed.data.id);
+  if (!dbId) return c.json({ error: 'not found' }, 404);
+  if (!(await canEditPageImpl(c.get('db'), user.userId, dbId))) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+  const ok = await renameTemplateImpl(c.get('db'), parsed.data.id, parsed.data.name);
+  if (!ok) return c.json({ error: 'not found' }, 404);
+  return c.json({ ok: true }, 200);
+});
+
+v1Router.post('/db/templates/delete', async (c) => {
+  const user = c.get('user');
+  const parsed = idSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const dbId = await templateDatabaseImpl(c.get('db'), parsed.data.id);
+  if (!dbId) return c.json({ error: 'not found' }, 404);
+  if (!(await canEditPageImpl(c.get('db'), user.userId, dbId))) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+  const ok = await deleteTemplateImpl(c.get('db'), parsed.data.id);
+  if (!ok) return c.json({ error: 'not found' }, 404);
+  return c.json({ ok: true }, 200);
 });
 
 const rowUpdateSchema = z.object({
@@ -811,6 +952,62 @@ v1Router.post('/pages/set-locked', async (c) => {
   const result = await setLockedImpl(c.get('db'), parsed.data.id, parsed.data.locked);
   if (!result) return c.json({ error: 'not found' }, 404);
   return c.json(result, 200);
+});
+
+// ---------- wiki / verified pages (Phase 15) ----------
+//
+// Turning a page into a wiki is an OWNER-only structural change. Marking a page
+// verified is owner/editor (a reviewer signal). The wiki directory listing is a
+// plain read gated by page access.
+
+const setWikiSchema = z.object({ id: z.string().uuid(), isWiki: z.boolean() });
+v1Router.post('/pages/set-wiki', async (c) => {
+  const user = c.get('user');
+  const parsed = setWikiSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  if (!(await isPageOwnerImpl(c.get('db'), user.userId, parsed.data.id))) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+  const result = await setWikiImpl(c.get('db'), parsed.data.id, parsed.data.isWiki);
+  if (!result) return c.json({ error: 'not found' }, 404);
+  return c.json(result, 200);
+});
+
+const verifySchema = z.object({ id: z.string().uuid(), verified: z.boolean() });
+v1Router.post('/pages/verify', async (c) => {
+  const user = c.get('user');
+  const parsed = verifySchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const role = await pageRoleImpl(c.get('db'), user.userId, parsed.data.id);
+  if (role !== 'owner' && role !== 'edit') {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+  const result = await setVerifiedImpl(
+    c.get('db'),
+    parsed.data.id,
+    parsed.data.verified,
+    user.username || user.userName || user.userId,
+  );
+  if (!result) return c.json({ error: 'not found' }, 404);
+  return c.json(result, 200);
+});
+
+const wikiEntriesSchema = z.object({ id: z.string().uuid() });
+v1Router.post('/pages/wiki-entries', async (c) => {
+  const user = c.get('user');
+  const parsed = wikiEntriesSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  if (!(await canAccessPageImpl(c.get('db'), user.userId, parsed.data.id))) {
+    return c.json({ error: 'not found' }, 404);
+  }
+  const entries = await wikiEntriesImpl(c.get('db'), parsed.data.id);
+  return c.json(entries, 200);
 });
 
 // ---------- per-user sharing (Phase 9) ----------

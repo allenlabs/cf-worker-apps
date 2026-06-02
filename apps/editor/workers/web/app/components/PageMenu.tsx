@@ -23,8 +23,16 @@ interface PageMenuProps {
   locked: boolean;
   /** owner/editor may lock + change full width; viewers see read-only items only. */
   canEdit: boolean;
+  /** Phase 15 — owner-only "Turn into wiki"; owner/editor "Verify". */
+  isOwner: boolean;
+  isWiki: boolean;
+  verified: boolean;
+  /** A database page has no verify/wiki affordances. */
+  isDatabase: boolean;
   onToggleFullWidth: () => void;
   onToggleLocked: () => void;
+  onToggleWiki: () => void;
+  onToggleVerified: () => void;
 }
 
 const PAGE_LINK_BASE = 'https://editor.allenlabs.org/p/';
@@ -36,8 +44,14 @@ export function PageMenu({
   fullWidth,
   locked,
   canEdit,
+  isOwner,
+  isWiki,
+  verified,
+  isDatabase,
   onToggleFullWidth,
   onToggleLocked,
+  onToggleWiki,
+  onToggleVerified,
 }: PageMenuProps) {
   const { t } = useT();
   const [open, setOpen] = useState(false);
@@ -140,6 +154,34 @@ export function PageMenu({
           >
             {locked ? t('pageMenu.unlock') : t('pageMenu.lock')}
           </button>
+          {!isDatabase ? (
+            <>
+              <button
+                className={itemCls}
+                onClick={() => {
+                  onToggleVerified();
+                  setOpen(false);
+                }}
+                role="menuitem"
+                disabled={!canEdit}
+                data-testid="page-menu-verify"
+              >
+                {verified ? t('verify.unverify') : t('verify.verify')}
+              </button>
+              <button
+                className={itemCls}
+                onClick={() => {
+                  onToggleWiki();
+                  setOpen(false);
+                }}
+                role="menuitem"
+                disabled={!isOwner}
+                data-testid="page-menu-wiki"
+              >
+                {isWiki ? t('pageMenu.turnOffWiki') : t('pageMenu.turnIntoWiki')}
+              </button>
+            </>
+          ) : null}
           <div className="my-1 border-t border-gray-100 dark:border-gray-700" />
           <button
             className={itemCls}

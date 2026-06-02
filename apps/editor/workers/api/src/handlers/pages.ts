@@ -42,6 +42,10 @@ export interface PageFull {
   restricted: boolean; // Phase 10 — when true, only owner + explicit shares can access
   fullWidth: boolean; // Phase 14 — render the page container edge-to-edge
   locked: boolean; // Phase 14 — when true the page is read-only for everyone
+  isWiki: boolean; // Phase 15 — page is a wiki home (lists its sub-pages)
+  verified: boolean; // Phase 15 — page marked verified
+  verifiedBy: string | null; // Phase 15 — actor email who verified
+  verifiedAt: string | null; // Phase 15 — when verified (ISO)
 }
 
 // ---------- membership helpers ----------
@@ -299,6 +303,102 @@ export async function setLockedImpl(
   return rows[0] ? { locked: rows[0].locked } : null;
 }
 
+/**
+ * Phase 15 — set/clear a page's `is_wiki` flag (turn a page into a wiki home
+ * that lists its sub-pages as a directory). Returns null when the page is
+ * missing.
+ */
+export async function setWikiImpl(
+  sql: Sql,
+  id: string,
+  isWiki: boolean,
+): Promise<{ isWiki: boolean } | null> {
+  const rows = await sql<{ isWiki: boolean }[]>`
+    UPDATE editor.pages
+    SET is_wiki = ${isWiki}, updated_at = now()
+    WHERE id = ${id}
+    RETURNING is_wiki AS "isWiki"
+  `;
+  return rows[0] ? { isWiki: rows[0].isWiki } : null;
+}
+
+/**
+ * Phase 15 — mark a page verified / unverified (wiki verified pages). When
+ * verifying, stamp the actor's email + now; when unverifying, clear both.
+ * Returns the new verification state, or null when the page is missing.
+ */
+export async function setVerifiedImpl(
+  sql: Sql,
+  id: string,
+  verified: boolean,
+  actorEmail: string | null,
+): Promise<{ verified: boolean; verifiedBy: string | null; verifiedAt: string | null } | null> {
+  const rows = await sql<
+    { verified: boolean; verifiedBy: string | null; verifiedAt: string | null }[]
+  >`
+    UPDATE editor.pages
+    SET verified = ${verified},
+        verified_by = ${verified ? actorEmail : null},
+        verified_at = ${verified ? sql`now()` : null},
+        updated_at = now()
+    WHERE id = ${id}
+    RETURNING verified, verified_by AS "verifiedBy", verified_at AS "verifiedAt"
+  `;
+  if (!rows[0]) return null;
+  return {
+    verified: rows[0].verified,
+    verifiedBy: rows[0].verifiedBy ?? null,
+    verifiedAt: rows[0].verifiedAt ? String(rows[0].verifiedAt) : null,
+  };
+}
+
+/** One child page in a wiki directory listing. */
+export interface WikiEntry {
+  id: string;
+  title: string;
+  icon: string | null;
+  verified: boolean;
+  verifiedBy: string | null;
+  verifiedAt: string | null;
+  updatedAt: string;
+}
+
+/**
+ * Phase 15 — list the direct child pages of a wiki page as a directory, with
+ * each child's verified state + last-edited time. Excludes database rows
+ * (database_id set) so a wiki of databases still lists the DB pages but not
+ * their rows. Ordered by position then title.
+ */
+export async function wikiEntriesImpl(sql: Sql, pageId: string): Promise<WikiEntry[]> {
+  const rows = await sql<
+    {
+      id: string;
+      title: string;
+      icon: string | null;
+      verified: boolean;
+      verifiedBy: string | null;
+      verifiedAt: string | null;
+      updatedAt: string;
+    }[]
+  >`
+    SELECT id, title, icon, verified,
+           verified_by AS "verifiedBy", verified_at AS "verifiedAt",
+           updated_at AS "updatedAt"
+    FROM editor.pages
+    WHERE parent_id = ${pageId} AND archived = false AND database_id IS NULL
+    ORDER BY position ASC, title ASC
+  `;
+  return rows.map((r) => ({
+    id: r.id,
+    title: r.title,
+    icon: r.icon,
+    verified: r.verified,
+    verifiedBy: r.verifiedBy ?? null,
+    verifiedAt: r.verifiedAt ? String(r.verifiedAt) : null,
+    updatedAt: String(r.updatedAt),
+  }));
+}
+
 /** True iff `userId` is the owner_id of `pageId`. */
 export async function isPageOwnerImpl(
   sql: Sql,
@@ -433,7 +533,9 @@ export async function getPageImpl(sql: Sql, id: string): Promise<PageFull | null
     SELECT id, workspace_id AS "workspaceId", parent_id AS "parentId",
            title, icon, cover, snapshot_html AS "snapshotHtml",
            kind, database_id AS "databaseId", public, restricted,
-           full_width AS "fullWidth", locked
+           full_width AS "fullWidth", locked,
+           is_wiki AS "isWiki", verified,
+           verified_by AS "verifiedBy", verified_at AS "verifiedAt"
     FROM editor.pages
     WHERE id = ${id} AND archived = false
     LIMIT 1
