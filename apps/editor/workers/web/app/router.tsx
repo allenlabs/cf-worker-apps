@@ -7,7 +7,7 @@ import { DEFAULT_LOCALE } from '@allenlabs/i18n';
 export function createRouter() {
   return createTanStackRouter({
     routeTree,
-    context: { user: null, locale: DEFAULT_LOCALE },
+    context: { user: null, locale: DEFAULT_LOCALE, theme: 'light' },
     defaultPreload: 'intent',
     defaultPendingMs: Number.POSITIVE_INFINITY,
     defaultErrorComponent: ({ error }: { error: unknown }) => (

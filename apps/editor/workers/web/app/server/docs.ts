@@ -69,6 +69,8 @@ export interface PageFull {
   favorited: boolean; // Phase 4 — starred by the requesting user
   role: PageRole; // Phase 9 — requesting user's effective role on this page
   restricted: boolean; // Phase 10 — only owner + invited people can access
+  fullWidth: boolean; // Phase 14 — render the page container edge-to-edge
+  locked: boolean; // Phase 14 — read-only for everyone when true
 }
 
 // ---------- per-user sharing + teamspaces (Phase 9) ----------
@@ -412,10 +414,37 @@ export function getPageImpl(
 export function updatePageImpl(
   env: ApiClientEnv,
   user: CurrentUser,
-  input: { id: string; title?: string; icon?: string | null; cover?: string | null; snapshotHtml?: string },
+  input: {
+    id: string;
+    title?: string;
+    icon?: string | null;
+    cover?: string | null;
+    snapshotHtml?: string;
+    fullWidth?: boolean;
+  },
   deps?: ApiClientDeps,
 ): Promise<{ ok: boolean }> {
   return apiPostImpl<{ ok: boolean }>(env, '/v1/pages/update', userBody(user, input), deps);
+}
+
+/** Phase 14 — deep-copy a page subtree; returns the new root id. */
+export function duplicatePageImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  id: string,
+  deps?: ApiClientDeps,
+): Promise<{ id: string }> {
+  return apiPostImpl<{ id: string }>(env, '/v1/pages/duplicate', userBody(user, { id }), deps);
+}
+
+/** Phase 14 — toggle a page's read-only lock (owner/editor). */
+export function setLockedImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { id: string; locked: boolean },
+  deps?: ApiClientDeps,
+): Promise<{ locked: boolean }> {
+  return apiPostImpl<{ locked: boolean }>(env, '/v1/pages/set-locked', userBody(user, input), deps);
 }
 
 export function movePageImpl(
@@ -1001,6 +1030,7 @@ export const updatePage = createServerFn({ method: 'POST' })
         icon: z.string().max(32).nullish(),
         cover: z.string().max(2048).nullish(),
         snapshotHtml: z.string().optional(),
+        fullWidth: z.boolean().optional(),
       })
       .parse(d),
   )
@@ -1012,7 +1042,24 @@ export const updatePage = createServerFn({ method: 'POST' })
       icon: data.icon === undefined ? undefined : data.icon ?? null,
       cover: data.cover === undefined ? undefined : data.cover ?? null,
       snapshotHtml: data.snapshotHtml,
+      fullWidth: data.fullWidth,
     });
+  });
+
+export const duplicatePage = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return duplicatePageImpl(getEnv(), user, data.id);
+  });
+
+export const setLocked = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z.object({ id: z.string().uuid(), locked: z.boolean() }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return setLockedImpl(getEnv(), user, data);
   });
 
 export const movePage = createServerFn({ method: 'POST' })

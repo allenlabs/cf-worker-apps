@@ -48,6 +48,35 @@ const editor: Dict = {
     'page.addSubPage': '＋ Add sub-page',
     'page.editorPlaceholder': 'Type "/" for commands…',
     'page.readOnly': 'View only — you can read but not edit this page.',
+    'page.locked': 'Locked — this page is read-only.',
+    'page.moreActions': 'More actions',
+
+    // Page "⋯" menu (Phase 14)
+    'pageMenu.duplicate': 'Duplicate',
+    'pageMenu.moveTo': 'Move to',
+    'pageMenu.moveToRoot': 'Move to top level',
+    'pageMenu.movePlaceholder': 'Move under…',
+    'pageMenu.copyLink': 'Copy link',
+    'pageMenu.fullWidth': 'Full width',
+    'pageMenu.fullWidthOff': 'Disable full width',
+    'pageMenu.lock': 'Lock page',
+    'pageMenu.unlock': 'Unlock',
+    'pageMenu.export': 'Export',
+    'pageMenu.exportMarkdown': 'Markdown (.md)',
+    'pageMenu.exportHtml': 'HTML (.html)',
+
+    // ⌘K quick find (Phase 14)
+    'cmdK.placeholder': 'Search everything or jump to an action…',
+    'cmdK.noResults': 'No results.',
+    'cmdK.newPage': 'New page',
+    'cmdK.newDatabase': 'New database',
+    'cmdK.goTrash': 'Go to Trash',
+    'cmdK.toggleTheme': 'Toggle dark mode',
+    'cmdK.toggleLang': 'Toggle language',
+
+    // Theme toggle (Phase 14)
+    'theme.dark': 'Dark mode',
+    'theme.light': 'Light mode',
 
     // Page icon (emoji picker)
     'icon.add': 'Add icon',
@@ -223,6 +252,35 @@ const editor: Dict = {
     'page.addSubPage': '＋ 하위 페이지 추가',
     'page.editorPlaceholder': '"/"를 입력하여 명령 실행…',
     'page.readOnly': '보기 전용 — 이 페이지는 읽을 수만 있고 편집할 수 없습니다.',
+    'page.locked': '잠김 — 이 페이지는 읽기 전용입니다.',
+    'page.moreActions': '더 보기',
+
+    // Page "⋯" menu (Phase 14)
+    'pageMenu.duplicate': '복제',
+    'pageMenu.moveTo': '이동',
+    'pageMenu.moveToRoot': '최상위로 이동',
+    'pageMenu.movePlaceholder': '다음 페이지 아래로 이동…',
+    'pageMenu.copyLink': '링크 복사',
+    'pageMenu.fullWidth': '전체 너비',
+    'pageMenu.fullWidthOff': '전체 너비 끄기',
+    'pageMenu.lock': '페이지 잠금',
+    'pageMenu.unlock': '잠금 해제',
+    'pageMenu.export': '내보내기',
+    'pageMenu.exportMarkdown': 'Markdown (.md)',
+    'pageMenu.exportHtml': 'HTML (.html)',
+
+    // ⌘K quick find (Phase 14)
+    'cmdK.placeholder': '전체 검색 또는 작업으로 이동…',
+    'cmdK.noResults': '결과가 없습니다.',
+    'cmdK.newPage': '새 페이지',
+    'cmdK.newDatabase': '새 데이터베이스',
+    'cmdK.goTrash': '휴지통으로 이동',
+    'cmdK.toggleTheme': '다크 모드 전환',
+    'cmdK.toggleLang': '언어 전환',
+
+    // Theme toggle (Phase 14)
+    'theme.dark': '다크 모드',
+    'theme.light': '라이트 모드',
 
     // Page icon (emoji picker)
     'icon.add': '아이콘 추가',

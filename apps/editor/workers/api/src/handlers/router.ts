@@ -23,6 +23,7 @@ import {
   canAccessPageImpl,
   canEditPageImpl,
   createPageImpl,
+  duplicatePageImpl,
   getPageImpl,
   isMemberImpl,
   hasAnyMembershipImpl,
@@ -31,6 +32,7 @@ import {
   movePageImpl,
   pageRoleImpl,
   pageTreeImpl,
+  setLockedImpl,
   setRestrictedImpl,
   updatePageImpl,
 } from './pages';
@@ -158,6 +160,23 @@ v1Router.post('/pages/create', async (c) => {
   return c.json(created, 200);
 });
 
+// Phase 14: deep-copy a page + its descendant subtree (new uuids, parent
+// remapped). Requires read access to the source; the copy is owned by the
+// requester. Returns the new root id for a full-page nav.
+v1Router.post('/pages/duplicate', async (c) => {
+  const user = c.get('user');
+  const parsed = idSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  if (!(await canAccessPageImpl(c.get('db'), user.userId, parsed.data.id))) {
+    return c.json({ error: 'not found' }, 404);
+  }
+  const created = await duplicatePageImpl(c.get('db'), user.userId, parsed.data.id);
+  if (!created) return c.json({ error: 'not found' }, 404);
+  return c.json(created, 200);
+});
+
 v1Router.post('/pages/get', async (c) => {
   const user = c.get('user');
   const parsed = idSchema.safeParse(c.get('body'));
@@ -180,6 +199,7 @@ const updatePageSchema = z.object({
   icon: z.string().max(32).nullish(),
   cover: z.string().max(2048).nullish(),
   snapshotHtml: z.string().optional(),
+  fullWidth: z.boolean().optional(),
 });
 v1Router.post('/pages/update', async (c) => {
   const user = c.get('user');
@@ -196,6 +216,7 @@ v1Router.post('/pages/update', async (c) => {
     icon: parsed.data.icon === undefined ? undefined : parsed.data.icon ?? null,
     cover: parsed.data.cover === undefined ? undefined : parsed.data.cover ?? null,
     snapshotHtml: parsed.data.snapshotHtml,
+    fullWidth: parsed.data.fullWidth,
     author: { id: user.userId, name: user.userName },
   });
   if (!ok) return c.json({ error: 'not found' }, 404);
@@ -765,6 +786,29 @@ v1Router.post('/pages/set-restricted', async (c) => {
     return c.json({ error: 'forbidden' }, 403);
   }
   const result = await setRestrictedImpl(c.get('db'), parsed.data.id, parsed.data.restricted);
+  if (!result) return c.json({ error: 'not found' }, 404);
+  return c.json(result, 200);
+});
+
+// ---------- per-page lock (Phase 14) ----------
+//
+// Locking makes a page read-only for EVERYONE; canEditPageImpl refuses writes
+// while locked. The toggle itself must therefore NOT go through canEditPageImpl
+// (it would refuse to unlock) — we gate on the role directly (owner|edit) so an
+// editor can always lock + unlock.
+
+const setLockedSchema = z.object({ id: z.string().uuid(), locked: z.boolean() });
+v1Router.post('/pages/set-locked', async (c) => {
+  const user = c.get('user');
+  const parsed = setLockedSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const role = await pageRoleImpl(c.get('db'), user.userId, parsed.data.id);
+  if (role !== 'owner' && role !== 'edit') {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+  const result = await setLockedImpl(c.get('db'), parsed.data.id, parsed.data.locked);
   if (!result) return c.json({ error: 'not found' }, 404);
   return c.json(result, 200);
 });

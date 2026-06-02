@@ -1,5 +1,10 @@
 @import 'tailwindcss';
 
+/* Phase 14: class-based dark mode (Tailwind v4 defaults `dark:` to the OS
+   media query; we drive it from `<html class="dark">` set SSR-side from the
+   `theme` cookie so it's deterministic + flash-free). */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --color-editor-50: #f3f6fb;
   --color-editor-100: #e3eaf6;
@@ -36,3 +41,56 @@
     @apply block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-editor-500 focus:outline-none focus:ring-1 focus:ring-editor-500;
   }
 }
+
+/* ---------- dark mode (Phase 14) ----------
+   The @allenlabs/editor package ships light styles only; we MUST NOT modify the
+   package, so the dark surface for the editor + app chrome lives here as plain
+   overrides scoped under `.dark`. Keep it minimal but legible: a dark page
+   surface, light body text, and toned-down block chrome (code/quote/callout). */
+.dark body {
+  @apply bg-gray-900 text-gray-100;
+}
+.dark a {
+  @apply text-editor-300;
+}
+.dark .card {
+  @apply bg-gray-800 border-gray-700;
+}
+
+/* Editor surface — the ProseMirror content area and its common blocks. */
+.dark .ProseMirror {
+  color: #e5e7eb;
+}
+.dark .ProseMirror h1,
+.dark .ProseMirror h2,
+.dark .ProseMirror h3,
+.dark .ProseMirror h4 {
+  color: #f3f4f6;
+}
+.dark .ProseMirror p.is-empty::before,
+.dark .ProseMirror .is-editor-empty:first-child::before {
+  color: #6b7280; /* placeholder text */
+}
+.dark .ProseMirror pre {
+  background: #111827;
+  color: #e5e7eb;
+}
+.dark .ProseMirror code {
+  background: #1f2937;
+  color: #e5e7eb;
+}
+.dark .ProseMirror blockquote {
+  border-left-color: #4b5563;
+  color: #9ca3af;
+}
+.dark .ProseMirror hr {
+  border-color: #374151;
+}
+.dark .ProseMirror table td,
+.dark .ProseMirror table th {
+  border-color: #374151;
+}
+.dark .ProseMirror a {
+  color: #93c5fd;
+}
+

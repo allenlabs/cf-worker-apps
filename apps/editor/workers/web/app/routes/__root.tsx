@@ -19,6 +19,7 @@ import { DEFAULT_LOCALE, type Locale } from '@allenlabs/i18n';
 import { resolveLocale } from '@allenlabs/i18n/server';
 import { I18nProvider } from '@allenlabs/i18n/react';
 import { editorDict } from '~/i18n/dict';
+import { readThemeFromCookie, type Theme } from '~/lib/theme';
 
 interface AppUser {
   id: string;
@@ -28,6 +29,7 @@ interface AppUser {
 interface RouterContext {
   user: AppUser | null;
   locale: Locale;
+  theme: Theme;
 }
 
 /**
@@ -93,10 +95,10 @@ export const Route = createRootRouteWithContext<RouterContext>()({
     // httpOnly JWT. Actions that change the signed-in state use a full-page
     // navigation so SSR re-populates the user. (Mirrors PM.)
     if (typeof document !== 'undefined') {
-      return { user: null, appName: 'Editor', locale: DEFAULT_LOCALE };
+      return { user: null, appName: 'Editor', locale: DEFAULT_LOCALE, theme: 'light' as Theme };
     }
     const req = getRequest();
-    if (!req) return { user: null, appName: 'Editor', locale: DEFAULT_LOCALE };
+    if (!req) return { user: null, appName: 'Editor', locale: DEFAULT_LOCALE, theme: 'light' as Theme };
     const cookie = req.headers.get('cookie') ?? null;
     const token = readSessionToken(cookie);
     const env = getEnv();
@@ -112,7 +114,8 @@ export const Route = createRootRouteWithContext<RouterContext>()({
     // Locale priority: cookie → JWT claim → Accept-Language → 'en'. Resolved
     // server-side so the first SSR paint is already in the right language.
     const locale = resolveLocale(req as unknown as Request, jwtLocale);
-    return { user, appName: env.APP_NAME ?? 'Editor', locale };
+    const theme = readThemeFromCookie(cookie);
+    return { user, appName: env.APP_NAME ?? 'Editor', locale, theme };
   },
   head: () => ({
     meta: [
@@ -142,10 +145,11 @@ function RootComponent() {
   const user = data?.user ?? null;
   const appName = data?.appName ?? 'Editor';
   const locale = data?.locale ?? DEFAULT_LOCALE;
+  const theme = data?.theme ?? 'light';
   return (
-    <RootDocument locale={locale}>
+    <RootDocument locale={locale} theme={theme}>
       <I18nProvider locale={locale} dict={editorDict}>
-        <Layout user={user} appName={appName}>
+        <Layout user={user} appName={appName} theme={theme}>
           <Outlet />
         </Layout>
       </I18nProvider>
@@ -153,9 +157,19 @@ function RootComponent() {
   );
 }
 
-function RootDocument({ locale, children }: { locale: Locale; children: ReactNode }) {
+function RootDocument({
+  locale,
+  theme,
+  children,
+}: {
+  locale: Locale;
+  theme: Theme;
+  children: ReactNode;
+}) {
+  // Emit the theme class on <html> SSR-side so the very first paint matches the
+  // cookie — no light→dark flash on load.
   return (
-    <html lang={locale}>
+    <html lang={locale} className={theme === 'dark' ? 'dark' : undefined}>
       <head>
         <HeadContent />
       </head>

@@ -9,6 +9,7 @@ import { CommentsPanel, type PendingThread } from '~/components/CommentsPanel';
 import { VersionHistoryPanel } from '~/components/VersionHistoryPanel';
 import { EmojiPicker } from '~/components/EmojiPicker';
 import { PageCover } from '~/components/PageCover';
+import { PageMenu } from '~/components/PageMenu';
 import {
   collabToken,
   createPage,
@@ -20,6 +21,7 @@ import {
   listWorkspaces,
   pageShares as pageSharesFn,
   searchMentions,
+  setLocked as setLockedFn,
   setPublic as setPublicFn,
   setRestricted as setRestrictedFn,
   sharePage as sharePageFn,
@@ -172,8 +174,16 @@ function PageView() {
   const { t } = useT();
   const { pageId } = Route.useParams();
   const isDatabase = page?.kind === 'database';
-  // Phase 9: a viewer-only share resolves the page but the editor is read-only.
-  const readOnly = page?.role === 'view';
+  // Phase 14: per-page presentation + lock.
+  const [fullWidth, setFullWidth] = useState(page?.fullWidth ?? false);
+  const [locked, setLockedState] = useState(page?.locked ?? false);
+  // owner/edit may write; viewers are read-only (Phase 9).
+  const canEdit = page?.role === 'owner' || page?.role === 'edit';
+  // Phase 9 viewer share OR Phase 14 lock → the editor / inputs are read-only.
+  const readOnly = page?.role === 'view' || locked;
+  // Latest saved snapshot html (seed from the loader; updated on each edit) so
+  // Export uses current content.
+  const [snapshotHtml, setSnapshotHtml] = useState(page?.snapshotHtml ?? '');
 
   // TipTap touches the DOM — render the editor ONLY after mount (never on the
   // server). Until then show a skeleton.
@@ -282,10 +292,32 @@ function PageView() {
   const workspaceId = page?.workspaceId ?? '';
 
   function handleUpdate(html: string) {
+    setSnapshotHtml(html);
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
       void updatePage({ data: { id: pageId, snapshotHtml: html } }).catch(() => {});
     }, 800);
+  }
+
+  async function handleToggleFullWidth() {
+    const next = !fullWidth;
+    setFullWidth(next);
+    try {
+      await updatePage({ data: { id: pageId, fullWidth: next } });
+    } catch {
+      setFullWidth(!next); // revert on failure
+    }
+  }
+
+  async function handleToggleLocked() {
+    const next = !locked;
+    setLockedState(next);
+    try {
+      const res = await setLockedFn({ data: { id: pageId, locked: next } });
+      setLockedState(res.locked);
+    } catch {
+      setLockedState(!next); // revert on failure
+    }
   }
 
   // Inline comments: user anchored a fresh selection → open the panel on a new
@@ -354,8 +386,8 @@ function PageView() {
         teamspaces={teamspaces}
         sharedWithMe={sharedWithMe}
       />
-      <div className="flex-1 overflow-y-auto">
-        <div className="max-w-3xl mx-auto px-8 py-6">
+      <div className="flex-1 overflow-y-auto dark:bg-gray-900">
+        <div className={`${fullWidth ? 'max-w-5xl' : 'max-w-3xl'} mx-auto px-8 py-6`}>
           <div className="flex items-center justify-end gap-1 mb-2 relative">
             <button
               className={`px-2 py-1 rounded text-sm hover:bg-gray-100 ${
@@ -396,6 +428,17 @@ function PageView() {
                 {t('page.history')}
               </button>
             )}
+
+            <PageMenu
+              pageId={pageId}
+              title={title}
+              snapshotHtml={snapshotHtml}
+              fullWidth={fullWidth}
+              locked={locked}
+              canEdit={canEdit}
+              onToggleFullWidth={() => void handleToggleFullWidth()}
+              onToggleLocked={() => void handleToggleLocked()}
+            />
 
             {shareOpen ? (
               <div className="absolute right-0 top-9 z-20 w-80 bg-white border border-gray-200 rounded shadow-lg p-3 text-sm">
@@ -529,7 +572,23 @@ function PageView() {
             </nav>
           ) : null}
 
-          {readOnly ? (
+          {locked ? (
+            <div
+              className="mb-3 px-3 py-1.5 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded flex items-center justify-between gap-2"
+              data-testid="locked-indicator"
+            >
+              <span>🔒 {t('page.locked')}</span>
+              {canEdit ? (
+                <button
+                  className="underline hover:text-amber-900"
+                  onClick={() => void handleToggleLocked()}
+                  data-testid="unlock-button"
+                >
+                  {t('pageMenu.unlock')}
+                </button>
+              ) : null}
+            </div>
+          ) : readOnly ? (
             <p className="mb-3 px-3 py-1.5 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded">
               {t('page.readOnly')}
             </p>
@@ -564,7 +623,7 @@ function PageView() {
               ) : null}
             </div>
             <input
-              className="flex-1 text-3xl font-bold outline-none border-0 bg-transparent"
+              className="flex-1 text-3xl font-bold outline-none border-0 bg-transparent text-gray-900 dark:text-gray-100"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               onBlur={handleTitleBlur}

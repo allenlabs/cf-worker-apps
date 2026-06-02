@@ -156,8 +156,8 @@ export function Sidebar({
   }
 
   return (
-    <aside className="w-64 shrink-0 bg-gray-50 border-r border-gray-200 flex flex-col h-full">
-      <div className="px-3 py-3 border-b border-gray-200">
+    <aside className="w-64 shrink-0 bg-gray-50 dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 flex flex-col h-full text-gray-800 dark:text-gray-200">
+      <div className="px-3 py-3 border-b border-gray-200 dark:border-gray-700">
         {workspaces.length > 1 ? (
           <select
             className="w-full text-sm font-semibold bg-transparent outline-none cursor-pointer"

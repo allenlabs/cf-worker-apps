@@ -40,6 +40,8 @@ export interface PageFull {
   databaseId: string | null; // set when this page is a database row
   public: boolean; // Phase 4 — when true, reachable via the public share link
   restricted: boolean; // Phase 10 — when true, only owner + explicit shares can access
+  fullWidth: boolean; // Phase 14 — render the page container edge-to-edge
+  locked: boolean; // Phase 14 — when true the page is read-only for everyone
 }
 
 // ---------- membership helpers ----------
@@ -239,9 +241,22 @@ export async function canAccessPageImpl(
   return (await pageRoleImpl(sql, userId, pageId)) !== null;
 }
 
+/** True iff `pageId` (the page itself) is locked. Missing page → false. */
+export async function isPageLockedImpl(sql: Sql, pageId: string): Promise<boolean> {
+  const [row] = await sql<{ locked: boolean }[]>`
+    SELECT locked FROM editor.pages WHERE id = ${pageId} LIMIT 1
+  `;
+  return row?.locked ?? false;
+}
+
 /**
  * True iff the user can WRITE `pageId` — role is owner or edit. Use this on
  * every mutating route so a 'view'-shared user can't call write endpoints.
+ *
+ * Phase 14: a LOCKED page (the page itself; v1 doesn't climb ancestors) is
+ * read-only for EVERYONE, so every content/structure write route gated by this
+ * helper is refused while locked. The unlock toggle (/v1/pages/set-locked) does
+ * NOT use this gate — it checks role directly — so a page can always be unlocked.
  */
 export async function canEditPageImpl(
   sql: Sql,
@@ -249,7 +264,9 @@ export async function canEditPageImpl(
   pageId: string,
 ): Promise<boolean> {
   const role = await pageRoleImpl(sql, userId, pageId);
-  return role === 'owner' || role === 'edit';
+  const canWrite = role === 'owner' || role === 'edit';
+  if (!canWrite) return false;
+  return !(await isPageLockedImpl(sql, pageId));
 }
 
 /** Set/clear a page's `restricted` flag. Returns false if the page is missing. */
@@ -265,6 +282,21 @@ export async function setRestrictedImpl(
     RETURNING restricted
   `;
   return rows[0] ? { restricted: rows[0].restricted } : null;
+}
+
+/** Set/clear a page's `locked` flag. Returns false if the page is missing. */
+export async function setLockedImpl(
+  sql: Sql,
+  id: string,
+  locked: boolean,
+): Promise<{ locked: boolean } | null> {
+  const rows = await sql<{ locked: boolean }[]>`
+    UPDATE editor.pages
+    SET locked = ${locked}, updated_at = now()
+    WHERE id = ${id}
+    RETURNING locked
+  `;
+  return rows[0] ? { locked: rows[0].locked } : null;
 }
 
 /** True iff `userId` is the owner_id of `pageId`. */
@@ -400,7 +432,8 @@ export async function getPageImpl(sql: Sql, id: string): Promise<PageFull | null
   const [row] = await sql<PageFull[]>`
     SELECT id, workspace_id AS "workspaceId", parent_id AS "parentId",
            title, icon, cover, snapshot_html AS "snapshotHtml",
-           kind, database_id AS "databaseId", public, restricted
+           kind, database_id AS "databaseId", public, restricted,
+           full_width AS "fullWidth", locked
     FROM editor.pages
     WHERE id = ${id} AND archived = false
     LIMIT 1
@@ -413,6 +446,8 @@ export interface UpdatePageInput {
   icon?: string | null;
   cover?: string | null;
   snapshotHtml?: string;
+  /** Phase 14 — toggle the edge-to-edge wide layout. */
+  fullWidth?: boolean;
   /** Attribution for any version row captured when snapshot_html changes. */
   author?: { id: string | null; name: string | null };
 }
@@ -438,6 +473,7 @@ export async function updatePageImpl(
   if (typeof patch.title === 'string') assign.title = patch.title.trim() || 'Untitled';
   if (patch.icon !== undefined) assign.icon = patch.icon;
   if (patch.cover !== undefined) assign.cover = patch.cover;
+  if (typeof patch.fullWidth === 'boolean') assign.full_width = patch.fullWidth;
   if (typeof patch.snapshotHtml === 'string') {
     // Capture the previous snapshot as a version BEFORE overwriting it, but
     // only when the new html is genuinely different.
@@ -539,6 +575,116 @@ export async function movePageImpl(sql: Sql, input: MovePageInput): Promise<bool
     RETURNING id
   `;
   return rows.length > 0;
+}
+
+// ---------- duplicate (Phase 14) ----------
+
+/** One node in the subtree being duplicated (raw DB columns). */
+interface DupRow {
+  id: string;
+  parentId: string | null;
+  title: string;
+  icon: string | null;
+  cover: string | null;
+  snapshotHtml: string;
+  kind: string;
+  databaseId: string | null;
+  dbProps: Record<string, unknown>;
+  position: number;
+  teamspaceId: string | null;
+}
+
+/**
+ * Deep-copy a page and its descendant subtree under a brand-new set of ids.
+ *
+ * The root copy is re-parented to the original's parent (a sibling) with
+ * "Copy of " prefixed to its title; descendants keep their relative title +
+ * parent links, remapped onto the new ids. We copy the presentation columns
+ * (icon/cover/snapshot_html/kind/database_id/db_props), and for any
+ * kind='database' page in the subtree we also clone its db_properties +
+ * db_views.
+ *
+ * NOTE (v1): the live Yjs doc (keyed by page id) is NOT copied — the copy is
+ * seeded from snapshot_html only, so the editor opens with the last-saved
+ * content. Copying the Yjs state is a follow-up. (full_width/locked are
+ * intentionally reset to their defaults on the copy.)
+ *
+ * Returns the new ROOT page id, or null if the source page doesn't exist.
+ */
+export async function duplicatePageImpl(
+  sql: Sql,
+  ownerId: string,
+  id: string,
+): Promise<{ id: string } | null> {
+  const root = await getPageImpl(sql, id);
+  if (!root) return null;
+
+  // Fetch the whole subtree (root + descendants) in one walk.
+  const rows = await sql<DupRow[]>`
+    WITH RECURSIVE subtree AS (
+      SELECT id, parent_id, title, icon, cover, snapshot_html, kind,
+             database_id, db_props, position, teamspace_id, 0 AS depth
+      FROM editor.pages WHERE id = ${id} AND archived = false
+      UNION ALL
+      SELECT p.id, p.parent_id, p.title, p.icon, p.cover, p.snapshot_html, p.kind,
+             p.database_id, p.db_props, p.position, p.teamspace_id, s.depth + 1
+      FROM editor.pages p
+      JOIN subtree s ON p.parent_id = s.id
+      WHERE s.depth < 1000 AND p.archived = false
+    )
+    SELECT id, parent_id AS "parentId", title, icon, cover,
+           snapshot_html AS "snapshotHtml", kind, database_id AS "databaseId",
+           db_props AS "dbProps", position, teamspace_id AS "teamspaceId"
+    FROM subtree
+  `;
+
+  // Map every old id → a fresh uuid so parent/database links can be remapped.
+  const idMap = new Map<string, string>();
+  for (const r of rows) idMap.set(r.id, crypto.randomUUID());
+  const remap = (old: string | null): string | null =>
+    old === null ? null : idMap.get(old) ?? old;
+
+  // Insert pages. The root's parent stays the original root's parent (sibling);
+  // descendants remap their parent within the copied subtree. Only the root
+  // gets the "Copy of " title prefix + carries the original's teamspace section.
+  for (const r of rows) {
+    const newId = idMap.get(r.id)!;
+    const isRoot = r.id === id;
+    const newParent = isRoot ? root.parentId : remap(r.parentId);
+    const title = isRoot ? `Copy of ${r.title}` : r.title;
+    // The root copy keeps its teamspace section; descendants inherit the parent.
+    const teamspaceId = isRoot ? r.teamspaceId : null;
+    await sql`
+      INSERT INTO editor.pages
+        (id, workspace_id, parent_id, owner_id, title, icon, cover, position,
+         snapshot_html, kind, database_id, db_props, teamspace_id)
+      VALUES (
+        ${newId}, ${root.workspaceId}, ${newParent}, ${ownerId}, ${title},
+        ${r.icon}, ${r.cover}, ${r.position}, ${r.snapshotHtml}, ${r.kind},
+        ${remap(r.databaseId)}, ${sql.json(r.dbProps as Parameters<Sql['json']>[0])},
+        ${teamspaceId}
+      )
+    `;
+  }
+
+  // For each database page copied, clone its property + view definitions onto
+  // the new database id.
+  for (const r of rows) {
+    if (r.kind !== 'database') continue;
+    const newDbId = idMap.get(r.id)!;
+    await sql`
+      INSERT INTO editor.db_properties (database_id, name, type, config, position)
+      SELECT ${newDbId}, name, type, config, position
+      FROM editor.db_properties WHERE database_id = ${r.id}
+    `;
+    await sql`
+      INSERT INTO editor.db_views (database_id, name, type, config, position)
+      SELECT ${newDbId}, name, type, config, position
+      FROM editor.db_views WHERE database_id = ${r.id}
+    `;
+  }
+
+  return { id: idMap.get(id)! };
 }
 
 /**

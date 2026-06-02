@@ -2,23 +2,29 @@ import { Link } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
 import { useT } from '@allenlabs/i18n/react';
 import { LanguagePicker } from '~/i18n/picker';
+import { ThemeToggle } from '~/components/ThemeToggle';
+import { CommandPalette } from '~/components/CommandPalette';
+import type { Theme } from '~/lib/theme';
 
 interface Props {
   user: { id: string; name: string } | null;
   appName: string;
+  theme: Theme;
   children: ReactNode;
 }
 
-export function Layout({ user, appName, children }: Props) {
+export function Layout({ user, appName, theme, children }: Props) {
   const { t } = useT();
   return (
-    <div className="min-h-screen flex flex-col bg-gray-50">
-      <header className="bg-editor-700 text-white">
+    <div className="min-h-screen flex flex-col bg-gray-50 dark:bg-gray-900">
+      <CommandPalette />
+      <header className="bg-editor-700 dark:bg-gray-950 text-white">
         <div className="max-w-5xl mx-auto px-4 flex items-center gap-4 h-12">
           <Link to="/" className="text-white font-semibold no-underline hover:underline">
             {appName}
           </Link>
           <div className="ml-auto flex items-center gap-3 text-sm">
+            <ThemeToggle theme={theme} />
             <LanguagePicker />
             {user ? (
               <>
