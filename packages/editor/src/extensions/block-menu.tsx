@@ -342,6 +342,16 @@ export const DragHandle = Extension.create<{ t: BlockMenuT }>({
     return { t: fallbackT };
   },
 
+  // TipTap only allocates `this.storage` for an extension that declares an
+  // `addStorage()` initialiser. Without it, `this.storage` is undefined and
+  // onCreate/onDestroy throw "Cannot (set|read) properties of undefined
+  // (reading 'ctrl')" — which crashes the whole page on the first
+  // useEditor re-create (refreshEditorInstance). Seed an empty storage bag so
+  // we have a stable place to stash the BlockMenu controller.
+  addStorage() {
+    return { ctrl: undefined as BlockMenuController | undefined };
+  },
+
   addExtensions() {
     return [
       GlobalDragHandle.configure({

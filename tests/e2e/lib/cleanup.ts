@@ -173,6 +173,13 @@ export async function cleanup(opts: CleanupOptions = {}): Promise<DeleteResult[]
         table: 'pm.projects',
         sql: `DELETE FROM pm.projects WHERE identifier LIKE 'e2e-%'`,
       },
+      // Editor pages: children / comments / versions cascade via FKs, so a
+      // single delete on the root title prefix is sufficient. Schema may not
+      // exist on every install; the "does not exist" guard below swallows it.
+      {
+        table: 'editor.pages',
+        sql: `DELETE FROM editor.pages WHERE title LIKE 'e2e-%'`,
+      },
     ];
 
     for (const { table, sql } of queries) {

@@ -554,6 +554,7 @@ function PageView() {
               placeholder={t('page.untitled')}
               aria-label="Page title"
               readOnly={readOnly}
+              data-testid="page-title"
             />
           </div>
 
@@ -565,6 +566,7 @@ function PageView() {
               editable={!readOnly}
             />
           ) : mounted && token ? (
+            <div data-testid="editor">
             <CollaborativeEditor
               value={page.snapshotHtml}
               editable={!readOnly}
@@ -607,6 +609,7 @@ function PageView() {
                 resolvedThreadIds,
               }}
             />
+            </div>
           ) : (
             <div className="text-gray-400 text-sm">{t('page.loadingEditor')}</div>
           )}

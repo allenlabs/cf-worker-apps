@@ -247,6 +247,7 @@ export function Sidebar({
           className="w-full text-left px-2 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded"
           onClick={handleNewRoot}
           disabled={busy}
+          data-testid="new-page"
         >
           {t('sidebar.newPage')}
         </button>

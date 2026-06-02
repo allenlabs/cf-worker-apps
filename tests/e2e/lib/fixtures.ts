@@ -19,6 +19,9 @@ export const CONTEXT_E2E_PREFIX = 'e2e-';
 /** Prefix on `pm.projects.identifier` for any e2e-created PM project. */
 export const PM_E2E_PREFIX = 'e2e-';
 
+/** Prefix on `editor.pages.title` for any e2e-created editor page. */
+export const EDITOR_E2E_PREFIX = 'e2e-';
+
 /**
  * Prefix stuffed into `concierge.nudges.question` (and `context_summary`) for
  * every e2e-created nudge.  Concierge nudges don't have a tags column, so we
@@ -57,7 +60,8 @@ export interface AppConfig {
     | 'context'
     | 'concierge'
     | 'hub'
-    | 'pm';
+    | 'pm'
+    | 'editor';
   readonly baseUrl: string;
   readonly cookieName: string;
 }
@@ -100,6 +104,11 @@ export const APPS: Readonly<Record<AppConfig['name'], AppConfig>> = {
     name: 'pm',
     baseUrl: 'https://projects.allenlabs.org',
     cookieName: 'cfr_session',
+  },
+  editor: {
+    name: 'editor',
+    baseUrl: 'https://editor.allenlabs.org',
+    cookieName: 'editor_session',
   },
 };
 
