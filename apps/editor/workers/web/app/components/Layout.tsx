@@ -4,6 +4,7 @@ import { useT } from '@allenlabs/i18n/react';
 import { LanguagePicker } from '~/i18n/picker';
 import { ThemeToggle } from '~/components/ThemeToggle';
 import { CommandPalette } from '~/components/CommandPalette';
+import { NotificationBell } from '~/components/NotificationBell';
 import type { Theme } from '~/lib/theme';
 
 interface Props {
@@ -28,6 +29,7 @@ export function Layout({ user, appName, theme, children }: Props) {
             <LanguagePicker />
             {user ? (
               <>
+                <NotificationBell />
                 <span className="text-editor-50">{user.name}</span>
                 <a href="/auth/logout" className="text-white/90 hover:text-white no-underline">
                   {t('nav.signOut')}

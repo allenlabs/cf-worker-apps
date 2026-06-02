@@ -59,6 +59,9 @@ export function hmacMiddleware(
       userId,
       userName: typeof parsed.userName === 'string' ? parsed.userName : '',
       username: typeof parsed.username === 'string' ? parsed.username : null,
+      // Per-user identity for notifications; fall back to userId when the web
+      // worker didn't forward an SSO email (keeps the column always populated).
+      email: typeof parsed.email === 'string' && parsed.email ? parsed.email : userId,
     };
 
     const db = dbFactory(c);

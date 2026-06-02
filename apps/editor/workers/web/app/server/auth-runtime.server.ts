@@ -20,6 +20,8 @@ export interface CurrentUser {
   /** Display name (preferredName → name → username → email-local). */
   name: string;
   username: string | null;
+  /** SSO email (Phase 16 — per-user notification identity). Null when absent. */
+  email: string | null;
 }
 
 export function getEnv(): Env {
@@ -39,6 +41,7 @@ export function userFromPayload(payload: SessionPayload): CurrentUser {
     id: payload.sub,
     name: displayNameOf(payload),
     username: typeof payload.username === 'string' ? payload.username : null,
+    email: typeof payload.email === 'string' ? payload.email : null,
   };
 }
 

@@ -10,15 +10,44 @@
 // Deleting the last comment of a thread does the same. We re-fetch after each
 // mutation (v1 keeps it simple + correct, no optimism).
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useT } from '@allenlabs/i18n/react';
 import {
   commentAdd as commentAddFn,
   commentDelete as commentDeleteFn,
+  commentReact as commentReactFn,
+  commentReactions as commentReactionsFn,
   commentResolve as commentResolveFn,
   commentsList as commentsListFn,
+  searchMentions as searchMentionsFn,
   type CommentItem,
+  type MentionResult,
+  type ReactionGroup,
 } from '~/server/docs';
+import { EmojiPicker } from '~/components/EmojiPicker';
+
+/** Render a comment body, turning @[label](id) mention tokens into chips. */
+function renderBody(body: string): React.ReactNode {
+  const parts: React.ReactNode[] = [];
+  const re = /@\[([^\]]*)\]\(([^)\s]+)\)/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  let key = 0;
+  while ((m = re.exec(body)) !== null) {
+    if (m.index > last) parts.push(body.slice(last, m.index));
+    parts.push(
+      <span
+        key={`m-${key++}`}
+        className="inline-flex items-center rounded bg-blue-50 px-1 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200"
+      >
+        @{m[1] || m[2]}
+      </span>,
+    );
+    last = re.lastIndex;
+  }
+  if (last < body.length) parts.push(body.slice(last));
+  return parts.length > 0 ? parts : body;
+}
 
 /** A freshly-anchored thread that has no comments yet (first reply creates it). */
 export interface PendingThread {
@@ -55,16 +84,36 @@ export function CommentsPanel({
 }: CommentsPanelProps) {
   const { t } = useT();
   const [comments, setComments] = useState<CommentItem[]>([]);
+  const [reactions, setReactions] = useState<Record<string, ReactionGroup[]>>({});
   const [loading, setLoading] = useState(true);
 
   async function refresh() {
     try {
       const list = await commentsListFn({ data: { pageId } });
       setComments(list);
+      const ids = list.map((c) => c.id);
+      if (ids.length > 0) {
+        try {
+          setReactions(await commentReactionsFn({ data: { commentIds: ids } }));
+        } catch {
+          /* reactions are non-critical */
+        }
+      } else {
+        setReactions({});
+      }
     } catch {
       /* ignore — keep last good state */
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function toggleReaction(commentId: string, emoji: string) {
+    try {
+      await commentReactFn({ data: { commentId, emoji } });
+      await refresh();
+    } catch {
+      /* ignore */
     }
   }
 
@@ -166,11 +215,13 @@ export function CommentsPanel({
                       threadId={pendingThread.threadId}
                       context={pendingThread.context}
                       comments={[]}
+                      reactions={reactions}
                       active={activeThreadId === pendingThread.threadId}
                       onFocus={() => onSelectThread?.(pendingThread.threadId)}
                       onReply={(body) => addThreadComment(pendingThread.threadId, body)}
                       onResolve={() => resolveThread(pendingThread.threadId)}
                       onDelete={deleteComment}
+                      onReact={toggleReaction}
                     />
                   ) : null}
                   {threads.map((t) => (
@@ -178,11 +229,13 @@ export function CommentsPanel({
                       key={t.threadId}
                       threadId={t.threadId}
                       comments={t.comments}
+                      reactions={reactions}
                       active={activeThreadId === t.threadId}
                       onFocus={() => onSelectThread?.(t.threadId)}
                       onReply={(body) => addThreadComment(t.threadId, body)}
                       onResolve={() => resolveThread(t.threadId)}
                       onDelete={deleteComment}
+                      onReact={toggleReaction}
                     />
                   ))}
                 </div>
@@ -206,7 +259,13 @@ export function CommentsPanel({
                       }`}
                     >
                       <CommentHeader comment={c} />
-                      <p className="whitespace-pre-wrap break-words text-gray-700">{c.body}</p>
+                      <p className="whitespace-pre-wrap break-words text-gray-700">
+                        {renderBody(c.body)}
+                      </p>
+                      <ReactionBar
+                        groups={reactions[c.id] ?? []}
+                        onToggle={(emoji) => void toggleReaction(c.id, emoji)}
+                      />
                       <div className="mt-1.5 flex items-center gap-3 text-xs">
                         <button
                           className="text-gray-500 hover:text-gray-800"
@@ -252,21 +311,25 @@ interface ThreadCardProps {
   threadId: string;
   context?: string;
   comments: CommentItem[];
+  reactions: Record<string, ReactionGroup[]>;
   active: boolean;
   onFocus: () => void;
   onReply: (body: string) => Promise<void>;
   onResolve: () => void;
   onDelete: (c: CommentItem) => void;
+  onReact: (commentId: string, emoji: string) => void;
 }
 
 function ThreadCard({
   context,
   comments,
+  reactions,
   active,
   onFocus,
   onReply,
   onResolve,
   onDelete,
+  onReact,
 }: ThreadCardProps) {
   const { t } = useT();
   // The anchored snippet: the explicit pending context, else the first comment's
@@ -287,7 +350,13 @@ function ThreadCard({
       {comments.map((c) => (
         <div key={c.id} className={`mb-2 ${c.resolved ? 'opacity-60' : ''}`}>
           <CommentHeader comment={c} />
-          <p className="whitespace-pre-wrap break-words text-gray-700">{c.body}</p>
+          <p className="whitespace-pre-wrap break-words text-gray-700">{renderBody(c.body)}</p>
+          <div onClick={(e) => e.stopPropagation()}>
+            <ReactionBar
+              groups={reactions[c.id] ?? []}
+              onToggle={(emoji) => onReact(c.id, emoji)}
+            />
+          </div>
           <button
             className="text-red-600 hover:text-red-800 text-xs mt-1"
             onClick={(e) => {
@@ -320,6 +389,99 @@ function ThreadCard({
   );
 }
 
+/** A reaction bar: existing emoji groups (toggle on click) + an add button. */
+function ReactionBar({
+  groups,
+  onToggle,
+}: {
+  groups: ReactionGroup[];
+  onToggle: (emoji: string) => void;
+}) {
+  const { t } = useT();
+  const [picking, setPicking] = useState(false);
+  if (groups.length === 0 && !picking) {
+    return (
+      <div className="mt-1.5">
+        <button
+          className="text-xs text-gray-400 hover:text-gray-700"
+          onClick={(e) => {
+            e.stopPropagation();
+            setPicking(true);
+          }}
+          aria-label={t('reactions.add')}
+          data-testid="react-add"
+        >
+          ＋😊
+        </button>
+        {picking ? (
+          <ReactionPicker
+            onPick={(emoji) => {
+              onToggle(emoji);
+              setPicking(false);
+            }}
+            onClose={() => setPicking(false)}
+          />
+        ) : null}
+      </div>
+    );
+  }
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-1 relative" data-testid="reaction-bar">
+      {groups.map((g) => (
+        <button
+          key={g.emoji}
+          className={`px-1.5 py-0.5 rounded-full border text-xs ${
+            g.mine
+              ? 'border-blue-300 bg-blue-50 dark:bg-blue-900/40'
+              : 'border-gray-200 hover:bg-gray-50'
+          }`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggle(g.emoji);
+          }}
+          title={g.users.join(', ')}
+        >
+          {g.emoji} {g.count}
+        </button>
+      ))}
+      <button
+        className="text-xs text-gray-400 hover:text-gray-700 px-1"
+        onClick={(e) => {
+          e.stopPropagation();
+          setPicking((v) => !v);
+        }}
+        aria-label={t('reactions.add')}
+        data-testid="react-add"
+      >
+        ＋
+      </button>
+      {picking ? (
+        <ReactionPicker
+          onPick={(emoji) => {
+            onToggle(emoji);
+            setPicking(false);
+          }}
+          onClose={() => setPicking(false)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function ReactionPicker({
+  onPick,
+  onClose,
+}: {
+  onPick: (emoji: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="absolute z-30 top-6 left-0" onClick={(e) => e.stopPropagation()}>
+      <EmojiPicker onPick={onPick} onClose={onClose} />
+    </div>
+  );
+}
+
 function NewCommentBox({
   placeholder,
   onSubmit,
@@ -330,6 +492,10 @@ function NewCommentBox({
   const { t } = useT();
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
+  // @-mention autocomplete state.
+  const [suggestions, setSuggestions] = useState<MentionResult[]>([]);
+  const [queryStart, setQueryStart] = useState<number | null>(null);
+  const taRef = useRef<HTMLTextAreaElement>(null);
 
   async function submit() {
     const body = draft.trim();
@@ -338,6 +504,8 @@ function NewCommentBox({
     try {
       await onSubmit(body);
       setDraft('');
+      setSuggestions([]);
+      setQueryStart(null);
     } catch {
       /* ignore */
     } finally {
@@ -345,21 +513,71 @@ function NewCommentBox({
     }
   }
 
+  // Detect an in-progress "@query" at the caret and fetch matching members.
+  function onChange(value: string, caret: number) {
+    setDraft(value);
+    const upto = value.slice(0, caret);
+    const m = /@([\w.\-]*)$/.exec(upto);
+    if (m) {
+      const q = m[1] ?? '';
+      const start = caret - q.length - 1; // index of the '@'
+      setQueryStart(start);
+      void searchMentionsFn({ data: { q } })
+        .then(setSuggestions)
+        .catch(() => setSuggestions([]));
+    } else {
+      setQueryStart(null);
+      setSuggestions([]);
+    }
+  }
+
+  // Replace the in-progress @query with a @[label](id) token.
+  function pickMention(mres: MentionResult) {
+    if (queryStart === null) return;
+    const caret = taRef.current?.selectionStart ?? draft.length;
+    const before = draft.slice(0, queryStart);
+    const after = draft.slice(caret);
+    const token = `@[${mres.label}](${mres.id}) `;
+    const next = `${before}${token}${after}`;
+    setDraft(next);
+    setSuggestions([]);
+    setQueryStart(null);
+  }
+
   return (
-    <div className="mt-2" onClick={(e) => e.stopPropagation()}>
+    <div className="mt-2 relative" onClick={(e) => e.stopPropagation()}>
       <textarea
+        ref={taRef}
         className="w-full text-sm border border-gray-200 rounded p-2 outline-none focus:border-gray-400 resize-none"
         rows={2}
         placeholder={placeholder}
         value={draft}
-        onChange={(e) => setDraft(e.target.value)}
+        onChange={(e) => onChange(e.target.value, e.target.selectionStart)}
         onKeyDown={(e) => {
           if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
             e.preventDefault();
             void submit();
           }
         }}
+        aria-label={t('comments.mentionPlaceholder')}
       />
+      {suggestions.length > 0 ? (
+        <ul
+          className="absolute z-30 left-0 right-0 mt-0.5 max-h-40 overflow-y-auto rounded border border-gray-200 bg-white shadow-lg dark:bg-gray-800 dark:border-gray-700"
+          data-testid="mention-suggestions"
+        >
+          {suggestions.map((s) => (
+            <li key={s.id}>
+              <button
+                className="block w-full text-left px-2 py-1 text-sm hover:bg-gray-50 dark:hover:bg-gray-700"
+                onClick={() => pickMention(s)}
+              >
+                {s.label}
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
       <button
         className="mt-1 w-full btn-primary text-sm disabled:opacity-50"
         onClick={() => void submit()}

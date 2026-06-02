@@ -1,0 +1,20 @@
+name = "editor-cron"
+main = "index.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+# Cron-triggered worker that fires due @date reminders: it selects reminders
+# whose remind_at has passed (fired=false), inserts a kind=reminder
+# notification for each owner, and marks them fired. Runs every 5 minutes.
+[triggers]
+crons = ["*/5 * * * *"]
+
+# Shares the Hyperdrive binding with editor-api + editor-web.
+# Hyperdrive → Hetzner Postgres `allenlabs` DB, `editor` schema.
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "0b76cf08a44443d39d12f0d51ed059f5"
+
+[vars]
+APP_NAME = "Editor Cron"

@@ -195,6 +195,8 @@ export interface CommentItem {
   body: string;
   resolved: boolean;
   createdAt: string;
+  /** Phase 16 — emails @-mentioned in this comment's body (empty when none). */
+  mentions: string[];
 }
 
 type CommentRow = {
@@ -204,6 +206,7 @@ type CommentRow = {
   body: string;
   resolved: boolean;
   createdAt: string;
+  mentions: string[] | null;
 };
 
 function toCommentItem(r: CommentRow): CommentItem {
@@ -214,6 +217,7 @@ function toCommentItem(r: CommentRow): CommentItem {
     body: r.body,
     resolved: r.resolved,
     createdAt: String(r.createdAt),
+    mentions: r.mentions ?? [],
   };
 }
 
@@ -231,14 +235,14 @@ export async function commentsListImpl(
     threadId === undefined
       ? await sql<CommentRow[]>`
           SELECT id, thread_id AS "threadId", author_name AS "authorName",
-                 body, resolved, created_at AS "createdAt"
+                 body, resolved, created_at AS "createdAt", mentions
           FROM editor.comments
           WHERE page_id = ${pageId}
           ORDER BY created_at ASC
         `
       : await sql<CommentRow[]>`
           SELECT id, thread_id AS "threadId", author_name AS "authorName",
-                 body, resolved, created_at AS "createdAt"
+                 body, resolved, created_at AS "createdAt", mentions
           FROM editor.comments
           WHERE page_id = ${pageId} AND thread_id = ${threadId}
           ORDER BY created_at ASC
@@ -253,17 +257,20 @@ export interface AddCommentInput {
   body: string;
   /** null/omitted → page-level comment; a UUID → append to that inline thread. */
   threadId?: string | null;
+  /** Phase 16 — emails @-mentioned in the body (stored for inbox fan-out). */
+  mentions?: string[];
 }
 
 /** Insert a comment (page-level or inline); returns the created row. */
 export async function commentAddImpl(sql: Sql, input: AddCommentInput): Promise<CommentItem> {
   const body = input.body.trim();
   const threadId = input.threadId ?? null;
+  const mentions = input.mentions && input.mentions.length > 0 ? input.mentions : null;
   const [row] = await sql<CommentRow[]>`
-    INSERT INTO editor.comments (page_id, user_id, author_name, body, thread_id)
-    VALUES (${input.pageId}, ${input.userId}, ${input.authorName}, ${body}, ${threadId})
+    INSERT INTO editor.comments (page_id, user_id, author_name, body, thread_id, mentions)
+    VALUES (${input.pageId}, ${input.userId}, ${input.authorName}, ${body}, ${threadId}, ${mentions})
     RETURNING id, thread_id AS "threadId", author_name AS "authorName",
-              body, resolved, created_at AS "createdAt"
+              body, resolved, created_at AS "createdAt", mentions
   `;
   if (!row) throw new Error('commentAddImpl: insert returned no row');
   return toCommentItem(row);

@@ -70,8 +70,8 @@ describe('commentAddImpl', () => {
       body: '  trimmed  ',
     });
     expect(out.threadId).toBeNull();
-    // body trimmed; thread_id param is the last value and null.
-    expect(calls[0]!.params).toEqual(['p', 'u', 'Ada', 'trimmed', null]);
+    // body trimmed; thread_id then mentions are the trailing params, both null.
+    expect(calls[0]!.params).toEqual(['p', 'u', 'Ada', 'trimmed', null, null]);
   });
 
   it('inserts with the given thread_id for an inline comment', async () => {

@@ -10,6 +10,8 @@ import { VersionHistoryPanel } from '~/components/VersionHistoryPanel';
 import { EmojiPicker } from '~/components/EmojiPicker';
 import { PageCover } from '~/components/PageCover';
 import { PageMenu } from '~/components/PageMenu';
+import { Backlinks } from '~/components/Backlinks';
+import { RemindersPanel } from '~/components/RemindersPanel';
 import {
   collabToken,
   createPage,
@@ -221,6 +223,7 @@ function PageView() {
   const [shareOpen, setShareOpen] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [remindersOpen, setRemindersOpen] = useState(false);
   // Inline-comment state: the open thread, a just-anchored (empty) thread, and
   // the threads the host has resolved/deleted (the editor strips their marks).
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
@@ -501,6 +504,21 @@ function PageView() {
                 {t('page.history')}
               </button>
             )}
+
+            <button
+              className={`px-2 py-1 rounded text-sm hover:bg-gray-100 ${
+                remindersOpen ? 'text-gray-900' : 'text-gray-500'
+              }`}
+              onClick={() => setRemindersOpen((v) => !v)}
+              title={t('reminder.remindMe')}
+              aria-label={t('reminder.remindMe')}
+              data-testid="reminders-toggle"
+            >
+              ⏰
+            </button>
+            {remindersOpen ? (
+              <RemindersPanel pageId={pageId} onClose={() => setRemindersOpen(false)} />
+            ) : null}
 
             <PageMenu
               pageId={pageId}
@@ -795,6 +813,9 @@ function PageView() {
               {t('page.addSubPage')}
             </button>
           )}
+
+          {/* Phase 16 — pages that link to this one (linked references). */}
+          {isDatabase ? null : <Backlinks pageId={pageId} />}
         </div>
       </div>
       {commentsOpen ? (

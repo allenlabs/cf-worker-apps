@@ -291,6 +291,34 @@ const editor: Dict = {
     'comments.replyPlaceholder': 'Reply…',
     'comments.posting': 'Posting…',
     'comments.comment': 'Comment',
+    'comments.mentionPlaceholder': 'Comment — type @ to mention someone…',
+
+    // Phase 16 — backlinks / linked references
+    'backlinks.heading': '{count} linked references',
+    'backlinks.none': 'No backlinks yet.',
+
+    // Phase 16 — notification inbox
+    'inbox.title': 'Notifications',
+    'inbox.empty': 'No notifications.',
+    'inbox.markAllRead': 'Mark all as read',
+    'inbox.someone': 'Someone',
+    'inbox.mentioned': '{who} mentioned you',
+    'inbox.commented': '{who} commented',
+    'inbox.reminder': 'Reminder',
+    'inbox.reacted': '{who} reacted to your comment',
+
+    // Phase 16 — @date reminders
+    'reminder.remindMe': 'Remind me',
+    'reminder.title': 'Reminders',
+    'reminder.add': 'Add reminder',
+    'reminder.when': 'When',
+    'reminder.notePlaceholder': 'Note (optional)…',
+    'reminder.cancel': 'Cancel',
+    'reminder.none': 'No reminders for this page.',
+    'reminder.fired': 'sent',
+
+    // Phase 16 — comment reactions
+    'reactions.add': 'Add reaction',
   },
   ko: {
     'app.name': '에디터',

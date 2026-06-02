@@ -103,6 +103,20 @@ import {
   versionPageImpl,
   versionsListImpl,
 } from './versions';
+import {
+  backlinksImpl,
+  extractCommentMentions,
+  markReadImpl,
+  notificationsListImpl,
+  notifyCommentImpl,
+  notifyReactionImpl,
+  reactImpl,
+  reactionsForCommentsImpl,
+  reminderAddImpl,
+  reminderCancelImpl,
+  remindersListImpl,
+  unreadCountImpl,
+} from './notify';
 import { mintCollabToken } from '../lib/hmac';
 import type { AppBindings } from '../context';
 
@@ -1252,13 +1266,31 @@ v1Router.post('/comments/add', async (c) => {
   }
   const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.pageId);
   if (!can) return c.json({ error: 'not found' }, 404);
+  // Phase 16 — extract @-mentioned emails from the body to store + notify.
+  const mentions = extractCommentMentions(parsed.data.body);
   const comment = await commentAddImpl(c.get('db'), {
     pageId: parsed.data.pageId,
     userId: user.userId,
     authorName: user.userName,
     body: parsed.data.body,
     threadId: parsed.data.threadId ?? null,
+    mentions,
   });
+  // Fan out notifications: @-mentions + page owner + thread participants
+  // (never the actor). Failure here must not fail the comment write.
+  try {
+    await notifyCommentImpl(c.get('db'), {
+      pageId: parsed.data.pageId,
+      commentId: comment.id,
+      actorEmail: user.email,
+      actorName: user.userName,
+      body: comment.body,
+      mentions,
+      threadId: comment.threadId,
+    });
+  } catch {
+    /* best-effort: notifications are non-critical */
+  }
   return c.json(comment, 200);
 });
 
@@ -1438,4 +1470,157 @@ v1Router.post('/docs/delete', async (c) => {
   const ok = await deleteDocImpl(c.get('db'), user.userId, parsed.data.id);
   if (!ok) return c.json({ error: 'not found' }, 404);
   return c.json({ ok: true }, 200);
+});
+
+// ---------- Phase 16: backlinks / linked references ----------
+
+const backlinksSchema = z.object({ pageId: z.string().uuid() });
+v1Router.post('/pages/backlinks', async (c) => {
+  const user = c.get('user');
+  const parsed = backlinksSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  if (!(await canAccessPageImpl(c.get('db'), user.userId, parsed.data.pageId))) {
+    return c.json({ error: 'not found' }, 404);
+  }
+  const links = await backlinksImpl(c.get('db'), parsed.data.pageId);
+  return c.json(links, 200);
+});
+
+// ---------- Phase 16: notification inbox ----------
+
+const notifyListSchema = z.object({ limit: z.number().int().positive().max(200).optional() });
+v1Router.post('/notifications/list', async (c) => {
+  const user = c.get('user');
+  const parsed = notifyListSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const items = await notificationsListImpl(c.get('db'), user.email, parsed.data.limit ?? 50);
+  return c.json(items, 200);
+});
+
+v1Router.post('/notifications/unread-count', async (c) => {
+  const user = c.get('user');
+  const count = await unreadCountImpl(c.get('db'), user.email);
+  return c.json({ count }, 200);
+});
+
+const markReadSchema = z.object({ id: z.string().uuid().optional(), all: z.boolean().optional() });
+v1Router.post('/notifications/mark-read', async (c) => {
+  const user = c.get('user');
+  const parsed = markReadSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  // `all` (or an omitted id) marks every unread; otherwise just the one id.
+  const updated = await markReadImpl(
+    c.get('db'),
+    user.email,
+    parsed.data.all ? undefined : parsed.data.id,
+  );
+  return c.json({ updated }, 200);
+});
+
+// ---------- Phase 16: @date reminders ----------
+
+const reminderAddSchema = z.object({
+  pageId: z.string().uuid(),
+  remindAt: z.string().min(1),
+  body: z.string().max(2000).nullish(),
+});
+v1Router.post('/reminders/add', async (c) => {
+  const user = c.get('user');
+  const parsed = reminderAddSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  if (!(await canAccessPageImpl(c.get('db'), user.userId, parsed.data.pageId))) {
+    return c.json({ error: 'not found' }, 404);
+  }
+  const when = new Date(parsed.data.remindAt);
+  if (Number.isNaN(when.getTime())) {
+    return c.json({ error: 'invalid remindAt' }, 400);
+  }
+  const reminder = await reminderAddImpl(c.get('db'), {
+    pageId: parsed.data.pageId,
+    userEmail: user.email,
+    remindAt: when.toISOString(),
+    body: parsed.data.body ?? null,
+  });
+  return c.json(reminder, 200);
+});
+
+const remindersListSchema = z.object({ pageId: z.string().uuid() });
+v1Router.post('/reminders/list', async (c) => {
+  const user = c.get('user');
+  const parsed = remindersListSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  if (!(await canAccessPageImpl(c.get('db'), user.userId, parsed.data.pageId))) {
+    return c.json({ error: 'not found' }, 404);
+  }
+  const items = await remindersListImpl(c.get('db'), parsed.data.pageId, user.email);
+  return c.json(items, 200);
+});
+
+v1Router.post('/reminders/cancel', async (c) => {
+  const user = c.get('user');
+  const parsed = idSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const ok = await reminderCancelImpl(c.get('db'), parsed.data.id, user.email);
+  if (!ok) return c.json({ error: 'not found' }, 404);
+  return c.json({ ok: true }, 200);
+});
+
+// ---------- Phase 16: comment reactions ----------
+
+const reactSchema = z.object({
+  commentId: z.string().uuid(),
+  emoji: z.string().min(1).max(32),
+});
+v1Router.post('/comments/react', async (c) => {
+  const user = c.get('user');
+  const parsed = reactSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  // The comment must exist + the user must be able to read its page.
+  const author = await commentAuthorImpl(c.get('db'), parsed.data.commentId);
+  if (!author) return c.json({ error: 'not found' }, 404);
+  if (!(await canAccessPageImpl(c.get('db'), user.userId, author.pageId))) {
+    return c.json({ error: 'not found' }, 404);
+  }
+  const result = await reactImpl(c.get('db'), parsed.data.commentId, user.email, parsed.data.emoji);
+  // Notify the comment author on a NEW reaction only (not on un-react), never
+  // the actor. Best-effort.
+  if (result.added) {
+    try {
+      await notifyReactionImpl(
+        c.get('db'),
+        parsed.data.commentId,
+        user.email,
+        user.userName,
+        parsed.data.emoji,
+      );
+    } catch {
+      /* best-effort */
+    }
+  }
+  return c.json(result, 200);
+});
+
+const reactionsListSchema = z.object({ commentIds: z.array(z.string().uuid()).max(500) });
+v1Router.post('/comments/reactions', async (c) => {
+  const user = c.get('user');
+  const parsed = reactionsListSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const groups = await reactionsForCommentsImpl(c.get('db'), parsed.data.commentIds, user.email);
+  return c.json(groups, 200);
 });

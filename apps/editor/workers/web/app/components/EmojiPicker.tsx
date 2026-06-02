@@ -171,8 +171,8 @@ const EMOJI: [string, ...string[]][] = [
 interface EmojiPickerProps {
   /** Choose an emoji as the page icon. */
   onPick: (emoji: string) => void;
-  /** Clear the icon. */
-  onRemove: () => void;
+  /** Clear the icon. Omit when there's nothing to clear (e.g. a reaction picker). */
+  onRemove?: () => void;
   /** Dismiss the picker (outside click / Escape). */
   onClose: () => void;
 }
@@ -218,13 +218,15 @@ export function EmojiPicker({ onPick, onRemove, onClose }: EmojiPickerProps) {
           onChange={(e) => setQuery(e.target.value)}
           aria-label={t('emoji.search')}
         />
-        <button
-          className="text-xs px-2 py-1 border border-gray-200 rounded hover:bg-gray-100 whitespace-nowrap"
-          onClick={onRemove}
-          data-testid="emoji-remove"
-        >
-          {t('emoji.remove')}
-        </button>
+        {onRemove ? (
+          <button
+            className="text-xs px-2 py-1 border border-gray-200 rounded hover:bg-gray-100 whitespace-nowrap"
+            onClick={onRemove}
+            data-testid="emoji-remove"
+          >
+            {t('emoji.remove')}
+          </button>
+        ) : null}
       </div>
       <div className="grid grid-cols-8 gap-0.5 max-h-52 overflow-y-auto">
         {results.map(([emoji, ...aliases]) => (

@@ -139,6 +139,47 @@ export interface CommentItem {
   body: string;
   resolved: boolean;
   createdAt: string;
+  /** Phase 16 — emails @-mentioned in the comment body. */
+  mentions: string[];
+}
+
+// ---------- Phase 16 — backlinks / notifications / reminders / reactions ----------
+
+export interface BacklinkItem {
+  id: string;
+  title: string;
+  icon: string | null;
+  updatedAt: string;
+}
+
+export type NotificationKind = 'mention' | 'comment' | 'reminder' | 'reaction';
+
+export interface NotificationItem {
+  id: string;
+  kind: NotificationKind;
+  pageId: string | null;
+  pageTitle: string | null;
+  commentId: string | null;
+  actor: string | null;
+  body: string | null;
+  read: boolean;
+  createdAt: string;
+}
+
+export interface ReminderItem {
+  id: string;
+  pageId: string;
+  remindAt: string;
+  body: string | null;
+  fired: boolean;
+  createdAt: string;
+}
+
+export interface ReactionGroup {
+  emoji: string;
+  count: number;
+  users: string[];
+  mine: boolean;
 }
 
 export interface ThreadSummary {
@@ -354,6 +395,9 @@ function userBody(user: CurrentUser, extra: Record<string, unknown> = {}): Recor
     userId: user.id,
     userName: user.name,
     username: user.username,
+    // Phase 16 — forward the SSO email so the API can key notifications per
+    // user (it falls back to userId when absent).
+    email: user.email,
     ...extra,
   };
 }
@@ -890,6 +934,103 @@ export function commentDeleteImpl(
   deps?: ApiClientDeps,
 ): Promise<{ ok: boolean }> {
   return apiPostImpl<{ ok: boolean }>(env, '/v1/comments/delete', userBody(user, { id }), deps);
+}
+
+// ---------- Phase 16 impls (testable; inject env + fetcher) ----------
+
+export function backlinksImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  pageId: string,
+  deps?: ApiClientDeps,
+): Promise<BacklinkItem[]> {
+  return apiPostImpl<BacklinkItem[]>(env, '/v1/pages/backlinks', userBody(user, { pageId }), deps);
+}
+
+export function notificationsListImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  limit?: number,
+  deps?: ApiClientDeps,
+): Promise<NotificationItem[]> {
+  return apiPostImpl<NotificationItem[]>(
+    env,
+    '/v1/notifications/list',
+    userBody(user, limit === undefined ? {} : { limit }),
+    deps,
+  );
+}
+
+export function unreadCountImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  deps?: ApiClientDeps,
+): Promise<{ count: number }> {
+  return apiPostImpl<{ count: number }>(env, '/v1/notifications/unread-count', userBody(user), deps);
+}
+
+export function markReadImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { id?: string; all?: boolean },
+  deps?: ApiClientDeps,
+): Promise<{ updated: number }> {
+  return apiPostImpl<{ updated: number }>(
+    env,
+    '/v1/notifications/mark-read',
+    userBody(user, input),
+    deps,
+  );
+}
+
+export function reminderAddImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { pageId: string; remindAt: string; body?: string | null },
+  deps?: ApiClientDeps,
+): Promise<ReminderItem> {
+  return apiPostImpl<ReminderItem>(env, '/v1/reminders/add', userBody(user, input), deps);
+}
+
+export function remindersListImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  pageId: string,
+  deps?: ApiClientDeps,
+): Promise<ReminderItem[]> {
+  return apiPostImpl<ReminderItem[]>(env, '/v1/reminders/list', userBody(user, { pageId }), deps);
+}
+
+export function reminderCancelImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  id: string,
+  deps?: ApiClientDeps,
+): Promise<{ ok: boolean }> {
+  return apiPostImpl<{ ok: boolean }>(env, '/v1/reminders/cancel', userBody(user, { id }), deps);
+}
+
+export function reactImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { commentId: string; emoji: string },
+  deps?: ApiClientDeps,
+): Promise<{ added: boolean }> {
+  return apiPostImpl<{ added: boolean }>(env, '/v1/comments/react', userBody(user, input), deps);
+}
+
+export function reactionsForCommentsImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  commentIds: string[],
+  deps?: ApiClientDeps,
+): Promise<Record<string, ReactionGroup[]>> {
+  return apiPostImpl<Record<string, ReactionGroup[]>>(
+    env,
+    '/v1/comments/reactions',
+    userBody(user, { commentIds }),
+    deps,
+  );
 }
 
 // ---------- version history impls (Phase 5) ----------
@@ -1767,6 +1908,85 @@ export const teamspaceMemberRemove = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
     const user = await requireUser();
     return teamspaceMemberRemoveImpl(getEnv(), user, data);
+  });
+
+// ---------- Phase 16 wrappers ----------
+
+export const backlinks = createServerFn({ method: 'GET' })
+  .inputValidator((d: unknown) => z.object({ pageId: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return backlinksImpl(getEnv(), user, data.pageId);
+  });
+
+export const notificationsList = createServerFn({ method: 'GET' })
+  .inputValidator((d: unknown) =>
+    z.object({ limit: z.number().int().positive().max(200).optional() }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return notificationsListImpl(getEnv(), user, data.limit);
+  });
+
+export const notificationsUnreadCount = createServerFn({ method: 'GET' }).handler(async () => {
+  const user = await requireUser();
+  return unreadCountImpl(getEnv(), user);
+});
+
+export const notificationsMarkRead = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z.object({ id: z.string().uuid().optional(), all: z.boolean().optional() }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return markReadImpl(getEnv(), user, data);
+  });
+
+export const reminderAdd = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        pageId: z.string().uuid(),
+        remindAt: z.string().min(1),
+        body: z.string().max(2000).nullish(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return reminderAddImpl(getEnv(), user, data);
+  });
+
+export const remindersList = createServerFn({ method: 'GET' })
+  .inputValidator((d: unknown) => z.object({ pageId: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return remindersListImpl(getEnv(), user, data.pageId);
+  });
+
+export const reminderCancel = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return reminderCancelImpl(getEnv(), user, data.id);
+  });
+
+export const commentReact = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z.object({ commentId: z.string().uuid(), emoji: z.string().min(1).max(32) }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return reactImpl(getEnv(), user, data);
+  });
+
+export const commentReactions = createServerFn({ method: 'GET' })
+  .inputValidator((d: unknown) =>
+    z.object({ commentIds: z.array(z.string().uuid()).max(500) }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return reactionsForCommentsImpl(getEnv(), user, data.commentIds);
   });
 
 /* v8 ignore stop */

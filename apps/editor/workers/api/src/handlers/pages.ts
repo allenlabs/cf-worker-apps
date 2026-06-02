@@ -12,6 +12,7 @@
 
 import type { Sql } from '../lib/db';
 import { captureVersionImpl } from './versions';
+import { extractPageIds, reconcilePageLinksImpl } from './notify';
 
 export interface Workspace {
   id: string;
@@ -525,6 +526,16 @@ export async function createPageImpl(
     RETURNING id, title, parent_id AS "parentId"
   `;
   if (!row) throw new Error('createPageImpl: insert returned no row');
+  // Phase 16 — a child page is a child-page reference from its parent, so seed
+  // a backlink edge (parent → child). Reconcile of the parent's snapshot later
+  // keeps it consistent if the block is removed.
+  if (parentId) {
+    await sql`
+      INSERT INTO editor.page_links (source_page_id, target_page_id)
+      VALUES (${parentId}, ${row.id})
+      ON CONFLICT (source_page_id, target_page_id) DO NOTHING
+    `;
+  }
   return row;
 }
 
@@ -589,6 +600,10 @@ export async function updatePageImpl(
       });
     }
     assign.snapshot_html = patch.snapshotHtml;
+    // Phase 16 — reconcile the backlink graph from the new snapshot. Extract
+    // referenced page ids (page-mention / child-page nodes + /p/<id> links)
+    // and replace this page's outgoing links wholesale.
+    await reconcilePageLinksImpl(sql, id, extractPageIds(patch.snapshotHtml, id));
   }
   if (Object.keys(assign).length === 0) {
     // No-op: succeed iff the page exists.

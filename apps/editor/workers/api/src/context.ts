@@ -9,6 +9,12 @@ export interface AuthedUser {
   userId: string;
   userName: string;
   username: string | null;
+  /**
+   * Per-user identity for notifications/reminders/reactions (Phase 16). The
+   * SSO email the web worker forwards, falling back to the user id so the
+   * column is always populated + unique per person.
+   */
+  email: string;
 }
 
 export interface AppBindings {
