@@ -177,6 +177,7 @@ const updatePageSchema = z.object({
   id: z.string().uuid(),
   title: z.string().max(255).optional(),
   icon: z.string().max(32).nullish(),
+  cover: z.string().max(2048).nullish(),
   snapshotHtml: z.string().optional(),
 });
 v1Router.post('/pages/update', async (c) => {
@@ -192,6 +193,7 @@ v1Router.post('/pages/update', async (c) => {
   const ok = await updatePageImpl(c.get('db'), parsed.data.id, {
     title: parsed.data.title,
     icon: parsed.data.icon === undefined ? undefined : parsed.data.icon ?? null,
+    cover: parsed.data.cover === undefined ? undefined : parsed.data.cover ?? null,
     snapshotHtml: parsed.data.snapshotHtml,
     author: { id: user.userId, name: user.userName },
   });

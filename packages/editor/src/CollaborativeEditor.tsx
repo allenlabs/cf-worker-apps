@@ -27,6 +27,8 @@ import { Columns, Column } from './extensions/columns';
 import { Comment, commentThreadIdAt } from './extensions/comment';
 import { ChildPage } from './extensions/child-page';
 import { BubbleToolbar } from './extensions/bubble-toolbar';
+import { DragHandle } from './extensions/block-menu';
+import { MarkdownRules } from './extensions/markdown-rules';
 import { DEFAULT_SLASH_ITEMS, makeChildPageSlashItem } from './lib/slash-items';
 import type { EditorProps, SlashItem } from './lib/types';
 
@@ -168,14 +170,22 @@ export function CollaborativeEditor(props: EditorProps) {
   }, [uploadImage, onCreateChildPage]);
 
   const extensions = useMemo<Extensions>(() => {
+    const isEditable = props.editable ?? true;
+    const enableDragHandle = props.enableDragHandle ?? true;
     const ext: Extensions = [
-      // History conflicts with Yjs undo; disable it in collab mode.
-      StarterKit.configure(collab ? { history: false } : {}),
+      // History conflicts with Yjs undo; disable it in collab mode. Restrict
+      // headings to h1–h3 to match the slash menu + block "Turn into" targets.
+      StarterKit.configure({
+        ...(collab ? { history: false } : {}),
+        heading: { levels: [1, 2, 3] },
+      }),
       Placeholder.configure({
         placeholder: props.placeholder ?? 'Type "/" for commands, "@" to mention…',
       }),
       TaskList,
       TaskItem.configure({ nested: true }),
+      // Markdown input rules StarterKit doesn't cover (to-do via "[] ").
+      MarkdownRules,
       // Marks + media.
       Underline,
       Link.configure({ openOnClick: false, autolink: true, HTMLAttributes: { class: 'ae-link' } }),
@@ -210,6 +220,15 @@ export function CollaborativeEditor(props: EditorProps) {
       );
     }
     if (props.mention) ext.push(makeMention(props.mention));
+    // Drag handle + block action menu (Notion editing feel). Only when the
+    // editor is editable + the consumer hasn't opted out — viewers never get it.
+    if (isEditable && enableDragHandle) {
+      ext.push(
+        props.blockMenuT
+          ? DragHandle.configure({ t: props.blockMenuT })
+          : DragHandle.configure({}),
+      );
+    }
     if (collab && provider && ydocRef.current) {
       ext.push(Collaboration.configure({ document: ydocRef.current }));
       ext.push(
@@ -228,6 +247,9 @@ export function CollaborativeEditor(props: EditorProps) {
     provider,
     props.mention,
     props.placeholder,
+    props.editable,
+    props.enableDragHandle,
+    props.blockMenuT,
     slashItems,
     !!props.comments,
     !!onCreateChildPage,

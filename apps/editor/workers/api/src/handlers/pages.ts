@@ -34,6 +34,7 @@ export interface PageFull {
   parentId: string | null;
   title: string;
   icon: string | null;
+  cover: string | null; // Phase 11 — optional banner image URL (null == none)
   snapshotHtml: string;
   kind: string; // 'page' | 'database'
   databaseId: string | null; // set when this page is a database row
@@ -382,7 +383,7 @@ export async function createPageImpl(
 export async function getPageImpl(sql: Sql, id: string): Promise<PageFull | null> {
   const [row] = await sql<PageFull[]>`
     SELECT id, workspace_id AS "workspaceId", parent_id AS "parentId",
-           title, icon, snapshot_html AS "snapshotHtml",
+           title, icon, cover, snapshot_html AS "snapshotHtml",
            kind, database_id AS "databaseId", public, restricted
     FROM editor.pages
     WHERE id = ${id} AND archived = false
@@ -394,6 +395,7 @@ export async function getPageImpl(sql: Sql, id: string): Promise<PageFull | null
 export interface UpdatePageInput {
   title?: string;
   icon?: string | null;
+  cover?: string | null;
   snapshotHtml?: string;
   /** Attribution for any version row captured when snapshot_html changes. */
   author?: { id: string | null; name: string | null };
@@ -419,6 +421,7 @@ export async function updatePageImpl(
   const assign: Record<string, unknown> = {};
   if (typeof patch.title === 'string') assign.title = patch.title.trim() || 'Untitled';
   if (patch.icon !== undefined) assign.icon = patch.icon;
+  if (patch.cover !== undefined) assign.cover = patch.cover;
   if (typeof patch.snapshotHtml === 'string') {
     // Capture the previous snapshot as a version BEFORE overwriting it, but
     // only when the new html is genuinely different.

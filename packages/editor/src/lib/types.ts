@@ -12,6 +12,8 @@ export type MentionSource = (query: string) => MentionItem[] | Promise<MentionIt
 /** One entry in the "/" slash menu. */
 export interface SlashItem {
   title: string;
+  /** Leading icon/emoji glyph shown left of the title (light visual cue). */
+  icon?: string;
   /** Short hint shown under the title. */
   hint?: string;
   /** Words used to match the typed query (besides the title). */
@@ -89,5 +91,17 @@ export interface EditorProps {
    * routes via its own router / full-page nav rather than the raw href).
    */
   onOpenPage?: (pageId: string) => void;
+  /**
+   * Show the ⋮⋮ block drag handle + block action menu (Notion editing feel).
+   * Defaults to true; set false to opt out (e.g. a minimal embed). The handle
+   * never appears in read-only mode regardless of this flag.
+   */
+  enableDragHandle?: boolean;
+  /**
+   * Translate block-menu labels (Turn into / Duplicate / Delete / Color / block
+   * type names + tints). Receives an i18n key, returns the localized string.
+   * Omit for English defaults.
+   */
+  blockMenuT?: (key: string) => string;
   className?: string;
 }

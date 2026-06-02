@@ -62,8 +62,11 @@ const SlashList = forwardRef(function SlashList(
           onMouseEnter={() => setSelected(idx)}
           onClick={() => command(it)}
         >
-          <span className="ae-slash-title">{it.title}</span>
-          {it.hint ? <span className="ae-slash-hint">{it.hint}</span> : null}
+          {it.icon ? <span className="ae-slash-icon" aria-hidden="true">{it.icon}</span> : null}
+          <span className="ae-slash-text">
+            <span className="ae-slash-title">{it.title}</span>
+            {it.hint ? <span className="ae-slash-hint">{it.hint}</span> : null}
+          </span>
         </button>
       ))}
     </div>

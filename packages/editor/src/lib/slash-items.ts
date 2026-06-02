@@ -7,6 +7,7 @@ import type { SlashItem } from './types';
 export const DEFAULT_SLASH_ITEMS: SlashItem[] = [
   {
     title: 'Text',
+    icon: '¶',
     hint: 'Plain paragraph',
     keywords: ['paragraph', 'p', 'body'],
     command: ({ editor, range }) =>
@@ -14,6 +15,7 @@ export const DEFAULT_SLASH_ITEMS: SlashItem[] = [
   },
   {
     title: 'Heading 1',
+    icon: 'H1',
     hint: 'Big section heading',
     keywords: ['h1', 'title', 'big'],
     command: ({ editor, range }) =>
@@ -21,6 +23,7 @@ export const DEFAULT_SLASH_ITEMS: SlashItem[] = [
   },
   {
     title: 'Heading 2',
+    icon: 'H2',
     hint: 'Medium section heading',
     keywords: ['h2', 'subtitle'],
     command: ({ editor, range }) =>
@@ -28,6 +31,7 @@ export const DEFAULT_SLASH_ITEMS: SlashItem[] = [
   },
   {
     title: 'Heading 3',
+    icon: 'H3',
     hint: 'Small section heading',
     keywords: ['h3'],
     command: ({ editor, range }) =>
@@ -35,6 +39,7 @@ export const DEFAULT_SLASH_ITEMS: SlashItem[] = [
   },
   {
     title: 'Bulleted list',
+    icon: '•',
     hint: 'Simple bullet list',
     keywords: ['ul', 'unordered', 'bullet'],
     command: ({ editor, range }) =>
@@ -42,6 +47,7 @@ export const DEFAULT_SLASH_ITEMS: SlashItem[] = [
   },
   {
     title: 'Numbered list',
+    icon: '1.',
     hint: 'Ordered list',
     keywords: ['ol', 'ordered', 'number'],
     command: ({ editor, range }) =>
@@ -49,6 +55,7 @@ export const DEFAULT_SLASH_ITEMS: SlashItem[] = [
   },
   {
     title: 'To-do list',
+    icon: '☑',
     hint: 'Checkbox task list',
     keywords: ['todo', 'task', 'checkbox', 'check'],
     command: ({ editor, range }) =>
@@ -56,6 +63,7 @@ export const DEFAULT_SLASH_ITEMS: SlashItem[] = [
   },
   {
     title: 'Quote',
+    icon: '❝',
     hint: 'Block quote',
     keywords: ['blockquote', 'cite'],
     command: ({ editor, range }) =>
@@ -63,6 +71,7 @@ export const DEFAULT_SLASH_ITEMS: SlashItem[] = [
   },
   {
     title: 'Code block',
+    icon: '</>',
     hint: 'Monospace code',
     keywords: ['code', 'pre', 'snippet'],
     command: ({ editor, range }) =>
@@ -70,6 +79,7 @@ export const DEFAULT_SLASH_ITEMS: SlashItem[] = [
   },
   {
     title: 'Divider',
+    icon: '―',
     hint: 'Horizontal rule',
     keywords: ['hr', 'rule', 'separator', 'line'],
     command: ({ editor, range }) =>
@@ -77,6 +87,7 @@ export const DEFAULT_SLASH_ITEMS: SlashItem[] = [
   },
   {
     title: 'Callout',
+    icon: '💡',
     hint: 'Highlighted note block',
     keywords: ['note', 'info', 'tip', 'aside', 'box'],
     command: ({ editor, range }) =>
@@ -84,6 +95,7 @@ export const DEFAULT_SLASH_ITEMS: SlashItem[] = [
   },
   {
     title: 'Toggle',
+    icon: '▸',
     hint: 'Collapsible section',
     keywords: ['collapse', 'details', 'expand', 'accordion'],
     command: ({ editor, range }) =>
@@ -91,6 +103,7 @@ export const DEFAULT_SLASH_ITEMS: SlashItem[] = [
   },
   {
     title: 'Image',
+    icon: '🖼',
     hint: 'Upload or embed by URL',
     keywords: ['img', 'picture', 'photo', 'embed'],
     // Default behaviour prompts for a URL. CollaborativeEditor overrides this
@@ -103,6 +116,7 @@ export const DEFAULT_SLASH_ITEMS: SlashItem[] = [
   },
   {
     title: 'Table',
+    icon: '▦',
     hint: '3×3 grid with header row',
     keywords: ['grid', 'spreadsheet', 'cells', 'rows', 'columns'],
     command: ({ editor, range }) =>
@@ -115,6 +129,7 @@ export const DEFAULT_SLASH_ITEMS: SlashItem[] = [
   },
   {
     title: 'Columns',
+    icon: '⫴',
     hint: '2-column layout',
     keywords: ['column', 'layout', 'split', 'side'],
     command: ({ editor, range }) =>
@@ -122,6 +137,7 @@ export const DEFAULT_SLASH_ITEMS: SlashItem[] = [
   },
   {
     title: 'Bookmark',
+    icon: '🔖',
     hint: 'Link card from a URL',
     keywords: ['link', 'url', 'card', 'embed'],
     command: ({ editor, range }) => {
@@ -143,6 +159,7 @@ export function makeChildPageSlashItem(
 ): SlashItem {
   return {
     title: 'Page',
+    icon: '📄',
     hint: 'Embed a new sub-page',
     keywords: ['sub-page', 'subpage', 'child', 'page', 'nested'],
     command: ({ editor, range }) => {

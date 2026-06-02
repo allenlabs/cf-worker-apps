@@ -7,6 +7,8 @@ import { Sidebar } from '~/components/Sidebar';
 import { DatabaseView } from '~/components/DatabaseView';
 import { CommentsPanel, type PendingThread } from '~/components/CommentsPanel';
 import { VersionHistoryPanel } from '~/components/VersionHistoryPanel';
+import { EmojiPicker } from '~/components/EmojiPicker';
+import { PageCover } from '~/components/PageCover';
 import {
   collabToken,
   createPage,
@@ -162,6 +164,8 @@ function PageView() {
 
   const [title, setTitle] = useState(page?.title ?? 'Untitled');
   const [icon, setIcon] = useState(page?.icon ?? '');
+  const [cover, setCover] = useState(page?.cover ?? null);
+  const [iconPickerOpen, setIconPickerOpen] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Phase 4 header state: star, share popover, comments panel.
@@ -290,9 +294,21 @@ function PageView() {
     void updatePage({ data: { id: pageId, title: title.trim() || 'Untitled' } }).catch(() => {});
   }
 
-  function handleIconBlur() {
-    const next = icon.trim();
-    void updatePage({ data: { id: pageId, icon: next || null } }).catch(() => {});
+  function handlePickIcon(emoji: string) {
+    setIcon(emoji);
+    setIconPickerOpen(false);
+    void updatePage({ data: { id: pageId, icon: emoji } }).catch(() => {});
+  }
+
+  function handleRemoveIcon() {
+    setIcon('');
+    setIconPickerOpen(false);
+    void updatePage({ data: { id: pageId, icon: null } }).catch(() => {});
+  }
+
+  function handleCoverChange(next: string | null) {
+    setCover(next);
+    void updatePage({ data: { id: pageId, cover: next } }).catch(() => {});
   }
 
   async function handleNewSub() {
@@ -501,17 +517,34 @@ function PageView() {
             </p>
           ) : null}
 
+          <PageCover
+            cover={cover}
+            editable={!readOnly}
+            uploadFile={uploadImageFile}
+            onChange={handleCoverChange}
+          />
+
           <div className="flex items-start gap-2 mb-2">
-            <input
-              className="w-12 text-3xl text-center outline-none border-0 bg-transparent"
-              value={icon}
-              onChange={(e) => setIcon(e.target.value)}
-              onBlur={handleIconBlur}
-              placeholder="📄"
-              maxLength={8}
-              aria-label="Page icon"
-              readOnly={readOnly}
-            />
+            <div className="relative">
+              <button
+                type="button"
+                className="w-12 h-12 text-3xl flex items-center justify-center rounded hover:bg-gray-100 disabled:hover:bg-transparent"
+                onClick={() => !readOnly && setIconPickerOpen((v) => !v)}
+                disabled={readOnly}
+                aria-label={icon ? t('icon.change') : t('icon.add')}
+                title={icon ? t('icon.change') : t('icon.add')}
+                data-testid="page-icon"
+              >
+                {icon || (readOnly ? '' : <span className="text-base text-gray-300">＋</span>)}
+              </button>
+              {iconPickerOpen && !readOnly ? (
+                <EmojiPicker
+                  onPick={handlePickIcon}
+                  onRemove={handleRemoveIcon}
+                  onClose={() => setIconPickerOpen(false)}
+                />
+              ) : null}
+            </div>
             <input
               className="flex-1 text-3xl font-bold outline-none border-0 bg-transparent"
               value={title}
@@ -535,6 +568,7 @@ function PageView() {
               value={page.snapshotHtml}
               editable={!readOnly}
               placeholder={t('page.editorPlaceholder')}
+              blockMenuT={t}
               collab={{
                 url: token.url,
                 docId: pageId,

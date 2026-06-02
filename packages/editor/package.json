@@ -47,6 +47,7 @@
     "@tiptap/starter-kit": "^2.11.0",
     "@tiptap/suggestion": "^2.11.0",
     "tippy.js": "^6.3.7",
+    "tiptap-extension-global-drag-handle": "^0.1.18",
     "y-prosemirror": "^1.2.11",
     "y-websocket": "^2.0.0",
     "yjs": "^13.6.0"

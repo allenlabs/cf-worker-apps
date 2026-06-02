@@ -113,6 +113,25 @@
 .ae-slash-item.ae-slash-active {
   background: #eef2ff;
 }
+.ae-slash-icon {
+  flex: none;
+  width: 1.5rem;
+  text-align: center;
+  font-size: 0.85rem;
+  color: #6b7280;
+  user-select: none;
+}
+.ae-slash-item {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+.ae-slash-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+}
 .ae-slash-title {
   font-size: 0.875rem;
   color: #111827;
@@ -347,4 +366,127 @@
   color: #111827;
   border-radius: 0.2rem;
   padding: 0 0.15rem;
+}
+
+/* Drag handle (⋮⋮) — from tiptap-extension-global-drag-handle. It injects a
+ * `.drag-handle` element positioned at the left of the hovered block. */
+.drag-handle {
+  position: absolute;
+  width: 1.2rem;
+  height: 1.4rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.25rem;
+  cursor: grab;
+  color: #9ca3af;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='%239ca3af'%3E%3Ccircle cx='9' cy='6' r='1.6'/%3E%3Ccircle cx='15' cy='6' r='1.6'/%3E%3Ccircle cx='9' cy='12' r='1.6'/%3E%3Ccircle cx='15' cy='12' r='1.6'/%3E%3Ccircle cx='9' cy='18' r='1.6'/%3E%3Ccircle cx='15' cy='18' r='1.6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 14px;
+  z-index: 40;
+}
+.drag-handle:hover {
+  background-color: #f3f4f6;
+}
+.drag-handle.hide {
+  opacity: 0;
+  pointer-events: none;
+}
+/* Read-only: the editor never registers the handle, but belt-and-suspenders. */
+.ProseMirror[contenteditable='false'] ~ .drag-handle,
+.ProseMirror[contenteditable='false'] .drag-handle {
+  display: none !important;
+}
+
+/* "＋" add-block affordance next to the handle */
+.ae-add-block {
+  position: fixed;
+  width: 1.2rem;
+  height: 1.4rem;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  border-radius: 0.25rem;
+  cursor: pointer;
+  color: #9ca3af;
+  font-size: 0.95rem;
+  line-height: 1;
+  z-index: 40;
+}
+.ae-add-block:hover {
+  background: #f3f4f6;
+  color: #4b5563;
+}
+
+/* Block action menu (opened by clicking the handle) */
+.ae-block-menu {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.5rem;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.12);
+  padding: 0.25rem;
+  min-width: 11rem;
+  max-height: 22rem;
+  overflow: auto;
+}
+.ae-block-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 0.375rem;
+  padding: 0.4rem 0.55rem;
+  cursor: pointer;
+  font-size: 0.875rem;
+  color: #111827;
+}
+.ae-block-menu-item:hover {
+  background: #f3f4f6;
+}
+.ae-block-menu-item.ae-block-menu-danger {
+  color: #dc2626;
+}
+.ae-block-menu-glyph,
+.ae-block-menu-swatch {
+  flex: none;
+  width: 1.4rem;
+  text-align: center;
+  font-size: 0.85rem;
+  color: #6b7280;
+}
+.ae-block-menu-swatch-bg {
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 0.25rem;
+  border: 1px solid #e5e7eb;
+}
+.ae-block-menu-label {
+  flex: 1;
+  min-width: 0;
+}
+.ae-block-menu-chevron {
+  color: #9ca3af;
+}
+.ae-block-menu-back {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-bottom: 1px solid #f3f4f6;
+  padding: 0.35rem 0.55rem;
+  margin-bottom: 0.15rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: #6b7280;
+}
+.ae-block-menu-back:hover {
+  color: #111827;
 }

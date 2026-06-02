@@ -61,6 +61,7 @@ export interface PageFull {
   parentId: string | null;
   title: string;
   icon: string | null;
+  cover: string | null; // Phase 11 — optional banner image URL (null == none)
   snapshotHtml: string;
   kind: string; // 'page' | 'database'
   databaseId: string | null;
@@ -411,7 +412,7 @@ export function getPageImpl(
 export function updatePageImpl(
   env: ApiClientEnv,
   user: CurrentUser,
-  input: { id: string; title?: string; icon?: string | null; snapshotHtml?: string },
+  input: { id: string; title?: string; icon?: string | null; cover?: string | null; snapshotHtml?: string },
   deps?: ApiClientDeps,
 ): Promise<{ ok: boolean }> {
   return apiPostImpl<{ ok: boolean }>(env, '/v1/pages/update', userBody(user, input), deps);
@@ -983,6 +984,7 @@ export const updatePage = createServerFn({ method: 'POST' })
         id: z.string().uuid(),
         title: z.string().max(255).optional(),
         icon: z.string().max(32).nullish(),
+        cover: z.string().max(2048).nullish(),
         snapshotHtml: z.string().optional(),
       })
       .parse(d),
@@ -993,6 +995,7 @@ export const updatePage = createServerFn({ method: 'POST' })
       id: data.id,
       title: data.title,
       icon: data.icon === undefined ? undefined : data.icon ?? null,
+      cover: data.cover === undefined ? undefined : data.cover ?? null,
       snapshotHtml: data.snapshotHtml,
     });
   });
