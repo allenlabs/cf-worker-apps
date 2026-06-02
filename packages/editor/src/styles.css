@@ -490,3 +490,40 @@
 .ae-block-menu-back:hover {
   color: #111827;
 }
+
+/* ---------- Synced block (Phase 12) ---------- */
+/* A block whose content is a separate Yjs doc mirrored across pages. The red
+   left accent + "Synced" badge mirror Notion's visual treatment. */
+.ae-synced-block {
+  position: relative;
+  border-left: 3px solid #e03e3e;
+  border-radius: 0.25rem;
+  background: #fdf2f2;
+  padding: 0.5rem 0.75rem 0.5rem 0.85rem;
+  margin: 0.4rem 0;
+}
+.ae-synced-badge {
+  display: inline-block;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #e03e3e;
+  background: #fbe2e2;
+  border-radius: 0.2rem;
+  padding: 0.05rem 0.35rem;
+  margin-bottom: 0.3rem;
+  user-select: none;
+}
+.ae-synced-body {
+  outline: none;
+}
+.ae-synced-body > .ProseMirror {
+  outline: none;
+}
+.ae-synced-connecting,
+.ae-synced-placeholder {
+  color: #9ca3af;
+  font-size: 0.85rem;
+  min-height: 1.2rem;
+}

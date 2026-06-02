@@ -178,6 +178,25 @@ export function makeChildPageSlashItem(
   };
 }
 
+/**
+ * Build the "Synced block" slash item. Inserts a `syncedBlock` node with a
+ * fresh `crypto.randomUUID()` syncId (the node binds room `sync-<syncId>`).
+ * Kept pure so it's unit-testable: the command deletes the slash range, then
+ * inserts the node (the node's `setSyncedBlock` command supplies the id when
+ * none is given). `title`/`hint` are optional (host-translated) labels.
+ */
+export function makeSyncedBlockSlashItem(opts?: { title?: string; hint?: string }): SlashItem {
+  return {
+    title: opts?.title ?? 'Synced block',
+    icon: '🔁',
+    hint: opts?.hint ?? 'Content mirrored across pages',
+    keywords: ['sync', 'synced', 'mirror', 'shared', 'linked'],
+    command: ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range).setSyncedBlock().run();
+    },
+  };
+}
+
 /** Case-insensitive filter over title + keywords. Pure, so it's unit-tested. */
 export function filterSlashItems(items: SlashItem[], query: string): SlashItem[] {
   const q = query.trim().toLowerCase();

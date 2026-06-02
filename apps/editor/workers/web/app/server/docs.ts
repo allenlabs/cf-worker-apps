@@ -933,6 +933,21 @@ export const collabToken = createServerFn({ method: 'POST' })
     return collabTokenImpl(getEnv(), user, data.docId);
   });
 
+// Phase 12: mint a collab token for an arbitrary synced-block room
+// (`sync-<uuid>`). Mirrors `collabToken` but for a room string rather than a
+// page id — the editor-api gates this on the verified user having ≥1 workspace
+// membership (the room is self-describing). Used by the editor's `syncedBlock`
+// hook so each nested block can connect to its shared room.
+const SYNC_ROOM_RE = /^sync-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const syncRoomToken = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z.object({ room: z.string().regex(SYNC_ROOM_RE, 'must be a sync-<uuid> room') }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return collabTokenImpl(getEnv(), user, data.room);
+  });
+
 // ---------- workspaces + page tree wrappers (Phase 1) ----------
 
 export const listWorkspaces = createServerFn({ method: 'GET' }).handler(async () => {

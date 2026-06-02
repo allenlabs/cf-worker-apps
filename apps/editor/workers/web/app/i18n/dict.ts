@@ -92,6 +92,11 @@ const editor: Dict = {
     'color.bgBlue': 'Blue background',
     'color.bgPink': 'Pink background',
 
+    // Synced block (Phase 12)
+    'synced.block': 'Synced block',
+    'synced.blockHint': 'Content mirrored across pages',
+    'synced.badge': 'Synced',
+
     // Share popover (public + invite)
     'share.toWeb': 'Share to web',
     'share.anyoneCanView': 'Anyone with the link can view this page.',
@@ -245,6 +250,11 @@ const editor: Dict = {
     'color.bgGreen': '초록 배경',
     'color.bgBlue': '파랑 배경',
     'color.bgPink': '분홍 배경',
+
+    // Synced block (Phase 12)
+    'synced.block': '동기화 블록',
+    'synced.blockHint': '여러 페이지에 미러링되는 콘텐츠',
+    'synced.badge': '동기화됨',
 
     // Share popover
     'share.toWeb': '웹에 공유',

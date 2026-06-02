@@ -24,6 +24,7 @@ import {
   setRestricted as setRestrictedFn,
   sharePage as sharePageFn,
   sharedWithMe as sharedWithMeFn,
+  syncRoomToken,
   teamspacesList,
   unsharePage as unsharePageFn,
   updatePage,
@@ -573,6 +574,14 @@ function PageView() {
                 url: token.url,
                 docId: pageId,
                 token: token.token,
+                user: { name: userName },
+              }}
+              syncedBlock={{
+                collabUrl: token.url,
+                roomToken: async (room) => {
+                  const t = await syncRoomToken({ data: { room } });
+                  return t.token;
+                },
                 user: { name: userName },
               }}
               mention={async (q) => {

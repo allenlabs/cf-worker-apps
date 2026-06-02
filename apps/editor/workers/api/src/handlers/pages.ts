@@ -57,6 +57,22 @@ export async function isMemberImpl(
   return rows.length > 0;
 }
 
+/**
+ * True iff the user belongs to AT LEAST ONE workspace. Used to gate synced-block
+ * collab tokens (Phase 12): a `sync-<uuid>` room is self-describing — possession
+ * of the syncId (which you only obtain by being on a page that embeds the block)
+ * is the access boundary — so we only require the requester to be a real,
+ * provisioned suite user. Tighter per-sync ACL is a follow-up.
+ */
+export async function hasAnyMembershipImpl(sql: Sql, userId: string): Promise<boolean> {
+  const rows = await sql`
+    SELECT 1 FROM editor.workspace_members
+    WHERE user_id = ${userId}
+    LIMIT 1
+  `;
+  return rows.length > 0;
+}
+
 /** Resolve the workspace a page belongs to (null if the page doesn't exist). */
 export async function pageWorkspaceImpl(sql: Sql, pageId: string): Promise<string | null> {
   const [row] = await sql<{ workspaceId: string }[]>`

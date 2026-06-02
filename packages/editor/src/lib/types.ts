@@ -48,6 +48,25 @@ export interface CommentConfig {
   resolvedThreadIds?: string[];
 }
 
+/**
+ * Synced-block wiring. When set, the editor registers the `syncedBlock` node + a
+ * "Synced block" slash item: choosing it inserts a block bound to a fresh
+ * `sync-<uuid>` room. Each block mounts a nested collaborative editor against
+ * that room, so every instance of the same syncId (on any page) mirrors live.
+ *
+ * Reuses the page's collab transport: `collabUrl` is the same y-websocket base
+ * as {@link CollabConfig.url}; `roomToken` mints a short-lived token for an
+ * arbitrary room string (e.g. `sync-<uuid>`).
+ */
+export interface SyncedBlockProps {
+  /** y-websocket base — the same one used for the page's collab. */
+  collabUrl: string;
+  /** Mint a short-lived token for a room string (resolved on NodeView mount). */
+  roomToken: (room: string) => Promise<string>;
+  /** Local user for the nested editor's awareness cursor. */
+  user: { name: string; color?: string };
+}
+
 /** Real-time collaboration wiring. Omit for a plain single-user editor. */
 export interface CollabConfig {
   /** y-websocket base, e.g. wss://host/editor (doc id is appended). */
@@ -91,6 +110,13 @@ export interface EditorProps {
    * routes via its own router / full-page nav rather than the raw href).
    */
   onOpenPage?: (pageId: string) => void;
+  /**
+   * Synced blocks. When set, the editor registers the `syncedBlock` node + a
+   * "Synced block" slash item; each block mounts a nested collaborative editor
+   * bound to its own `sync-<uuid>` room (mirrored across every page it appears
+   * on). Omit to disable synced blocks entirely.
+   */
+  syncedBlock?: SyncedBlockProps;
   /**
    * Show the ⋮⋮ block drag handle + block action menu (Notion editing feel).
    * Defaults to true; set false to opt out (e.g. a minimal embed). The handle

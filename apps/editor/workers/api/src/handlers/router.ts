@@ -25,6 +25,7 @@ import {
   createPageImpl,
   getPageImpl,
   isMemberImpl,
+  hasAnyMembershipImpl,
   isPageOwnerImpl,
   listOrProvisionWorkspacesImpl,
   movePageImpl,
@@ -296,28 +297,51 @@ v1Router.post('/users/search', async (c) => {
   return c.json(results, 200);
 });
 
-// ---------- collab token (now membership-gated; docId === pageId) ----------
+// ---------- collab token (membership-gated) ----------
+//
+// Two room shapes:
+//   - a page id (UUID)        → gated on access to THAT page (canAccessPageImpl).
+//   - a synced-block room      → `sync-<uuid>` (Phase 12). The room is
+//     self-describing: knowing the syncId means you were on a page that embeds
+//     the block, so we only require the requester to be a provisioned suite user
+//     (≥1 workspace membership). v1 synced-block content is NOT separately
+//     ACL'd beyond needing the syncId — tighter per-sync ACL is a follow-up.
 
-const collabSchema = z.object({ docId: z.string().uuid() });
+/** Matches a synced-block room: literal `sync-` + a UUID. */
+const SYNC_ROOM_RE = /^sync-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const collabSchema = z.object({
+  docId: z.string().refine((v) => z.string().uuid().safeParse(v).success || SYNC_ROOM_RE.test(v), {
+    message: 'docId must be a page UUID or a sync-<uuid> room',
+  }),
+});
 v1Router.post('/collab-token', async (c) => {
   const user = c.get('user');
   const parsed = collabSchema.safeParse(c.get('body'));
   if (!parsed.success) {
     return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
   }
-  // The page's workspace must include this user. (docId is the page id.)
-  const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.docId);
-  if (!can) return c.json({ error: 'not found' }, 404);
+  const docId = parsed.data.docId;
+  const isSyncRoom = SYNC_ROOM_RE.test(docId);
+  if (isSyncRoom) {
+    // Synced block: any provisioned suite user may mint for an arbitrary room.
+    const member = await hasAnyMembershipImpl(c.get('db'), user.userId);
+    if (!member) return c.json({ error: 'not found' }, 404);
+  } else {
+    // Page room: the page's workspace must include this user. (docId is the page id.)
+    const can = await canAccessPageImpl(c.get('db'), user.userId, docId);
+    if (!can) return c.json({ error: 'not found' }, 404);
+  }
 
   const nowSec = Math.floor(Date.now() / 1000);
   const payload = {
-    room: parsed.data.docId,
+    room: docId,
     exp: nowSec + 3600,
     uid: user.userId,
     name: user.userName,
   };
   const token = await mintCollabToken(c.env.COLLAB_HMAC_SECRET, payload);
-  return c.json({ token, url: c.env.COLLAB_URL, docId: parsed.data.docId }, 200);
+  return c.json({ token, url: c.env.COLLAB_URL, docId }, 200);
 });
 
 // ---------- databases (Phase 3) ----------

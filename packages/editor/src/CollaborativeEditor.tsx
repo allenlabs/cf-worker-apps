@@ -29,7 +29,12 @@ import { ChildPage } from './extensions/child-page';
 import { BubbleToolbar } from './extensions/bubble-toolbar';
 import { DragHandle } from './extensions/block-menu';
 import { MarkdownRules } from './extensions/markdown-rules';
-import { DEFAULT_SLASH_ITEMS, makeChildPageSlashItem } from './lib/slash-items';
+import { SyncedBlock } from './extensions/synced-block';
+import {
+  DEFAULT_SLASH_ITEMS,
+  makeChildPageSlashItem,
+  makeSyncedBlockSlashItem,
+} from './lib/slash-items';
 import type { EditorProps, SlashItem } from './lib/types';
 
 /** Deterministic pastel cursor color from a name, so a user is the same hue
@@ -166,8 +171,18 @@ export function CollaborativeEditor(props: EditorProps) {
     if (onCreateChildPage) {
       items = [...items, makeChildPageSlashItem(onCreateChildPage)];
     }
+    // Synced block: only offered when the host wired collab transport for it.
+    if (props.syncedBlock) {
+      const tr = props.blockMenuT;
+      items = [
+        ...items,
+        makeSyncedBlockSlashItem(
+          tr ? { title: tr('synced.block'), hint: tr('synced.blockHint') } : undefined,
+        ),
+      ];
+    }
     return items;
-  }, [uploadImage, onCreateChildPage]);
+  }, [uploadImage, onCreateChildPage, props.syncedBlock, props.blockMenuT]);
 
   const extensions = useMemo<Extensions>(() => {
     const isEditable = props.editable ?? true;
@@ -219,6 +234,21 @@ export function CollaborativeEditor(props: EditorProps) {
         }),
       );
     }
+    // Synced blocks: register the node when the host wired collab transport for
+    // it. The NodeView mounts a nested editor bound to `sync-<syncId>`.
+    if (props.syncedBlock) {
+      ext.push(
+        SyncedBlock.configure({
+          config: {
+            collabUrl: props.syncedBlock.collabUrl,
+            roomToken: props.syncedBlock.roomToken,
+            user: props.syncedBlock.user,
+          },
+          editable: isEditable,
+          badgeLabel: props.blockMenuT ? props.blockMenuT('synced.badge') : undefined,
+        }),
+      );
+    }
     if (props.mention) ext.push(makeMention(props.mention));
     // Drag handle + block action menu (Notion editing feel). Only when the
     // editor is editable + the consumer hasn't opted out — viewers never get it.
@@ -254,6 +284,7 @@ export function CollaborativeEditor(props: EditorProps) {
     !!props.comments,
     !!onCreateChildPage,
     !!props.onOpenPage,
+    props.syncedBlock,
   ]);
 
   // The paste/drop handlers need the editor instance, but it doesn't exist yet
