@@ -19,6 +19,7 @@ import {
   pageShares as pageSharesFn,
   searchMentions,
   setPublic as setPublicFn,
+  setRestricted as setRestrictedFn,
   sharePage as sharePageFn,
   sharedWithMe as sharedWithMeFn,
   teamspacesList,
@@ -166,6 +167,9 @@ function PageView() {
   // Phase 4 header state: star, share popover, comments panel.
   const [favorited, setFavorited] = useState(page?.favorited ?? false);
   const [isPublic, setIsPublic] = useState(page?.public ?? false);
+  // Phase 10: per-page restriction toggle (owner-only).
+  const [restricted, setRestrictedState] = useState(page?.restricted ?? false);
+  const isOwner = page?.role === 'owner';
   const [shareOpen, setShareOpen] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -228,6 +232,17 @@ function PageView() {
       setIsPublic(res.public);
     } catch {
       setIsPublic(!next); // revert on failure
+    }
+  }
+
+  async function handleToggleRestricted() {
+    const next = !restricted;
+    setRestrictedState(next);
+    try {
+      const res = await setRestrictedFn({ data: { id: pageId, restricted: next } });
+      setRestrictedState(res.restricted);
+    } catch {
+      setRestrictedState(!next); // revert on failure
     }
   }
 
@@ -412,6 +427,23 @@ function PageView() {
                   </div>
                 ) : null}
 
+                {isOwner ? (
+                  <div className="border-t border-gray-100 pt-2 mb-2">
+                    <label className="flex items-center justify-between gap-2">
+                      <span className="text-gray-800">{t('share.restrict')}</span>
+                      <input
+                        type="checkbox"
+                        checked={restricted}
+                        onChange={() => void handleToggleRestricted()}
+                        aria-label={t('share.restrict')}
+                      />
+                    </label>
+                    <p className="text-xs text-gray-400 mt-1">
+                      {restricted ? t('share.restrictOn') : t('share.restrictOff')}
+                    </p>
+                  </div>
+                ) : null}
+
                 <div className="border-t border-gray-100 pt-2">
                   <label className="flex items-center justify-between gap-2 mb-2">
                     <span className="text-gray-800">{t('share.toWeb')}</span>
@@ -492,7 +524,12 @@ function PageView() {
           </div>
 
           {isDatabase && schema ? (
-            <DatabaseView databaseId={pageId} workspaceId={workspaceId} initialSchema={schema} />
+            <DatabaseView
+              databaseId={pageId}
+              workspaceId={workspaceId}
+              initialSchema={schema}
+              editable={!readOnly}
+            />
           ) : mounted && token ? (
             <CollaborativeEditor
               value={page.snapshotHtml}
@@ -510,6 +547,16 @@ function PageView() {
               }}
               uploadImage={uploadImageFile}
               onUpdate={handleUpdate}
+              onCreateChildPage={async (childTitle) => {
+                const created = await createPage({
+                  data: { workspaceId, parentId: pageId, title: childTitle },
+                });
+                return { id: created.id, title: created.title };
+              }}
+              onOpenPage={(id) => {
+                // Full-page nav per repo lesson (SSR re-reads the cookie).
+                window.location.href = `/p/${id}`;
+              }}
               comments={{
                 onCreate: handleCommentCreate,
                 onOpenThread: handleOpenThread,

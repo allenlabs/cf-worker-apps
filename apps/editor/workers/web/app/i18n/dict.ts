@@ -29,6 +29,9 @@ const editor: Dict = {
     'sidebar.untitled': 'Untitled',
     'sidebar.newTeamspacePrompt': 'Teamspace name',
     'sidebar.newTeamspaceDefault': 'Teamspace',
+    'sidebar.teamspaceMembers': 'Members',
+    'sidebar.teamspaceMembersShort': 'Members',
+    'sidebar.teamspaceOpen': 'Open to all workspace members. Add members to restrict.',
 
     // Page header
     'page.share': 'Share',
@@ -62,6 +65,9 @@ const editor: Dict = {
     'share.peopleWithAccess': 'People with access',
     'share.remove': 'Remove',
     'share.removeAria': 'Remove access',
+    'share.restrict': 'Restrict access',
+    'share.restrictOn': 'Only invited people and the owner can find this page.',
+    'share.restrictOff': 'Off — all workspace members can find this page.',
 
     // Index empty state
     'index.settingUp': 'Setting up your workspace…',
@@ -134,6 +140,9 @@ const editor: Dict = {
     'sidebar.untitled': '제목 없음',
     'sidebar.newTeamspacePrompt': '팀스페이스 이름',
     'sidebar.newTeamspaceDefault': '팀스페이스',
+    'sidebar.teamspaceMembers': '멤버',
+    'sidebar.teamspaceMembersShort': '멤버',
+    'sidebar.teamspaceOpen': '모든 워크스페이스 멤버에게 공개. 멤버를 추가하면 제한됩니다.',
 
     // Page header
     'page.share': '공유',
@@ -167,6 +176,9 @@ const editor: Dict = {
     'share.peopleWithAccess': '액세스 권한이 있는 사람',
     'share.remove': '제거',
     'share.removeAria': '액세스 제거',
+    'share.restrict': '액세스 제한',
+    'share.restrictOn': '초대된 사람과 소유자만 이 페이지를 찾을 수 있습니다.',
+    'share.restrictOff': '꺼짐 — 모든 워크스페이스 멤버가 이 페이지를 찾을 수 있습니다.',
 
     // Index empty state
     'index.settingUp': '워크스페이스를 설정하는 중…',

@@ -67,6 +67,7 @@ export interface PageFull {
   public: boolean; // Phase 4 — public share toggle state
   favorited: boolean; // Phase 4 — starred by the requesting user
   role: PageRole; // Phase 9 — requesting user's effective role on this page
+  restricted: boolean; // Phase 10 — only owner + invited people can access
 }
 
 // ---------- per-user sharing + teamspaces (Phase 9) ----------
@@ -88,6 +89,12 @@ export interface SharedWithMeItem {
 export interface Teamspace {
   id: string;
   name: string;
+}
+
+export interface TeamspaceMember {
+  userId: string;
+  name: string;
+  role: string;
 }
 
 // ---------- collaboration (Phase 4) ----------
@@ -809,6 +816,64 @@ export function teamspaceDeleteImpl(
   return apiPostImpl<{ ok: boolean }>(env, '/v1/teamspaces/delete', userBody(user, { id }), deps);
 }
 
+// ---------- per-page restriction + teamspace members (Phase 10) ----------
+
+export function setRestrictedImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { id: string; restricted: boolean },
+  deps?: ApiClientDeps,
+): Promise<{ restricted: boolean }> {
+  return apiPostImpl<{ restricted: boolean }>(
+    env,
+    '/v1/pages/set-restricted',
+    userBody(user, input),
+    deps,
+  );
+}
+
+export function teamspaceMembersImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  teamspaceId: string,
+  deps?: ApiClientDeps,
+): Promise<TeamspaceMember[]> {
+  return apiPostImpl<TeamspaceMember[]>(
+    env,
+    '/v1/teamspaces/members',
+    userBody(user, { teamspaceId }),
+    deps,
+  );
+}
+
+export function teamspaceMemberAddImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { teamspaceId: string; query: string; role?: 'member' | 'admin' },
+  deps?: ApiClientDeps,
+): Promise<TeamspaceMember> {
+  return apiPostImpl<TeamspaceMember>(
+    env,
+    '/v1/teamspaces/member/add',
+    userBody(user, input),
+    deps,
+  );
+}
+
+export function teamspaceMemberRemoveImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { teamspaceId: string; userId: string },
+  deps?: ApiClientDeps,
+): Promise<{ ok: boolean }> {
+  return apiPostImpl<{ ok: boolean }>(
+    env,
+    '/v1/teamspaces/member/remove',
+    userBody(user, input),
+    deps,
+  );
+}
+
 // ---------- createServerFn wrappers ----------
 /* v8 ignore start */
 
@@ -1368,6 +1433,48 @@ export const teamspaceDelete = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
     const user = await requireUser();
     return teamspaceDeleteImpl(getEnv(), user, data.id);
+  });
+
+// ---------- per-page restriction + teamspace members wrappers (Phase 10) ----------
+
+export const setRestricted = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z.object({ id: z.string().uuid(), restricted: z.boolean() }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return setRestrictedImpl(getEnv(), user, data);
+  });
+
+export const teamspaceMembers = createServerFn({ method: 'GET' })
+  .inputValidator((d: unknown) => z.object({ teamspaceId: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return teamspaceMembersImpl(getEnv(), user, data.teamspaceId);
+  });
+
+export const teamspaceMemberAdd = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        teamspaceId: z.string().uuid(),
+        query: z.string().min(1).max(255),
+        role: z.enum(['member', 'admin']).default('member'),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return teamspaceMemberAddImpl(getEnv(), user, data);
+  });
+
+export const teamspaceMemberRemove = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z.object({ teamspaceId: z.string().uuid(), userId: z.string().min(1) }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return teamspaceMemberRemoveImpl(getEnv(), user, data);
   });
 
 /* v8 ignore stop */

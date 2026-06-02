@@ -132,6 +132,35 @@ export const DEFAULT_SLASH_ITEMS: SlashItem[] = [
   },
 ];
 
+/**
+ * Build the "Page" slash item that creates a sub-page and inserts a childPage
+ * block. Kept pure (factory taking the create hook) so it's unit-testable: the
+ * command deletes the slash range, derives a seed title from the current line,
+ * awaits `onCreate`, then inserts the returned child-page node.
+ */
+export function makeChildPageSlashItem(
+  onCreate: (title: string) => Promise<{ id: string; title: string; icon?: string }>,
+): SlashItem {
+  return {
+    title: 'Page',
+    hint: 'Embed a new sub-page',
+    keywords: ['sub-page', 'subpage', 'child', 'page', 'nested'],
+    command: ({ editor, range }) => {
+      // Use the text already typed on the line (after "/") as the seed title.
+      const seed = editor.state.doc.textBetween(range.from, range.to).replace(/^\//, '').trim();
+      const title = seed || 'Untitled';
+      editor.chain().focus().deleteRange(range).run();
+      void onCreate(title).then((created) => {
+        editor
+          .chain()
+          .focus()
+          .setChildPage({ pageId: created.id, title: created.title, icon: created.icon })
+          .run();
+      });
+    },
+  };
+}
+
 /** Case-insensitive filter over title + keywords. Pure, so it's unit-tested. */
 export function filterSlashItems(items: SlashItem[], query: string): SlashItem[] {
   const q = query.trim().toLowerCase();

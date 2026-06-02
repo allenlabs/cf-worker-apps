@@ -38,6 +38,7 @@ export interface PageFull {
   kind: string; // 'page' | 'database'
   databaseId: string | null; // set when this page is a database row
   public: boolean; // Phase 4 — when true, reachable via the public share link
+  restricted: boolean; // Phase 10 — when true, only owner + explicit shares can access
 }
 
 // ---------- membership helpers ----------
@@ -74,53 +75,144 @@ const SHARE_ANCESTOR_DEPTH = 1000;
 /** Highest role ('owner'|'edit'|'view') the user holds over `pageId`, or null. */
 export type PageRole = 'owner' | 'edit' | 'view';
 
+/** The page-chain facts the access decision needs, resolved in one CTE. */
+interface AccessFacts {
+  /** workspace_id of the target page (null if the page doesn't exist). */
+  workspaceId: string | null;
+  /** owner_id of the TARGET page. */
+  ownerId: string | null;
+  /** Best explicit share role on the page or any ancestor for this user. */
+  shareRole: 'edit' | 'view' | null;
+  /** True if the page or any ancestor has restricted = true. */
+  restricted: boolean;
+  /**
+   * Teamspace gating: true when some teamspace on the chain HAS members and the
+   * user is NOT among them — workspace membership then doesn't grant access.
+   */
+  teamspaceBlocked: boolean;
+}
+
 /**
- * The user's effective role on `pageId`:
- *   - workspace member  → 'owner' (full read/write, matches the historic gate)
- *   - shared (self or via an ANCESTOR) → that share's role ('edit'|'view')
- *   - otherwise          → null (no access)
+ * Resolve every fact the access decision needs in a single recursive CTE that
+ * climbs parent_id from `pageId`. Folding restricted-inheritance, the best
+ * ancestor share role, and per-teamspace gating into one walk keeps the policy
+ * authoritative + avoids N round-trips.
  *
- * The ancestor share walk is a single recursive CTE climbing parent_id, joined
- * to page_shares at each level; we take the strongest role found ('edit' beats
- * 'view'). Membership is checked first since it's the common, cheapest path.
+ * Teamspace gating: for each teamspace referenced on the chain that has ANY
+ * teamspace_members rows, the user must have a membership row; if even one such
+ * gated teamspace lacks the user, membership-based access is blocked. A
+ * teamspace with no member rows is open (back-compat).
+ */
+async function accessFactsImpl(
+  sql: Sql,
+  userId: string,
+  pageId: string,
+): Promise<AccessFacts> {
+  const [row] = await sql<
+    {
+      workspaceId: string | null;
+      ownerId: string | null;
+      shareRole: string | null;
+      restricted: boolean;
+      teamspaceBlocked: boolean;
+    }[]
+  >`
+    WITH RECURSIVE chain AS (
+      SELECT id, parent_id, owner_id, workspace_id, restricted, teamspace_id, 0 AS depth
+      FROM editor.pages WHERE id = ${pageId}
+      UNION ALL
+      SELECT p.id, p.parent_id, p.owner_id, p.workspace_id, p.restricted, p.teamspace_id, c.depth + 1
+      FROM editor.pages p
+      JOIN chain c ON p.id = c.parent_id
+      WHERE c.depth < ${SHARE_ANCESTOR_DEPTH}
+    ),
+    target AS (
+      SELECT workspace_id, owner_id FROM chain WHERE depth = 0
+    ),
+    best_share AS (
+      SELECT s.role
+      FROM editor.page_shares s
+      JOIN chain c ON c.id = s.page_id
+      WHERE s.user_id = ${userId}
+      ORDER BY CASE s.role WHEN 'edit' THEN 0 ELSE 1 END
+      LIMIT 1
+    ),
+    -- A teamspace on the chain that has members but NOT this user blocks
+    -- membership-based access.
+    gated_teamspaces AS (
+      SELECT DISTINCT c.teamspace_id AS ts
+      FROM chain c
+      WHERE c.teamspace_id IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM editor.teamspace_members m WHERE m.teamspace_id = c.teamspace_id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM editor.teamspace_members m
+          WHERE m.teamspace_id = c.teamspace_id AND m.user_id = ${userId}
+        )
+    )
+    SELECT
+      (SELECT workspace_id FROM target) AS "workspaceId",
+      (SELECT owner_id FROM target) AS "ownerId",
+      (SELECT role FROM best_share) AS "shareRole",
+      COALESCE((SELECT bool_or(restricted) FROM chain), false) AS restricted,
+      EXISTS (SELECT 1 FROM gated_teamspaces) AS "teamspaceBlocked"
+  `;
+  const shareRole =
+    row?.shareRole === 'edit' ? 'edit' : row?.shareRole === 'view' ? 'view' : null;
+  return {
+    workspaceId: row?.workspaceId ?? null,
+    ownerId: row?.ownerId ?? null,
+    shareRole,
+    restricted: row?.restricted ?? false,
+    teamspaceBlocked: row?.teamspaceBlocked ?? false,
+  };
+}
+
+/**
+ * The user's effective role on `pageId`, authoritative for both read + write:
+ *   - owner = the page's owner_id is this user (always full access, even when
+ *     restricted).
+ *   - edit  = a workspace member WITH access (not blocked by a restricted
+ *     ancestor or a gated teamspace) OR an explicit 'edit' share on the page /
+ *     an ancestor.
+ *   - view  = an explicit 'view' share on the page / an ancestor (and not
+ *     otherwise edit).
+ *   - null  = no access.
+ *
+ * Restricted pages: when the page or an ancestor is restricted, workspace
+ * membership alone does NOT grant access — only the owner + explicit shares.
+ * Teamspace membership: when a teamspace on the chain has members, only its
+ * members get membership-based access (see accessFactsImpl).
  */
 export async function pageRoleImpl(
   sql: Sql,
   userId: string,
   pageId: string,
 ): Promise<PageRole | null> {
-  const workspaceId = await pageWorkspaceImpl(sql, pageId);
-  if (!workspaceId) return null;
-  if (await isMemberImpl(sql, userId, workspaceId)) return 'owner';
-  // Walk this page + its ancestors, capped, and pick the best share role.
-  const rows = await sql<{ role: string }[]>`
-    WITH RECURSIVE chain AS (
-      SELECT id, parent_id, 0 AS depth
-      FROM editor.pages WHERE id = ${pageId}
-      UNION ALL
-      SELECT p.id, p.parent_id, c.depth + 1
-      FROM editor.pages p
-      JOIN chain c ON p.id = c.parent_id
-      WHERE c.depth < ${SHARE_ANCESTOR_DEPTH}
-    )
-    SELECT s.role
-    FROM editor.page_shares s
-    JOIN chain c ON c.id = s.page_id
-    WHERE s.user_id = ${userId}
-    ORDER BY CASE s.role WHEN 'edit' THEN 0 ELSE 1 END
-    LIMIT 1
-  `;
-  const role = rows[0]?.role;
-  if (role === 'edit') return 'edit';
-  if (role === 'view') return 'view';
+  const facts = await accessFactsImpl(sql, userId, pageId);
+  if (!facts.workspaceId) return null;
+
+  // Owner always wins (full access regardless of restriction / teamspace).
+  if (facts.ownerId && facts.ownerId === userId) return 'owner';
+
+  // Membership grants 'edit' unless blocked by a restricted ancestor or a gated
+  // teamspace the user isn't in.
+  const membershipGrants =
+    !facts.restricted &&
+    !facts.teamspaceBlocked &&
+    (await isMemberImpl(sql, userId, facts.workspaceId));
+  if (membershipGrants) return 'edit';
+
+  // Otherwise fall back to an explicit share role on the page / an ancestor.
+  if (facts.shareRole === 'edit') return 'edit';
+  if (facts.shareRole === 'view') return 'view';
   return null;
 }
 
 /**
- * True iff the user can access `pageId` — a workspace member OR the page (or any
- * ancestor) is shared to them. Read-level gate used by every membership-gated
- * route; write routes that must respect 'view' shares should consult
- * pageRoleImpl directly.
+ * True iff the user can READ `pageId` — owner, an accessible workspace member,
+ * or shared (view|edit). Read-level gate used by every membership-gated route.
  */
 export async function canAccessPageImpl(
   sql: Sql,
@@ -128,6 +220,46 @@ export async function canAccessPageImpl(
   pageId: string,
 ): Promise<boolean> {
   return (await pageRoleImpl(sql, userId, pageId)) !== null;
+}
+
+/**
+ * True iff the user can WRITE `pageId` — role is owner or edit. Use this on
+ * every mutating route so a 'view'-shared user can't call write endpoints.
+ */
+export async function canEditPageImpl(
+  sql: Sql,
+  userId: string,
+  pageId: string,
+): Promise<boolean> {
+  const role = await pageRoleImpl(sql, userId, pageId);
+  return role === 'owner' || role === 'edit';
+}
+
+/** Set/clear a page's `restricted` flag. Returns false if the page is missing. */
+export async function setRestrictedImpl(
+  sql: Sql,
+  id: string,
+  restricted: boolean,
+): Promise<{ restricted: boolean } | null> {
+  const rows = await sql<{ restricted: boolean }[]>`
+    UPDATE editor.pages
+    SET restricted = ${restricted}, updated_at = now()
+    WHERE id = ${id}
+    RETURNING restricted
+  `;
+  return rows[0] ? { restricted: rows[0].restricted } : null;
+}
+
+/** True iff `userId` is the owner_id of `pageId`. */
+export async function isPageOwnerImpl(
+  sql: Sql,
+  userId: string,
+  pageId: string,
+): Promise<boolean> {
+  const [row] = await sql<{ ownerId: string | null }[]>`
+    SELECT owner_id AS "ownerId" FROM editor.pages WHERE id = ${pageId} LIMIT 1
+  `;
+  return !!row && row.ownerId === userId;
 }
 
 // ---------- workspaces ----------
@@ -251,7 +383,7 @@ export async function getPageImpl(sql: Sql, id: string): Promise<PageFull | null
   const [row] = await sql<PageFull[]>`
     SELECT id, workspace_id AS "workspaceId", parent_id AS "parentId",
            title, icon, snapshot_html AS "snapshotHtml",
-           kind, database_id AS "databaseId", public
+           kind, database_id AS "databaseId", public, restricted
     FROM editor.pages
     WHERE id = ${id} AND archived = false
     LIMIT 1

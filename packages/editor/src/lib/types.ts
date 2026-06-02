@@ -78,5 +78,16 @@ export interface EditorProps {
   onUpdate?: (html: string) => void;
   /** Inline comments. Omit to disable the Comment mark + bubble button entirely. */
   comments?: CommentConfig;
+  /**
+   * Create a sub-page from the editor. When set, the editor registers the
+   * `childPage` node + a "Page" slash item: choosing it calls this with the
+   * seed title, then inserts a clickable child-page block with the returned id.
+   */
+  onCreateChildPage?: (title: string) => Promise<{ id: string; title: string; icon?: string }>;
+  /**
+   * Navigate to a page. Called when a child-page block is clicked (so the host
+   * routes via its own router / full-page nav rather than the raw href).
+   */
+  onOpenPage?: (pageId: string) => void;
   className?: string;
 }

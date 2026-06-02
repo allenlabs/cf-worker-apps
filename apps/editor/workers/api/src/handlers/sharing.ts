@@ -173,3 +173,79 @@ export async function teamspaceWorkspaceImpl(sql: Sql, id: string): Promise<stri
   `;
   return row?.workspaceId ?? null;
 }
+
+// ---------- teamspace membership (Phase 10) ----------
+//
+// Opt-in per-teamspace ACL: a teamspace with NO member rows stays open to all
+// workspace members (Phase 9 back-compat); once it has ANY member rows, only
+// those members get membership-based access to its pages (enforced in
+// pageRoleImpl via accessFactsImpl).
+
+export interface TeamspaceMember {
+  userId: string;
+  name: string;
+  role: string;
+}
+
+/** Members of a teamspace (name resolved from the user mirror). */
+export async function teamspaceMembersImpl(
+  sql: Sql,
+  teamspaceId: string,
+): Promise<TeamspaceMember[]> {
+  const rows = await sql<{ userId: string; name: string; role: string }[]>`
+    SELECT m.user_id AS "userId",
+           COALESCE(u.name, u.username, m.user_id) AS name,
+           m.role
+    FROM editor.teamspace_members m
+    LEFT JOIN editor.users u ON u.user_id = m.user_id
+    WHERE m.teamspace_id = ${teamspaceId}
+    ORDER BY m.created_at ASC
+  `;
+  return rows.map((r) => ({ userId: r.userId, name: r.name, role: r.role }));
+}
+
+/**
+ * Resolve a free-text query to a single suite user (same semantics as
+ * shareePageImpl), then upsert a teamspace_members row for them. Returns the
+ * added member, or null when the query matched nobody.
+ */
+export async function teamspaceMemberAddImpl(
+  sql: Sql,
+  input: { teamspaceId: string; query: string; role?: string },
+): Promise<TeamspaceMember | null> {
+  const term = input.query.trim();
+  if (!term) return null;
+  const like = `%${term}%`;
+  const [user] = await sql<{ userId: string; name: string }[]>`
+    SELECT user_id AS "userId", COALESCE(name, username, user_id) AS name
+    FROM editor.users
+    WHERE name ILIKE ${term} OR username ILIKE ${term}
+       OR name ILIKE ${like} OR username ILIKE ${like}
+    ORDER BY
+      CASE WHEN name ILIKE ${term} OR username ILIKE ${term} THEN 0 ELSE 1 END,
+      name
+    LIMIT 1
+  `;
+  if (!user) return null;
+  const role = input.role === 'admin' ? 'admin' : 'member';
+  await sql`
+    INSERT INTO editor.teamspace_members (teamspace_id, user_id, role)
+    VALUES (${input.teamspaceId}, ${user.userId}, ${role})
+    ON CONFLICT (teamspace_id, user_id) DO UPDATE SET role = EXCLUDED.role
+  `;
+  return { userId: user.userId, name: user.name, role };
+}
+
+/** Remove a user from a teamspace. Returns false when nothing matched. */
+export async function teamspaceMemberRemoveImpl(
+  sql: Sql,
+  teamspaceId: string,
+  userId: string,
+): Promise<boolean> {
+  const rows = await sql`
+    DELETE FROM editor.teamspace_members
+    WHERE teamspace_id = ${teamspaceId} AND user_id = ${userId}
+    RETURNING teamspace_id
+  `;
+  return rows.length > 0;
+}

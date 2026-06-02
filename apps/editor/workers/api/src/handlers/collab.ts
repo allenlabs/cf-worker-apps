@@ -337,6 +337,21 @@ export async function commentPageImpl(sql: Sql, id: string): Promise<string | nu
   return row?.pageId ?? null;
 }
 
+/**
+ * A comment's page + author (Phase 10) so a route can authorise resolve/delete
+ * as "edit on the page OR the comment's author". null when the comment is gone.
+ */
+export async function commentAuthorImpl(
+  sql: Sql,
+  id: string,
+): Promise<{ pageId: string; userId: string | null } | null> {
+  const [row] = await sql<{ pageId: string; userId: string | null }[]>`
+    SELECT page_id AS "pageId", user_id AS "userId"
+    FROM editor.comments WHERE id = ${id} LIMIT 1
+  `;
+  return row ? { pageId: row.pageId, userId: row.userId } : null;
+}
+
 /** Delete a comment. Returns false if the comment didn't exist. */
 export async function commentDeleteImpl(sql: Sql, id: string): Promise<boolean> {
   const rows = await sql`

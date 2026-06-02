@@ -25,8 +25,9 @@ import { Toggle, ToggleSummary } from './extensions/toggle';
 import { Bookmark } from './extensions/bookmark';
 import { Columns, Column } from './extensions/columns';
 import { Comment, commentThreadIdAt } from './extensions/comment';
+import { ChildPage } from './extensions/child-page';
 import { BubbleToolbar } from './extensions/bubble-toolbar';
-import { DEFAULT_SLASH_ITEMS } from './lib/slash-items';
+import { DEFAULT_SLASH_ITEMS, makeChildPageSlashItem } from './lib/slash-items';
 import type { EditorProps, SlashItem } from './lib/types';
 
 /** Deterministic pastel cursor color from a name, so a user is the same hue
@@ -133,24 +134,38 @@ export function CollaborativeEditor(props: EditorProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collab?.url, collab?.docId]);
 
-  const { uploadImage } = props;
+  const { uploadImage, onCreateChildPage } = props;
+
+  // Child-page click → navigate. Kept in a ref so the node's (config-time)
+  // click handler always sees the latest navigation callback without
+  // rebuilding the editor.
+  const onOpenPageRef = useRef<((pageId: string) => void) | null>(null);
+  onOpenPageRef.current = props.onOpenPage ?? null;
 
   // Slash items: clone the defaults and, when an uploader is wired, swap the
-  // "Image" item's command for a hidden-file-input upload flow.
+  // "Image" item's command for a hidden-file-input upload flow. When a
+  // child-page creator is wired, append a "Page" item that creates + embeds a
+  // sub-page.
   const slashItems = useMemo<SlashItem[]>(() => {
-    if (!uploadImage) return DEFAULT_SLASH_ITEMS;
-    return DEFAULT_SLASH_ITEMS.map((it) =>
-      it.title === 'Image'
-        ? {
-            ...it,
-            command: ({ editor, range }) => {
-              editor.chain().focus().deleteRange(range).run();
-              pickAndUploadImage(editor, uploadImage);
-            },
-          }
-        : it,
-    );
-  }, [uploadImage]);
+    let items = DEFAULT_SLASH_ITEMS;
+    if (uploadImage) {
+      items = items.map((it) =>
+        it.title === 'Image'
+          ? {
+              ...it,
+              command: ({ editor, range }) => {
+                editor.chain().focus().deleteRange(range).run();
+                pickAndUploadImage(editor, uploadImage);
+              },
+            }
+          : it,
+      );
+    }
+    if (onCreateChildPage) {
+      items = [...items, makeChildPageSlashItem(onCreateChildPage)];
+    }
+    return items;
+  }, [uploadImage, onCreateChildPage]);
 
   const extensions = useMemo<Extensions>(() => {
     const ext: Extensions = [
@@ -184,6 +199,16 @@ export function CollaborativeEditor(props: EditorProps) {
     ];
     // Inline comments: a normal mark, so it rides through Yjs in collab mode.
     if (props.comments) ext.push(Comment);
+    // Child pages: the node is present whenever creation OR navigation is wired.
+    // Clicks route through a ref so the latest onOpenPage is used without
+    // rebuilding the editor.
+    if (onCreateChildPage || props.onOpenPage) {
+      ext.push(
+        ChildPage.configure({
+          onOpenPage: (pageId: string) => onOpenPageRef.current?.(pageId),
+        }),
+      );
+    }
     if (props.mention) ext.push(makeMention(props.mention));
     if (collab && provider && ydocRef.current) {
       ext.push(Collaboration.configure({ document: ydocRef.current }));
@@ -198,7 +223,16 @@ export function CollaborativeEditor(props: EditorProps) {
     // Note: only `!!props.comments` matters for the extension list (the mark is
     // either present or not); the live handlers are read through refs below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [collab, provider, props.mention, props.placeholder, slashItems, !!props.comments]);
+  }, [
+    collab,
+    provider,
+    props.mention,
+    props.placeholder,
+    slashItems,
+    !!props.comments,
+    !!onCreateChildPage,
+    !!props.onOpenPage,
+  ]);
 
   // The paste/drop handlers need the editor instance, but it doesn't exist yet
   // when we build the config. A ref (kept current below) breaks that cycle.

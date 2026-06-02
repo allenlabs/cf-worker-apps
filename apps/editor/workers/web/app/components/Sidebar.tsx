@@ -18,9 +18,18 @@ import type {
   SearchResult,
   SharedWithMeItem,
   Teamspace,
+  TeamspaceMember,
   Workspace,
 } from '~/server/docs';
-import { createPage, dbCreate, search as searchFn, teamspaceCreate } from '~/server/docs';
+import {
+  createPage,
+  dbCreate,
+  search as searchFn,
+  teamspaceCreate,
+  teamspaceMemberAdd as teamspaceMemberAddFn,
+  teamspaceMemberRemove as teamspaceMemberRemoveFn,
+  teamspaceMembers as teamspaceMembersFn,
+} from '~/server/docs';
 
 interface TreeNode extends PageNode {
   children: TreeNode[];
@@ -276,20 +285,37 @@ interface TeamspaceSectionProps {
 function TeamspaceSection({ group, workspaceId, activePageId }: TeamspaceSectionProps) {
   const { t } = useT();
   const [open, setOpen] = useState(true);
-  const label = group.teamspace ? group.teamspace.name : t('sidebar.private');
+  const [membersOpen, setMembersOpen] = useState(false);
+  const ts = group.teamspace;
+  const label = ts ? ts.name : t('sidebar.private');
   // Hide an empty default section so a brand-new workspace isn't cluttered, but
   // always show named teamspaces (so the user can find the place to add pages).
-  if (group.teamspace === null && group.roots.length === 0) return null;
+  if (ts === null && group.roots.length === 0) return null;
   return (
     <div className="mb-1">
-      <button
-        className="w-full flex items-center gap-1 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400 hover:text-gray-600"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-      >
-        <span className="w-3 inline-flex justify-center">{open ? '▾' : '▸'}</span>
-        <span className="truncate">{label}</span>
-      </button>
+      <div className="group flex items-center pr-2">
+        <button
+          className="flex-1 flex items-center gap-1 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400 hover:text-gray-600"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+        >
+          <span className="w-3 inline-flex justify-center">{open ? '▾' : '▸'}</span>
+          <span className="truncate">{label}</span>
+        </button>
+        {ts ? (
+          <button
+            className="opacity-0 group-hover:opacity-100 text-[11px] text-gray-400 hover:text-gray-700"
+            onClick={() => setMembersOpen((v) => !v)}
+            aria-label={t('sidebar.teamspaceMembers')}
+            title={t('sidebar.teamspaceMembers')}
+          >
+            {t('sidebar.teamspaceMembersShort')}
+          </button>
+        ) : null}
+      </div>
+      {ts && membersOpen ? (
+        <TeamspaceMembersPanel teamspace={ts} onClose={() => setMembersOpen(false)} />
+      ) : null}
       {open ? (
         group.roots.length === 0 ? (
           <p className="px-6 py-1 text-xs text-gray-300">{t('sidebar.noPages')}</p>
@@ -307,6 +333,115 @@ function TeamspaceSection({ group, workspaceId, activePageId }: TeamspaceSection
           </ul>
         )
       ) : null}
+    </div>
+  );
+}
+
+interface TeamspaceMembersPanelProps {
+  teamspace: Teamspace;
+  onClose: () => void;
+}
+
+/**
+ * Compact teamspace-member manager (Phase 10). Lists members, adds by name /
+ * username, and removes. With zero members a teamspace stays open to all
+ * workspace members; once it has members, only members get access.
+ */
+function TeamspaceMembersPanel({ teamspace, onClose }: TeamspaceMembersPanelProps) {
+  const { t } = useT();
+  const [members, setMembers] = useState<TeamspaceMember[]>([]);
+  const [query, setQuery] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void teamspaceMembersFn({ data: { teamspaceId: teamspace.id } })
+      .then((m) => {
+        if (!cancelled) setMembers(m);
+      })
+      .catch(() => {
+        if (!cancelled) setMembers([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [teamspace.id]);
+
+  async function handleAdd() {
+    const q = query.trim();
+    if (!q || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const added = await teamspaceMemberAddFn({ data: { teamspaceId: teamspace.id, query: q } });
+      setMembers((prev) => [...prev.filter((m) => m.userId !== added.userId), added]);
+      setQuery('');
+    } catch {
+      setError(t('share.noUser'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRemove(userId: string) {
+    try {
+      await teamspaceMemberRemoveFn({ data: { teamspaceId: teamspace.id, userId } });
+      setMembers((prev) => prev.filter((m) => m.userId !== userId));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return (
+    <div className="mx-3 mb-2 p-2 bg-white border border-gray-200 rounded text-xs shadow-sm">
+      <div className="flex items-center justify-between mb-1">
+        <span className="font-semibold text-gray-600">{t('sidebar.teamspaceMembers')}</span>
+        <button className="text-gray-400 hover:text-gray-700" onClick={onClose} aria-label={t('sidebar.collapse')}>
+          ✕
+        </button>
+      </div>
+      <div className="flex items-center gap-1 mb-1">
+        <input
+          className="flex-1 border border-gray-200 rounded px-1.5 py-1 outline-none focus:border-gray-400"
+          placeholder={t('share.invitePlaceholder')}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              void handleAdd();
+            }
+          }}
+          aria-label={t('sidebar.teamspaceMembers')}
+        />
+        <button
+          className="px-2 py-1 border border-gray-200 rounded hover:bg-gray-100 disabled:opacity-50"
+          onClick={() => void handleAdd()}
+          disabled={busy || !query.trim()}
+        >
+          {t('share.invite')}
+        </button>
+      </div>
+      {error ? <p className="text-red-600 mb-1">{error}</p> : null}
+      {members.length === 0 ? (
+        <p className="text-gray-400">{t('sidebar.teamspaceOpen')}</p>
+      ) : (
+        <ul className="space-y-1">
+          {members.map((m) => (
+            <li key={m.userId} className="flex items-center gap-2">
+              <span className="flex-1 truncate text-gray-800">{m.name}</span>
+              <button
+                className="text-red-600 hover:text-red-800"
+                onClick={() => void handleRemove(m.userId)}
+                aria-label={t('share.removeAria')}
+              >
+                {t('share.remove')}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

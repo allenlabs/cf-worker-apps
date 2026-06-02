@@ -190,6 +190,8 @@ interface DatabaseViewProps {
   databaseId: string;
   workspaceId: string;
   initialSchema: DbSchema;
+  /** When false, the user is a viewer: hide +row/+property/+view + read-only cells. */
+  editable?: boolean;
 }
 
 /** View-type → i18n key for its display label (chrome, not user data). */
@@ -202,7 +204,12 @@ const VIEW_TYPE_LABEL_KEYS: Record<ViewType, string> = {
   timeline: 'db.viewTimeline',
 };
 
-export function DatabaseView({ databaseId, workspaceId, initialSchema }: DatabaseViewProps) {
+export function DatabaseView({
+  databaseId,
+  workspaceId,
+  initialSchema,
+  editable = true,
+}: DatabaseViewProps) {
   const { t } = useT();
   const [schema, setSchema] = useState<DbSchema>(initialSchema);
   const [activeViewId, setActiveViewId] = useState<string>(
@@ -352,25 +359,27 @@ export function DatabaseView({ databaseId, workspaceId, initialSchema }: Databas
             {v.name}
           </button>
         ))}
-        <div className="ml-1 flex items-center gap-1">
-          <select
-            className="px-1 py-1 text-gray-400 hover:text-gray-700 bg-transparent outline-none"
-            value=""
-            onChange={(e) => {
-              const t = e.target.value as ViewType;
-              if (t) void handleAddView(t);
-              e.target.value = '';
-            }}
-            aria-label={t('db.addViewAria')}
-          >
-            <option value="">{t('db.addView')}</option>
-            {ADDABLE_VIEW_TYPES.map((vt) => (
-              <option key={vt} value={vt}>
-                {t(VIEW_TYPE_LABEL_KEYS[vt])}
-              </option>
-            ))}
-          </select>
-        </div>
+        {editable ? (
+          <div className="ml-1 flex items-center gap-1">
+            <select
+              className="px-1 py-1 text-gray-400 hover:text-gray-700 bg-transparent outline-none"
+              value=""
+              onChange={(e) => {
+                const t = e.target.value as ViewType;
+                if (t) void handleAddView(t);
+                e.target.value = '';
+              }}
+              aria-label={t('db.addViewAria')}
+            >
+              <option value="">{t('db.addView')}</option>
+              {ADDABLE_VIEW_TYPES.map((vt) => (
+                <option key={vt} value={vt}>
+                  {t(VIEW_TYPE_LABEL_KEYS[vt])}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
       </div>
 
       {loading ? (
@@ -380,6 +389,7 @@ export function DatabaseView({ databaseId, workspaceId, initialSchema }: Databas
           view={activeView}
           properties={schema.properties}
           rows={rows}
+          editable={editable}
           onSetGroupBy={(p) => void handleSetGroupBy(p)}
           onAddRow={(props) => void handleAddRow(props)}
           onPatchRow={(id, patch) => void handleRowPatch(id, patch)}
@@ -412,6 +422,7 @@ export function DatabaseView({ databaseId, workspaceId, initialSchema }: Databas
           workspaceId={workspaceId}
           properties={schema.properties}
           rows={rows}
+          editable={editable}
           onAddRow={() => void handleAddRow()}
           onPatchRow={(id, patch) => void handleRowPatch(id, patch)}
           onDeleteRow={(id) => void handleDeleteRow(id)}
@@ -435,6 +446,7 @@ interface TableViewProps {
   workspaceId: string;
   properties: DbProperty[];
   rows: DbRow[];
+  editable: boolean;
   onAddRow: () => void;
   onPatchRow: (id: string, patch: { title?: string; props?: Record<string, JsonValue> }) => void;
   onDeleteRow: (id: string) => void;
@@ -446,6 +458,7 @@ function TableView({
   workspaceId,
   properties,
   rows,
+  editable,
   onAddRow,
   onPatchRow,
   onDeleteRow,
@@ -481,7 +494,7 @@ function TableView({
               </th>
             ))}
             <th className="py-1.5 px-2 font-medium relative">
-              {addingProp ? (
+              {!editable ? null : addingProp ? (
                 <span className="flex items-center gap-1">
                   <input
                     autoFocus
@@ -558,19 +571,23 @@ function TableView({
                   >
                     {row.title || 'Untitled'}
                   </a>
-                  <button
-                    className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-600 text-xs"
-                    onClick={() => onDeleteRow(row.id)}
-                    title="Delete row"
-                    aria-label="Delete row"
-                  >
-                    🗑
-                  </button>
+                  {editable ? (
+                    <button
+                      className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-600 text-xs"
+                      onClick={() => onDeleteRow(row.id)}
+                      title="Delete row"
+                      aria-label="Delete row"
+                    >
+                      🗑
+                    </button>
+                  ) : null}
                 </div>
               </td>
               {properties.map((p) => (
                 <td key={p.id} className="py-1 px-2">
-                  {p.type === 'formula' ? (
+                  {!editable ? (
+                    <span className="text-gray-700">{renderValueText(row, p) || '—'}</span>
+                  ) : p.type === 'formula' ? (
                     <FormulaCell property={p} row={row} />
                   ) : AUTO_PROPERTY_TYPES.has(p.type) || p.type === 'rollup' ? (
                     <span className="text-gray-500">{renderValueText(row, p) || '—'}</span>
@@ -596,12 +613,14 @@ function TableView({
           ))}
         </tbody>
       </table>
-      <button
-        className="mt-2 text-sm text-gray-500 hover:text-gray-800 px-2 py-1"
-        onClick={onAddRow}
-      >
-        ＋ New
-      </button>
+      {editable ? (
+        <button
+          className="mt-2 text-sm text-gray-500 hover:text-gray-800 px-2 py-1"
+          onClick={onAddRow}
+        >
+          ＋ New
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -1170,12 +1189,21 @@ interface BoardViewProps {
   view: DbView;
   properties: DbProperty[];
   rows: DbRow[];
+  editable: boolean;
   onSetGroupBy: (propId: string) => void;
   onAddRow: (props: Record<string, JsonValue>) => void;
   onPatchRow: (id: string, patch: { props?: Record<string, JsonValue> }) => void;
 }
 
-function BoardView({ view, properties, rows, onSetGroupBy, onAddRow, onPatchRow }: BoardViewProps) {
+function BoardView({
+  view,
+  properties,
+  rows,
+  editable,
+  onSetGroupBy,
+  onAddRow,
+  onPatchRow,
+}: BoardViewProps) {
   const groupable = properties.filter((p) => SELECT_TYPES.has(p.type));
   const groupBy = view.config.groupBy ?? groupable[0]?.id ?? '';
   const groupProp = properties.find((p) => p.id === groupBy);
@@ -1249,28 +1277,32 @@ function BoardView({ view, properties, rows, onSetGroupBy, onAddRow, onPatchRow 
                   >
                     {row.title || 'Untitled'}
                   </a>
-                  <select
-                    className="mt-1 text-xs text-gray-500 bg-transparent outline-none w-full"
-                    value={(row.props[groupProp.id] as string) ?? ''}
-                    onChange={(e) => onPatchRow(row.id, { props: { [groupProp.id]: e.target.value || null } })}
-                    aria-label="Move card"
-                  >
-                    <option value="">No {groupProp.name}</option>
-                    {options.map((o) => (
-                      <option key={o.id} value={o.id}>
-                        {o.name}
-                      </option>
-                    ))}
-                  </select>
+                  {editable ? (
+                    <select
+                      className="mt-1 text-xs text-gray-500 bg-transparent outline-none w-full"
+                      value={(row.props[groupProp.id] as string) ?? ''}
+                      onChange={(e) => onPatchRow(row.id, { props: { [groupProp.id]: e.target.value || null } })}
+                      aria-label="Move card"
+                    >
+                      <option value="">No {groupProp.name}</option>
+                      {options.map((o) => (
+                        <option key={o.id} value={o.id}>
+                          {o.name}
+                        </option>
+                      ))}
+                    </select>
+                  ) : null}
                 </div>
               ))}
             </div>
-            <button
-              className="mt-2 w-full text-left text-xs text-gray-400 hover:text-gray-700 px-1"
-              onClick={() => onAddRow(col.id ? { [groupProp.id]: col.id } : {})}
-            >
-              ＋ card
-            </button>
+            {editable ? (
+              <button
+                className="mt-2 w-full text-left text-xs text-gray-400 hover:text-gray-700 px-1"
+                onClick={() => onAddRow(col.id ? { [groupProp.id]: col.id } : {})}
+              >
+                ＋ card
+              </button>
+            ) : null}
           </div>
         ))}
       </div>

@@ -8,7 +8,7 @@
 // The legacy flat /v1/docs/* endpoints remain (DEPRECATED) for any old client;
 // the web no longer calls them. New code reads/writes editor.pages.
 
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import {
   createDocImpl,
@@ -21,13 +21,16 @@ import {
 import {
   archivePageImpl,
   canAccessPageImpl,
+  canEditPageImpl,
   createPageImpl,
   getPageImpl,
   isMemberImpl,
+  isPageOwnerImpl,
   listOrProvisionWorkspacesImpl,
   movePageImpl,
   pageRoleImpl,
   pageTreeImpl,
+  setRestrictedImpl,
   updatePageImpl,
 } from './pages';
 import {
@@ -36,6 +39,9 @@ import {
   sharedWithMeImpl,
   teamspaceCreateImpl,
   teamspaceDeleteImpl,
+  teamspaceMemberAddImpl,
+  teamspaceMemberRemoveImpl,
+  teamspaceMembersImpl,
   teamspaceRenameImpl,
   teamspaceWorkspaceImpl,
   teamspacesListImpl,
@@ -63,8 +69,8 @@ import {
 import { prepareUpload, publicUrlFor } from './files';
 import {
   commentAddImpl,
+  commentAuthorImpl,
   commentDeleteImpl,
-  commentPageImpl,
   commentResolveImpl,
   commentResolveThreadImpl,
   commentThreadsImpl,
@@ -179,8 +185,10 @@ v1Router.post('/pages/update', async (c) => {
   if (!parsed.success) {
     return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
   }
-  const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.id);
-  if (!can) return c.json({ error: 'not found' }, 404);
+  // Content writes require edit access — a 'view'-shared user is read-only.
+  if (!(await canEditPageImpl(c.get('db'), user.userId, parsed.data.id))) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
   const ok = await updatePageImpl(c.get('db'), parsed.data.id, {
     title: parsed.data.title,
     icon: parsed.data.icon === undefined ? undefined : parsed.data.icon ?? null,
@@ -203,8 +211,10 @@ v1Router.post('/pages/move', async (c) => {
   if (!parsed.success) {
     return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
   }
-  const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.id);
-  if (!can) return c.json({ error: 'not found' }, 404);
+  // Moving a page is a write — require edit access on the page being moved.
+  if (!(await canEditPageImpl(c.get('db'), user.userId, parsed.data.id))) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
   // A new parent (when given) must be in the same workspace and accessible.
   if (parsed.data.parentId) {
     const can2 = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.parentId);
@@ -237,8 +247,10 @@ v1Router.post('/pages/archive', async (c) => {
   if (!parsed.success) {
     return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
   }
-  const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.id);
-  if (!can) return c.json({ error: 'not found' }, 404);
+  // Archiving (delete) is a write — require edit access.
+  if (!(await canEditPageImpl(c.get('db'), user.userId, parsed.data.id))) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
   const ok = await archivePageImpl(c.get('db'), parsed.data.id);
   if (!ok) return c.json({ error: 'not found' }, 404);
   return c.json({ ok: true }, 200);
@@ -419,8 +431,9 @@ v1Router.post('/db/property/add', async (c) => {
   if (!parsed.success) {
     return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
   }
-  const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.databaseId);
-  if (!can) return c.json({ error: 'not found' }, 404);
+  if (!(await canEditPageImpl(c.get('db'), user.userId, parsed.data.databaseId))) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
   const prop = await addPropertyImpl(c.get('db'), {
     databaseId: parsed.data.databaseId,
     name: parsed.data.name,
@@ -444,8 +457,9 @@ v1Router.post('/db/property/update', async (c) => {
   }
   const dbId = await propertyDatabaseImpl(c.get('db'), parsed.data.id);
   if (!dbId) return c.json({ error: 'not found' }, 404);
-  const can = await canAccessPageImpl(c.get('db'), user.userId, dbId);
-  if (!can) return c.json({ error: 'not found' }, 404);
+  if (!(await canEditPageImpl(c.get('db'), user.userId, dbId))) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
   const ok = await updatePropertyImpl(c.get('db'), parsed.data.id, {
     name: parsed.data.name,
     type: parsed.data.type,
@@ -463,8 +477,9 @@ v1Router.post('/db/property/delete', async (c) => {
   }
   const dbId = await propertyDatabaseImpl(c.get('db'), parsed.data.id);
   if (!dbId) return c.json({ error: 'not found' }, 404);
-  const can = await canAccessPageImpl(c.get('db'), user.userId, dbId);
-  if (!can) return c.json({ error: 'not found' }, 404);
+  if (!(await canEditPageImpl(c.get('db'), user.userId, dbId))) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
   const ok = await deletePropertyImpl(c.get('db'), parsed.data.id);
   if (!ok) return c.json({ error: 'not found' }, 404);
   return c.json({ ok: true }, 200);
@@ -484,8 +499,9 @@ v1Router.post('/db/view/add', async (c) => {
   if (!parsed.success) {
     return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
   }
-  const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.databaseId);
-  if (!can) return c.json({ error: 'not found' }, 404);
+  if (!(await canEditPageImpl(c.get('db'), user.userId, parsed.data.databaseId))) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
   const view = await addViewImpl(c.get('db'), {
     databaseId: parsed.data.databaseId,
     type: parsed.data.type,
@@ -508,8 +524,9 @@ v1Router.post('/db/view/update', async (c) => {
   }
   const dbId = await viewDatabaseImpl(c.get('db'), parsed.data.id);
   if (!dbId) return c.json({ error: 'not found' }, 404);
-  const can = await canAccessPageImpl(c.get('db'), user.userId, dbId);
-  if (!can) return c.json({ error: 'not found' }, 404);
+  if (!(await canEditPageImpl(c.get('db'), user.userId, dbId))) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
   const ok = await updateViewImpl(c.get('db'), parsed.data.id, {
     name: parsed.data.name,
     config: parsed.data.config,
@@ -526,8 +543,9 @@ v1Router.post('/db/view/delete', async (c) => {
   }
   const dbId = await viewDatabaseImpl(c.get('db'), parsed.data.id);
   if (!dbId) return c.json({ error: 'not found' }, 404);
-  const can = await canAccessPageImpl(c.get('db'), user.userId, dbId);
-  if (!can) return c.json({ error: 'not found' }, 404);
+  if (!(await canEditPageImpl(c.get('db'), user.userId, dbId))) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
   const ok = await deleteViewImpl(c.get('db'), parsed.data.id);
   if (!ok) return c.json({ error: 'not found' }, 404);
   return c.json({ ok: true }, 200);
@@ -559,8 +577,9 @@ v1Router.post('/db/row/add', async (c) => {
   if (!parsed.success) {
     return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
   }
-  const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.databaseId);
-  if (!can) return c.json({ error: 'not found' }, 404);
+  if (!(await canEditPageImpl(c.get('db'), user.userId, parsed.data.databaseId))) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
   const row = await addRowImpl(c.get('db'), user.userId, {
     databaseId: parsed.data.databaseId,
     title: parsed.data.title,
@@ -579,9 +598,10 @@ v1Router.post('/db/row/update', async (c) => {
   if (!parsed.success) {
     return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
   }
-  // Rows are pages; canAccessPageImpl resolves the row's workspace directly.
-  const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.id);
-  if (!can) return c.json({ error: 'not found' }, 404);
+  // Rows are pages; canEditPageImpl resolves the row's workspace directly.
+  if (!(await canEditPageImpl(c.get('db'), user.userId, parsed.data.id))) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
   if ((await rowDatabaseImpl(c.get('db'), parsed.data.id)) === null) {
     return c.json({ error: 'not found' }, 404);
   }
@@ -599,8 +619,9 @@ v1Router.post('/db/row/delete', async (c) => {
   if (!parsed.success) {
     return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
   }
-  const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.id);
-  if (!can) return c.json({ error: 'not found' }, 404);
+  if (!(await canEditPageImpl(c.get('db'), user.userId, parsed.data.id))) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
   if ((await rowDatabaseImpl(c.get('db'), parsed.data.id)) === null) {
     return c.json({ error: 'not found' }, 404);
   }
@@ -698,6 +719,26 @@ v1Router.post('/pages/setPublic', async (c) => {
   const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.id);
   if (!can) return c.json({ error: 'not found' }, 404);
   const result = await setPublicImpl(c.get('db'), parsed.data.id, parsed.data.public);
+  if (!result) return c.json({ error: 'not found' }, 404);
+  return c.json(result, 200);
+});
+
+// ---------- per-page restriction (Phase 10) ----------
+//
+// Toggling restriction is OWNER-only: it changes who can see the page, so a
+// merely-shared editor shouldn't flip it.
+
+const setRestrictedSchema = z.object({ id: z.string().uuid(), restricted: z.boolean() });
+v1Router.post('/pages/set-restricted', async (c) => {
+  const user = c.get('user');
+  const parsed = setRestrictedSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  if (!(await isPageOwnerImpl(c.get('db'), user.userId, parsed.data.id))) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+  const result = await setRestrictedImpl(c.get('db'), parsed.data.id, parsed.data.restricted);
   if (!result) return c.json({ error: 'not found' }, 404);
   return c.json(result, 200);
 });
@@ -828,6 +869,76 @@ v1Router.post('/teamspaces/delete', async (c) => {
   return c.json({ ok: true }, 200);
 });
 
+// ---------- teamspace membership (Phase 10) ----------
+//
+// Opt-in per-teamspace ACL. v1: any workspace member of the teamspace's
+// workspace may view + manage members (matches teamspace CRUD's gate).
+
+/** Shared gate: the teamspace exists and the user is a member of its workspace. */
+async function teamspaceManageGate(
+  c: Context<AppBindings>,
+  teamspaceId: string,
+): Promise<{ ok: true } | { ok: false; status: 404 }> {
+  const user = c.get('user');
+  const wsId = await teamspaceWorkspaceImpl(c.get('db'), teamspaceId);
+  if (!wsId) return { ok: false, status: 404 };
+  if (!(await isMemberImpl(c.get('db'), user.userId, wsId))) return { ok: false, status: 404 };
+  return { ok: true };
+}
+
+const tsMembersSchema = z.object({ teamspaceId: z.string().uuid() });
+v1Router.post('/teamspaces/members', async (c) => {
+  const parsed = tsMembersSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const gate = await teamspaceManageGate(c, parsed.data.teamspaceId);
+  if (!gate.ok) return c.json({ error: 'not found' }, gate.status);
+  const members = await teamspaceMembersImpl(c.get('db'), parsed.data.teamspaceId);
+  return c.json(members, 200);
+});
+
+const tsMemberAddSchema = z.object({
+  teamspaceId: z.string().uuid(),
+  query: z.string().min(1).max(255),
+  role: z.enum(['member', 'admin']).default('member'),
+});
+v1Router.post('/teamspaces/member/add', async (c) => {
+  const parsed = tsMemberAddSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const gate = await teamspaceManageGate(c, parsed.data.teamspaceId);
+  if (!gate.ok) return c.json({ error: 'not found' }, gate.status);
+  const added = await teamspaceMemberAddImpl(c.get('db'), {
+    teamspaceId: parsed.data.teamspaceId,
+    query: parsed.data.query,
+    role: parsed.data.role,
+  });
+  if (!added) return c.json({ error: 'no user' }, 404);
+  return c.json(added, 200);
+});
+
+const tsMemberRemoveSchema = z.object({
+  teamspaceId: z.string().uuid(),
+  userId: z.string().min(1),
+});
+v1Router.post('/teamspaces/member/remove', async (c) => {
+  const parsed = tsMemberRemoveSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const gate = await teamspaceManageGate(c, parsed.data.teamspaceId);
+  if (!gate.ok) return c.json({ error: 'not found' }, gate.status);
+  const ok = await teamspaceMemberRemoveImpl(
+    c.get('db'),
+    parsed.data.teamspaceId,
+    parsed.data.userId,
+  );
+  if (!ok) return c.json({ error: 'not found' }, 404);
+  return c.json({ ok: true }, 200);
+});
+
 // ---------- comments (Phase 4) ----------
 
 // list: all comments for a page, or — with threadId — only that inline thread.
@@ -897,8 +1008,13 @@ v1Router.post('/comments/resolve', async (c) => {
     return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
   }
   if ('threadId' in parsed.data) {
-    const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.pageId);
-    if (!can) return c.json({ error: 'not found' }, 404);
+    // Resolving a whole thread is an edit-level action (no single author).
+    if (!(await canAccessPageImpl(c.get('db'), user.userId, parsed.data.pageId))) {
+      return c.json({ error: 'not found' }, 404);
+    }
+    if (!(await canEditPageImpl(c.get('db'), user.userId, parsed.data.pageId))) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     const ok = await commentResolveThreadImpl(
       c.get('db'),
       parsed.data.pageId,
@@ -908,10 +1024,16 @@ v1Router.post('/comments/resolve', async (c) => {
     if (!ok) return c.json({ error: 'not found' }, 404);
     return c.json({ ok: true }, 200);
   }
-  const pageId = await commentPageImpl(c.get('db'), parsed.data.id);
-  if (!pageId) return c.json({ error: 'not found' }, 404);
-  const can = await canAccessPageImpl(c.get('db'), user.userId, pageId);
-  if (!can) return c.json({ error: 'not found' }, 404);
+  // Resolving a single comment requires edit on the page OR being its author.
+  const author = await commentAuthorImpl(c.get('db'), parsed.data.id);
+  if (!author) return c.json({ error: 'not found' }, 404);
+  if (!(await canAccessPageImpl(c.get('db'), user.userId, author.pageId))) {
+    return c.json({ error: 'not found' }, 404);
+  }
+  const canResolve =
+    author.userId === user.userId ||
+    (await canEditPageImpl(c.get('db'), user.userId, author.pageId));
+  if (!canResolve) return c.json({ error: 'forbidden' }, 403);
   const ok = await commentResolveImpl(c.get('db'), parsed.data.id, parsed.data.resolved);
   if (!ok) return c.json({ error: 'not found' }, 404);
   return c.json({ ok: true }, 200);
@@ -923,12 +1045,16 @@ v1Router.post('/comments/delete', async (c) => {
   if (!parsed.success) {
     return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
   }
-  // Any workspace member may delete (author check is a subset of membership);
-  // we gate on access to the comment's page.
-  const pageId = await commentPageImpl(c.get('db'), parsed.data.id);
-  if (!pageId) return c.json({ error: 'not found' }, 404);
-  const can = await canAccessPageImpl(c.get('db'), user.userId, pageId);
-  if (!can) return c.json({ error: 'not found' }, 404);
+  // Deleting a comment requires edit on the page OR being its author.
+  const author = await commentAuthorImpl(c.get('db'), parsed.data.id);
+  if (!author) return c.json({ error: 'not found' }, 404);
+  if (!(await canAccessPageImpl(c.get('db'), user.userId, author.pageId))) {
+    return c.json({ error: 'not found' }, 404);
+  }
+  const canDelete =
+    author.userId === user.userId ||
+    (await canEditPageImpl(c.get('db'), user.userId, author.pageId));
+  if (!canDelete) return c.json({ error: 'forbidden' }, 403);
   const ok = await commentDeleteImpl(c.get('db'), parsed.data.id);
   if (!ok) return c.json({ error: 'not found' }, 404);
   return c.json({ ok: true }, 200);
