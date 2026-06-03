@@ -188,6 +188,20 @@ export async function cleanup(opts: CleanupOptions = {}): Promise<DeleteResult[]
         table: 'editor.pages',
         sql: `DELETE FROM editor.pages WHERE title LIKE 'e2e-%'`,
       },
+      // Datasource Step 2 safety net: a native_do container whose `e2e-` rename
+      // never persisted (the original bug) keeps the default title 'Untitled
+      // database', so the title-prefix delete above MISSES it and it leaks.
+      // `db_backend='native_do'` is a reliable marker — the feature isn't
+      // user-facing, so every native_do row in editor.pages is e2e-created. We
+      // still AND `title LIKE 'e2e-%' OR title LIKE 'Untitled%'` so this never
+      // touches a (hypothetical) real native database a human made. This drops
+      // the leaked PG container; the bounded stale DO is harmless + retryable.
+      {
+        table: 'editor.pages (native_do)',
+        sql: `DELETE FROM editor.pages
+              WHERE db_backend = 'native_do'
+                AND (title LIKE 'e2e-%' OR title LIKE 'Untitled%')`,
+      },
     ];
 
     for (const { table, sql } of queries) {

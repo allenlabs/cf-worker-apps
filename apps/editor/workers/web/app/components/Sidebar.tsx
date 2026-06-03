@@ -260,6 +260,7 @@ export function Sidebar({
           className="w-full text-left px-2 py-1.5 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
           onClick={handleNewDatabase}
           disabled={busy}
+          data-testid="new-database"
         >
           {t('sidebar.newDatabase')}
         </button>

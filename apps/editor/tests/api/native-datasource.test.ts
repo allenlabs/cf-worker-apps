@@ -317,6 +317,46 @@ describe('NativeDataSource CRUD delegation', () => {
     expect(stub.created).toEqual([{ id: DB }]);
   });
 
+  // The /db/create router HARDENING relies on two contracts to avoid leaking an
+  // orphaned PG container (the original prod failure mode — a kind='database'
+  // page with no DO behind it, which reloads as a plain editor doc):
+  //   (a) hasDatabase() is the provisioning signal it verifies after the write;
+  //   (b) a createDatabase() that throws PROPAGATES so the handler can roll back
+  //       (archive the PG container) instead of returning success.
+  it('hasDatabase reflects whether the DO container was provisioned', async () => {
+    // A stub whose hasDatabase tracks an explicit provisioned set.
+    const provisioned = new Set<string>();
+    const base = fakeStub({});
+    const stub: WorkspaceDBStub = {
+      ...base,
+      async createDatabase(input) {
+        provisioned.add(input.id);
+        return { id: input.id };
+      },
+      async hasDatabase(id) {
+        return provisioned.has(id);
+      },
+    };
+    const ds = new NativeDataSource(stub);
+    expect(await ds.hasDatabase(DB)).toBe(false); // not yet provisioned
+    await ds.createDatabase({ id: DB, title: 'New', seedDefaults: true });
+    expect(await ds.hasDatabase(DB)).toBe(true); // provisioning confirmed
+  });
+
+  it('a failing DO createDatabase propagates so the caller can roll back', async () => {
+    const base = fakeStub({});
+    const stub: WorkspaceDBStub = {
+      ...base,
+      async createDatabase() {
+        throw new Error('DO unavailable');
+      },
+    };
+    const ds = new NativeDataSource(stub);
+    await expect(
+      ds.createDatabase({ id: DB, title: 'New', seedDefaults: true }),
+    ).rejects.toThrow('DO unavailable');
+  });
+
   it('dropDatabase delegates to the stub and reports prior existence', async () => {
     const stub = fakeStub({
       properties: { [DB]: [{ id: 'p', databaseId: DB, name: 'X', type: 'text', config: {}, position: 0 }] },

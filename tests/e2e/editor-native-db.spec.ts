@@ -64,7 +64,9 @@ async function createNativeDatabase(page: Page, title: string): Promise<string> 
   await backendSelect.selectOption('native_do');
 
   // "New database" creates server-side then does a full-page nav to /p/<id>.
-  const newDb = page.getByRole('button', { name: /New database/i });
+  // Use the stable testid (i18n-independent) rather than the visible label.
+  const newDb = page.getByTestId('new-database');
+  await newDb.waitFor({ state: 'visible', timeout: 30_000 });
   await newDb.click({ noWaitAfter: true });
   await page.waitForFunction(
     (prev) => /^\/p\/[0-9a-f-]+$/i.test(location.pathname) && location.pathname !== prev,
@@ -107,6 +109,9 @@ async function deleteDatabaseInApp(page: Page, url: string): Promise<void> {
 }
 
 test.describe('editor native_do database', () => {
+  // Cold starts (Cloudflare) + DO init are slow; give the whole flow headroom.
+  test.setTimeout(180_000);
+
   test('create → add property + rows → edit cell persists → filter → delete', async ({ page }) => {
     const title = dbTitle('crud');
     const url = await createNativeDatabase(page, title);

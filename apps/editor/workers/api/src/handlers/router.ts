@@ -576,13 +576,48 @@ v1Router.post('/db/create', async (c) => {
   });
   // For a native database, provision the DO-side container + default
   // view/properties (the equivalent of the PG seeding createDatabaseImpl skips).
+  //
+  // CRITICAL (atomicity): the PG container page above is ALREADY committed
+  // (postgres.js auto-commits each statement — there's no surrounding txn). If
+  // the DO provisioning then fails, we'd leak a kind='database'/native_do PG
+  // page with NO DO data behind it: reloading it makes `ds.schema()` return
+  // null, so /db/schema 404s and the page route falls back to rendering a PLAIN
+  // editor doc (the observed failure: "Untitled" page, empty Synced block, "Add
+  // sub-page" — NOT a DatabaseView). So if the DO write throws we ROLL BACK by
+  // archiving the orphan container and surface a 502, leaving no half-created
+  // database. Postgres-backed databases skip this entirely.
   if (backend === 'native_do') {
     const ds = makeNativeDataSource(c.env, parsed.data.workspaceId);
-    await ds.createDatabase({
-      id: created.id,
-      title: parsed.data.title?.trim() || 'Untitled database',
-      seedDefaults: true,
-    });
+    try {
+      await ds.createDatabase({
+        id: created.id,
+        title: parsed.data.title?.trim() || 'Untitled database',
+        seedDefaults: true,
+      });
+    } catch (e) {
+      console.error('[native-do] createDatabase failed; rolling back PG container', created.id, e);
+      // Best-effort rollback so we don't leave an orphaned container page.
+      await archivePageImpl(c.get('db'), created.id).catch((re) =>
+        console.error('[native-do] rollback archive failed', created.id, re),
+      );
+      return c.json({ error: 'native database provisioning failed' }, 502);
+    }
+    // Defensive verification: confirm the DO container actually exists before we
+    // tell the client the database is ready. A silently-no-op DO write (e.g. an
+    // RPC that resolved without persisting) would otherwise yield the same
+    // empty-DatabaseView / plain-doc fallback on reload.
+    let provisioned = false;
+    try {
+      provisioned = await ds.hasDatabase(created.id);
+    } catch (e) {
+      console.error('[native-do] hasDatabase verification threw', created.id, e);
+    }
+    if (!provisioned) {
+      await archivePageImpl(c.get('db'), created.id).catch((re) =>
+        console.error('[native-do] rollback archive failed', created.id, re),
+      );
+      return c.json({ error: 'native database provisioning failed' }, 502);
+    }
   }
   return c.json({ ...created, backend }, 200);
 });
