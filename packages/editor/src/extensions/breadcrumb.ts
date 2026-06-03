@@ -18,6 +18,13 @@ export interface BreadcrumbItem {
 export interface BreadcrumbOptions {
   /** Ancestor trail (root → parent), supplied by the host from the page tree. */
   items: BreadcrumbItem[];
+  /**
+   * Live getter for the ancestor trail. Preferred over `items`: read at NodeView
+   * render time so the host can update the trail (e.g. ancestors load async)
+   * without re-configuring the extension / rebuilding the editor. Falls back to
+   * `items` when omitted.
+   */
+  getItems?: () => BreadcrumbItem[];
   /** Navigate to a page id when a crumb is clicked. */
   onOpenPage?: (pageId: string) => void;
 }
@@ -43,7 +50,7 @@ export const Breadcrumb = Node.create<BreadcrumbOptions>({
   draggable: true,
 
   addOptions() {
-    return { items: [], onOpenPage: undefined };
+    return { items: [], getItems: undefined, onOpenPage: undefined };
   },
 
   parseHTML() {
@@ -65,7 +72,8 @@ export const Breadcrumb = Node.create<BreadcrumbOptions>({
   // (client/full nav) and reflect the live ancestor list from options.
   addNodeView() {
     return () => {
-      const { items, onOpenPage } = this.options;
+      const { onOpenPage } = this.options;
+      const items = this.options.getItems ? this.options.getItems() : this.options.items;
       const dom = document.createElement('div');
       dom.setAttribute('data-type', 'breadcrumb');
       dom.setAttribute('data-testid', 'breadcrumb');

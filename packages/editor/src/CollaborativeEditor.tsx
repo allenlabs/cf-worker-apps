@@ -47,7 +47,7 @@ import {
   makeSyncedBlockSlashItem,
   makeButtonSlashItem,
 } from './lib/slash-items';
-import type { EditorProps, SlashItem } from './lib/types';
+import type { EditorProps, SlashItem, SyncedBlockProps } from './lib/types';
 // KaTeX stylesheet — equations render via katex.renderToString, which produces
 // markup that depends on this CSS. Imported here so any host of the package
 // gets math styling without extra wiring (the package marks *.css sideEffects).
@@ -192,31 +192,100 @@ export function CollaborativeEditor(props: EditorProps) {
 
   const { uploadImage, uploadFile, onCreateChildPage } = props;
 
-  // Child-page click → navigate. Kept in a ref so the node's (config-time)
-  // click handler always sees the latest navigation callback without
-  // rebuilding the editor.
+  // ── Stability: route every *live* host callback / data input through a ref ──
+  //
+  // The editor instance (and its ProseMirror view) is expensive to build and
+  // owns the live document + selection + open suggestion popups. It MUST NOT be
+  // torn down and rebuilt just because a parent re-render handed us fresh inline
+  // prop identities (the host route does exactly that on every keystroke /
+  // collab awareness tick). If we rebuilt, any open "/" or "@" popup would lose
+  // its ReactRenderer portal target (empty `.react-renderer`, the reported prod
+  // bug) and the caret would collapse to doc start.
+  //
+  // So: the `extensions` memo below depends ONLY on structural flags (which
+  // capabilities are present) + truly-static config — never on callback/object
+  // identities. Every callback that can change between renders is read through
+  // one of these refs at call time, so the extension built once always invokes
+  // the latest handler.
   const onOpenPageRef = useRef<((pageId: string) => void) | null>(null);
   onOpenPageRef.current = props.onOpenPage ?? null;
 
-  // Button data-action runner, kept in a ref so the node's (config-time)
-  // handler always sees the latest callback without rebuilding the editor.
   const runButtonActionRef = useRef<EditorProps['runButtonAction'] | null>(null);
   runButtonActionRef.current = props.runButtonAction ?? null;
+
+  const uploadImageRef = useRef<EditorProps['uploadImage'] | null>(null);
+  uploadImageRef.current = uploadImage ?? null;
+
+  const uploadFileRef = useRef<EditorProps['uploadFile'] | null>(null);
+  uploadFileRef.current = uploadFile ?? null;
+
+  const onCreateChildPageRef = useRef<EditorProps['onCreateChildPage'] | null>(null);
+  onCreateChildPageRef.current = onCreateChildPage ?? null;
+
+  const onPickLinkedDatabaseRef = useRef<EditorProps['onPickLinkedDatabase'] | null>(null);
+  onPickLinkedDatabaseRef.current = props.onPickLinkedDatabase ?? null;
+
+  const mentionRef = useRef<EditorProps['mention'] | null>(null);
+  mentionRef.current = props.mention ?? null;
+
+  const breadcrumbItemsRef = useRef<{ id: string; title: string }[]>(
+    props.breadcrumb?.items ?? [],
+  );
+  breadcrumbItemsRef.current = props.breadcrumb?.items ?? [];
+
+  // Structural flags: these (not identities) decide which extensions/items the
+  // editor is built with. Booleans only change when a capability is added or
+  // removed, which legitimately warrants a rebuild.
+  const hasUploadImage = !!uploadImage;
+  const hasUploadFile = !!uploadFile;
+  const hasCreateChildPage = !!onCreateChildPage;
+  const hasOpenPage = !!props.onOpenPage;
+  const hasPickLinkedDatabase = !!props.onPickLinkedDatabase;
+  const hasRunButtonAction = !!props.runButtonAction;
+  const hasMention = !!props.mention;
+  const hasComments = !!props.comments;
+  const syncedBlockCfg = props.syncedBlock;
+  const blockMenuT = props.blockMenuT;
+  // String value (not the t() identity) so it only changes when the text does.
+  const placeholderText = props.placeholder ?? 'Type "/" for commands, "@" to mention…';
+
+  // Collab: `collab` is an inline object from the host (fresh each render), so we
+  // depend only on its STABLE primitives. The user name/color are read through a
+  // ref at extension-build time so a changed name never rebuilds the editor.
+  const collabUrl = collab?.url;
+  const collabDocId = collab?.docId;
+  const collabUserRef = useRef<{ name: string; color?: string } | null>(null);
+  collabUserRef.current = collab?.user ?? null;
+
+  // Synced-block transport: `roomToken` is typically an inline async from the
+  // host. Wrap it so the config object identity is stable (depends only on the
+  // primitive `collabUrl`) while always calling the latest token minter.
+  const syncedRoomTokenRef = useRef<SyncedBlockProps['roomToken'] | null>(null);
+  syncedRoomTokenRef.current = syncedBlockCfg?.roomToken ?? null;
+  const syncedUserRef = useRef<SyncedBlockProps['user'] | null>(null);
+  syncedUserRef.current = syncedBlockCfg?.user ?? null;
+  const syncedCollabUrl = syncedBlockCfg?.collabUrl;
 
   // Slash items: clone the defaults and, when an uploader is wired, swap the
   // "Image" item's command for a hidden-file-input upload flow. When a
   // child-page creator is wired, append a "Page" item that creates + embeds a
   // sub-page.
+  // Slash items are built from STRUCTURAL flags only; every command that needs
+  // a host callback reads it from a ref at click time, so swapping an inline
+  // handler between renders never changes this list's contents and never
+  // rebuilds the editor.
   const slashItems = useMemo<SlashItem[]>(() => {
     let items = DEFAULT_SLASH_ITEMS;
-    if (uploadImage) {
+    if (hasUploadImage) {
       items = items.map((it) =>
         it.title === 'Image'
           ? {
               ...it,
               command: ({ editor, range }) => {
+                const up = uploadImageRef.current;
+                if (!up) return;
                 editor.chain().focus().deleteRange(range).run();
-                pickAndUploadImage(editor, uploadImage);
+                pickAndUploadImage(editor, up);
               },
             }
           : it,
@@ -224,14 +293,16 @@ export function CollaborativeEditor(props: EditorProps) {
     }
     // When a generic uploader is wired, route Video/Audio/File through a hidden
     // file picker → upload → insert the matching media node (vs. a URL prompt).
-    if (uploadFile) {
+    if (hasUploadFile) {
       items = items.map((it) => {
         if (it.title === 'Video') {
           return {
             ...it,
             command: ({ editor, range }) => {
+              const up = uploadFileRef.current;
+              if (!up) return;
               editor.chain().focus().deleteRange(range).run();
-              pickAndUploadFile(uploadFile, 'video/*', ({ url }) =>
+              pickAndUploadFile(up, 'video/*', ({ url }) =>
                 editor.chain().focus().setVideo({ src: url }).run(),
               );
             },
@@ -241,8 +312,10 @@ export function CollaborativeEditor(props: EditorProps) {
           return {
             ...it,
             command: ({ editor, range }) => {
+              const up = uploadFileRef.current;
+              if (!up) return;
               editor.chain().focus().deleteRange(range).run();
-              pickAndUploadFile(uploadFile, 'audio/*', ({ url }) =>
+              pickAndUploadFile(up, 'audio/*', ({ url }) =>
                 editor.chain().focus().setAudio({ src: url }).run(),
               );
             },
@@ -252,8 +325,10 @@ export function CollaborativeEditor(props: EditorProps) {
           return {
             ...it,
             command: ({ editor, range }) => {
+              const up = uploadFileRef.current;
+              if (!up) return;
               editor.chain().focus().deleteRange(range).run();
-              pickAndUploadFile(uploadFile, '*/*', ({ url, name, size }) =>
+              pickAndUploadFile(up, '*/*', ({ url, name, size }) =>
                 editor.chain().focus().setFile({ src: url, name, size }).run(),
               );
             },
@@ -262,24 +337,28 @@ export function CollaborativeEditor(props: EditorProps) {
         return it;
       });
     }
-    if (onCreateChildPage) {
-      items = [...items, makeChildPageSlashItem(onCreateChildPage)];
+    if (hasCreateChildPage) {
+      items = [
+        ...items,
+        makeChildPageSlashItem((title) =>
+          (onCreateChildPageRef.current ?? (() => Promise.resolve({ id: '', title })))(title),
+        ),
+      ];
     }
     // Linked database view: offered when the host wired a database picker.
-    if (props.onPickLinkedDatabase) {
-      const onPick = props.onPickLinkedDatabase;
-      const tr = props.blockMenuT;
+    if (hasPickLinkedDatabase) {
+      const tr = blockMenuT;
       items = [
         ...items,
         makeLinkedDatabaseSlashItem(
-          () => onPick(),
+          () => (onPickLinkedDatabaseRef.current ?? (() => Promise.resolve(null)))(),
           tr ? { title: tr('linkedDb.block'), hint: tr('linkedDb.blockHint') } : undefined,
         ),
       ];
     }
     // Synced block: only offered when the host wired collab transport for it.
-    if (props.syncedBlock) {
-      const tr = props.blockMenuT;
+    if (syncedBlockCfg) {
+      const tr = blockMenuT;
       items = [
         ...items,
         makeSyncedBlockSlashItem(
@@ -288,8 +367,8 @@ export function CollaborativeEditor(props: EditorProps) {
       ];
     }
     // Button block (Phase 17): offered when the host can run actions OR navigate.
-    if (props.runButtonAction || props.onOpenPage) {
-      const tr = props.blockMenuT;
+    if (hasRunButtonAction || hasOpenPage) {
+      const tr = blockMenuT;
       items = [
         ...items,
         makeButtonSlashItem(
@@ -299,14 +378,14 @@ export function CollaborativeEditor(props: EditorProps) {
     }
     return items;
   }, [
-    uploadImage,
-    uploadFile,
-    onCreateChildPage,
-    props.onPickLinkedDatabase,
-    props.syncedBlock,
-    props.runButtonAction,
-    props.onOpenPage,
-    props.blockMenuT,
+    hasUploadImage,
+    hasUploadFile,
+    hasCreateChildPage,
+    hasPickLinkedDatabase,
+    !!syncedBlockCfg,
+    hasRunButtonAction,
+    hasOpenPage,
+    blockMenuT,
   ]);
 
   const extensions = useMemo<Extensions>(() => {
@@ -324,7 +403,7 @@ export function CollaborativeEditor(props: EditorProps) {
       }),
       CodeBlock,
       Placeholder.configure({
-        placeholder: props.placeholder ?? 'Type "/" for commands, "@" to mention…',
+        placeholder: placeholderText,
       }),
       TaskList,
       TaskItem.configure({ nested: true }),
@@ -365,20 +444,22 @@ export function CollaborativeEditor(props: EditorProps) {
       SlashCommand.configure({ items: slashItems }),
     ];
     // Breadcrumb: registered whenever the host supplies a trail or navigation,
-    // so the "Breadcrumb" slash item has a node to insert. Clicks route through
-    // the same onOpenPage ref as child pages.
+    // so the "Breadcrumb" slash item has a node to insert. The live ancestor
+    // trail + click target are read through refs so an updated trail (e.g. after
+    // navigation) never rebuilds the editor — each breadcrumb NodeView reads the
+    // latest items when it renders.
     ext.push(
       Breadcrumb.configure({
-        items: props.breadcrumb?.items ?? [],
+        getItems: () => breadcrumbItemsRef.current,
         onOpenPage: (pageId: string) => onOpenPageRef.current?.(pageId),
       }),
     );
     // Inline comments: a normal mark, so it rides through Yjs in collab mode.
-    if (props.comments) ext.push(Comment);
+    if (hasComments) ext.push(Comment);
     // Child pages: the node is present whenever creation OR navigation is wired.
     // Clicks route through a ref so the latest onOpenPage is used without
     // rebuilding the editor.
-    if (onCreateChildPage || props.onOpenPage) {
+    if (hasCreateChildPage || hasOpenPage) {
       ext.push(
         ChildPage.configure({
           onOpenPage: (pageId: string) => onOpenPageRef.current?.(pageId),
@@ -388,7 +469,7 @@ export function CollaborativeEditor(props: EditorProps) {
     // Linked database view (Phase 15): register the node whenever the host can
     // pick OR navigate, so existing linked-DB blocks render + route. A click
     // opens the source database via the same onOpenPage host nav ref.
-    if (props.onPickLinkedDatabase || props.onOpenPage) {
+    if (hasPickLinkedDatabase || hasOpenPage) {
       ext.push(
         LinkedDatabase.configure({
           onOpenDatabase: (databaseId: string) => onOpenPageRef.current?.(databaseId),
@@ -396,17 +477,22 @@ export function CollaborativeEditor(props: EditorProps) {
       );
     }
     // Synced blocks: register the node when the host wired collab transport for
-    // it. The NodeView mounts a nested editor bound to `sync-<syncId>`.
-    if (props.syncedBlock) {
+    // it. The NodeView mounts a nested editor bound to `sync-<syncId>`. The token
+    // minter + user are read through refs so changing them never rebuilds.
+    if (syncedCollabUrl) {
       ext.push(
         SyncedBlock.configure({
           config: {
-            collabUrl: props.syncedBlock.collabUrl,
-            roomToken: props.syncedBlock.roomToken,
-            user: props.syncedBlock.user,
+            collabUrl: syncedCollabUrl,
+            // Plain function (survives Extension.configure's option merge, unlike
+            // a getter) that reads the latest token minter from a ref at mint time.
+            roomToken: (room: string) =>
+              (syncedRoomTokenRef.current ?? (() => Promise.resolve('')))(room),
+            // Local username is stable per session, so capturing it here is safe.
+            user: syncedUserRef.current ?? { name: '' },
           },
           editable: isEditable,
-          badgeLabel: props.blockMenuT ? props.blockMenuT('synced.badge') : undefined,
+          badgeLabel: blockMenuT ? blockMenuT('synced.badge') : undefined,
         }),
       );
     }
@@ -414,55 +500,61 @@ export function CollaborativeEditor(props: EditorProps) {
     // navigate, so existing button nodes render + run. Data actions delegate to
     // the host's runButtonAction (read through a ref so it stays current);
     // open_page routes through the same onOpenPage ref as child pages.
-    if (props.runButtonAction || props.onOpenPage) {
+    if (hasRunButtonAction || hasOpenPage) {
       ext.push(
         Button.configure({
           editable: isEditable,
           onOpenPage: (pageId: string) => onOpenPageRef.current?.(pageId),
           runDataAction: (action) => runButtonActionRef.current?.(action) ?? Promise.resolve(),
-          t: props.blockMenuT,
+          t: blockMenuT,
         }),
       );
     }
-    if (props.mention) ext.push(makeMention(props.mention));
+    // Mention: built once from a ref-backed source so swapping the (often
+    // inline) source between renders never rebuilds the editor or tears down an
+    // open "@" popup.
+    if (hasMention) ext.push(makeMention(mentionRef));
     // Drag handle + block action menu (Notion editing feel). Only when the
     // editor is editable + the consumer hasn't opted out — viewers never get it.
     if (isEditable && enableDragHandle) {
       ext.push(
-        props.blockMenuT
-          ? DragHandle.configure({ t: props.blockMenuT })
-          : DragHandle.configure({}),
+        blockMenuT ? DragHandle.configure({ t: blockMenuT }) : DragHandle.configure({}),
       );
     }
     if (collab && provider && ydocRef.current) {
       ext.push(Collaboration.configure({ document: ydocRef.current }));
+      // Local username is stable per session; capture it for the awareness cursor.
+      const u = collabUserRef.current ?? collab.user;
       ext.push(
         CollaborationCursor.configure({
           provider,
-          user: { name: collab.user.name, color: collab.user.color ?? colorFor(collab.user.name) },
+          user: { name: u.name, color: u.color ?? colorFor(u.name) },
         }),
       );
     }
     return ext;
-    // Note: only `!!props.comments` matters for the extension list (the mark is
-    // either present or not); the live handlers are read through refs below.
+    // Deps are STRUCTURAL only (presence flags + stable primitives). Live
+    // callbacks / objects are read through refs above, so a parent re-render
+    // that hands us fresh inline prop identities does NOT rebuild the editor
+    // (which would empty an open slash/mention popup + reset the caret).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    collab,
+    !!collab,
+    collabUrl,
+    collabDocId,
     provider,
-    props.mention,
-    props.placeholder,
+    hasMention,
+    placeholderText,
     props.editable,
     props.enableDragHandle,
-    props.blockMenuT,
+    blockMenuT,
     slashItems,
-    !!props.comments,
-    !!onCreateChildPage,
-    !!props.onOpenPage,
-    !!props.onPickLinkedDatabase,
-    props.syncedBlock,
-    !!props.runButtonAction,
-    props.breadcrumb,
+    hasComments,
+    hasCreateChildPage,
+    hasOpenPage,
+    hasPickLinkedDatabase,
+    syncedCollabUrl,
+    hasRunButtonAction,
   ]);
 
   // The paste/drop handlers need the editor instance, but it doesn't exist yet
@@ -474,6 +566,11 @@ export function CollaborativeEditor(props: EditorProps) {
   const onOpenThreadRef = useRef<((threadId: string) => void) | null>(null);
   onOpenThreadRef.current = props.comments?.onOpenThread ?? null;
 
+  // onUpdate read through a ref so the editor (rebuilt only on structural change)
+  // always reports to the host's latest snapshot handler.
+  const onUpdateRef = useRef<EditorProps['onUpdate'] | null>(null);
+  onUpdateRef.current = props.onUpdate ?? null;
+
   const editor = useEditor(
     {
       extensions,
@@ -483,23 +580,26 @@ export function CollaborativeEditor(props: EditorProps) {
       editorProps: {
         // Paste/drop image files → upload → insert. Only intercept when there's
         // an actual image file and an uploader; otherwise fall through to the
-        // default handlers (so pasting text/HTML still works).
+        // default handlers (so pasting text/HTML still works). The uploader is
+        // read through a ref so the editor needn't rebuild to pick up a new one.
         handlePaste: (_view, event) => {
           const ed = editorRef.current;
-          if (!uploadImage || !ed) return false;
+          const up = uploadImageRef.current;
+          if (!up || !ed) return false;
           const file = imageFileFrom(event.clipboardData);
           if (!file) return false;
           event.preventDefault();
-          void insertUploadedImage(ed, uploadImage, file);
+          void insertUploadedImage(ed, up, file);
           return true;
         },
         handleDrop: (_view, event) => {
           const ed = editorRef.current;
-          if (!uploadImage || !ed) return false;
+          const up = uploadImageRef.current;
+          if (!up || !ed) return false;
           const file = imageFileFrom((event as DragEvent).dataTransfer);
           if (!file) return false;
           event.preventDefault();
-          void insertUploadedImage(ed, uploadImage, file);
+          void insertUploadedImage(ed, up, file);
           return true;
         },
         // Click on commented text → open that thread. Returns false so the
@@ -512,7 +612,7 @@ export function CollaborativeEditor(props: EditorProps) {
           return false;
         },
       },
-      onUpdate: ({ editor }) => props.onUpdate?.(editor.getHTML()),
+      onUpdate: ({ editor }) => onUpdateRef.current?.(editor.getHTML()),
     },
     [extensions, props.editable],
   );

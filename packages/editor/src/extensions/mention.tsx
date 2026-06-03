@@ -65,14 +65,30 @@ const MentionList = forwardRef(function MentionList(
   );
 });
 
-/** Build a configured @-Mention extension backed by a caller-supplied source. */
-export function makeMention(source: MentionSource) {
+/** A live, mutable holder for the current mention source (a React ref works). */
+export interface MentionSourceRef {
+  current: MentionSource | null | undefined;
+}
+
+/**
+ * Build a configured @-Mention extension backed by a caller-supplied source.
+ *
+ * The source may be passed directly, or as a ref-like `{ current }` holder. The
+ * holder form lets the host keep an inline (per-render) source function in a
+ * ref so its identity never forces the editor to rebuild — the extension always
+ * reads the latest source without being re-created. See {@link CollaborativeEditor}.
+ */
+export function makeMention(source: MentionSource | MentionSourceRef) {
+  const resolve = (): MentionSource | null | undefined =>
+    typeof source === 'function' ? source : source.current;
   return Mention.configure({
     HTMLAttributes: { class: 'ae-mention' },
     suggestion: {
       char: '@',
       items: async ({ query }) => {
-        const res = await source(query);
+        const src = resolve();
+        if (!src) return [];
+        const res = await src(query);
         return res.slice(0, 8);
       },
       render: () => {
