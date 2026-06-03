@@ -18,6 +18,7 @@
 import type { Sql } from '../lib/db';
 import { addRowImpl, updateRowImpl } from './db';
 import { createNotificationImpl } from './notify';
+import { isSafeHttpUrl } from '../lib/host-guard';
 
 // ---------- shapes ----------
 
@@ -52,40 +53,11 @@ function jsonb(sql: Sql, value: unknown) {
 /**
  * True iff `url` is a safe outbound webhook target: http(s) only, and NOT a
  * loopback / link-local / private / metadata address (SSRF guard). Pure +
- * unit-tested. Rejects anything we can't confidently classify.
+ * unit-tested. Now delegates to the shared `isSafeHttpUrl` host guard
+ * (lib/host-guard.ts); kept as a named export for the existing call sites/tests.
  */
 export function isSafeWebhookUrl(url: string): boolean {
-  let u: URL;
-  try {
-    u = new URL(url);
-  } catch {
-    return false;
-  }
-  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
-  const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  // Block obvious names.
-  if (host === 'localhost' || host.endsWith('.localhost') || host === '' ) return false;
-  // Cloud metadata endpoint (IMDS) — both the IPv4 + the common alias.
-  if (host === '169.254.169.254' || host === 'metadata' || host === 'metadata.google.internal') {
-    return false;
-  }
-  // IPv6 loopback / link-local / unique-local.
-  if (host === '::1' || host.startsWith('fe80:') || host.startsWith('fc') || host.startsWith('fd')) {
-    return false;
-  }
-  // IPv4 literal ranges.
-  const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (m) {
-    const [a, b] = [Number(m[1]), Number(m[2])];
-    if (a === 127) return false; // loopback
-    if (a === 10) return false; // private
-    if (a === 0) return false; // "this host"
-    if (a === 169 && b === 254) return false; // link-local
-    if (a === 192 && b === 168) return false; // private
-    if (a === 172 && b >= 16 && b <= 31) return false; // private
-    if (a >= 224) return false; // multicast / reserved
-  }
-  return true;
+  return isSafeHttpUrl(url);
 }
 
 /** Max webhook body size (bytes) + fetch timeout (ms). */

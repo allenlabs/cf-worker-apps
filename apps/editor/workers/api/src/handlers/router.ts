@@ -54,17 +54,9 @@ import {
   unsharePageImpl,
 } from './sharing';
 import {
-  addPropertyImpl,
-  addRowImpl,
-  addViewImpl,
   createDatabaseImpl,
   createTemplateImpl,
-  dbRowsImpl,
-  dbSchemaImpl,
-  deletePropertyImpl,
-  deleteRowImpl,
   deleteTemplateImpl,
-  deleteViewImpl,
   listDatabasesImpl,
   listTemplatesImpl,
   propertyDatabaseImpl,
@@ -73,12 +65,11 @@ import {
   rowDatabaseImpl,
   setSubItemParentImpl,
   templateDatabaseImpl,
-  updatePropertyImpl,
-  updateRowImpl,
-  updateViewImpl,
   viewDatabaseImpl,
   viewSourceDatabaseImpl,
 } from './db';
+import { makePostgresDataSource } from '../datasource/postgres';
+import type { DataSource } from '../datasource/types';
 import {
   automationDatabaseImpl,
   createAutomationImpl,
@@ -142,6 +133,16 @@ const idSchema = z.object({ id: z.string().uuid() });
  */
 function defaultActionDeps(): ActionDeps {
   return { fetcher: fetch };
+}
+
+/**
+ * The DataSource for a /v1/db/* request. Step 1: always our internal Postgres
+ * (the per-request `Sql` from `c.var.db`), wrapped so the route code is
+ * backend-agnostic. Step 2 will select a NativeDataSource (DO SQLite) or an
+ * external-PG source based on the database's configured backend.
+ */
+function dbDataSource(c: Context<AppBindings>): DataSource {
+  return makePostgresDataSource(c.get('db'));
 }
 
 // ---------- workspaces ----------
@@ -476,7 +477,7 @@ v1Router.post('/db/schema', async (c) => {
   }
   const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.databaseId);
   if (!can) return c.json({ error: 'not found' }, 404);
-  const schema = await dbSchemaImpl(c.get('db'), parsed.data.databaseId);
+  const schema = await dbDataSource(c).schema(parsed.data.databaseId);
   if (!schema) return c.json({ error: 'not found' }, 404);
   return c.json(schema, 200);
 });
@@ -527,7 +528,7 @@ v1Router.post('/db/property/add', async (c) => {
   if (!(await canEditPageImpl(c.get('db'), user.userId, parsed.data.databaseId))) {
     return c.json({ error: 'forbidden' }, 403);
   }
-  const prop = await addPropertyImpl(c.get('db'), {
+  const prop = await dbDataSource(c).createProperty({
     databaseId: parsed.data.databaseId,
     name: parsed.data.name,
     type: parsed.data.type,
@@ -553,7 +554,8 @@ v1Router.post('/db/property/update', async (c) => {
   if (!(await canEditPageImpl(c.get('db'), user.userId, dbId))) {
     return c.json({ error: 'forbidden' }, 403);
   }
-  const ok = await updatePropertyImpl(c.get('db'), parsed.data.id, {
+  const ok = await dbDataSource(c).updateProperty({
+    id: parsed.data.id,
     name: parsed.data.name,
     type: parsed.data.type,
     config: parsed.data.config,
@@ -573,7 +575,7 @@ v1Router.post('/db/property/delete', async (c) => {
   if (!(await canEditPageImpl(c.get('db'), user.userId, dbId))) {
     return c.json({ error: 'forbidden' }, 403);
   }
-  const ok = await deletePropertyImpl(c.get('db'), parsed.data.id);
+  const ok = await dbDataSource(c).deleteProperty(parsed.data.id);
   if (!ok) return c.json({ error: 'not found' }, 404);
   return c.json({ ok: true }, 200);
 });
@@ -603,7 +605,7 @@ v1Router.post('/db/view/add', async (c) => {
       return c.json({ error: 'forbidden' }, 403);
     }
   }
-  const view = await addViewImpl(c.get('db'), {
+  const view = await dbDataSource(c).createView({
     databaseId: parsed.data.databaseId,
     type: parsed.data.type,
     name: parsed.data.name,
@@ -635,7 +637,8 @@ v1Router.post('/db/view/update', async (c) => {
       return c.json({ error: 'forbidden' }, 403);
     }
   }
-  const ok = await updateViewImpl(c.get('db'), parsed.data.id, {
+  const ok = await dbDataSource(c).updateView({
+    id: parsed.data.id,
     name: parsed.data.name,
     config: parsed.data.config,
     sourceDatabaseId: parsed.data.sourceDatabaseId,
@@ -655,7 +658,7 @@ v1Router.post('/db/view/delete', async (c) => {
   if (!(await canEditPageImpl(c.get('db'), user.userId, dbId))) {
     return c.json({ error: 'forbidden' }, 403);
   }
-  const ok = await deleteViewImpl(c.get('db'), parsed.data.id);
+  const ok = await dbDataSource(c).deleteView(parsed.data.id);
   if (!ok) return c.json({ error: 'not found' }, 404);
   return c.json({ ok: true }, 200);
 });
@@ -686,7 +689,8 @@ v1Router.post('/db/rows', async (c) => {
       return c.json({ error: 'forbidden' }, 403);
     }
   }
-  const rows = await dbRowsImpl(c.get('db'), parsed.data.databaseId, {
+  const rows = await dbDataSource(c).listRows({
+    databaseId: parsed.data.databaseId,
     viewId: parsed.data.viewId,
     sourceDatabaseId,
   });
@@ -709,8 +713,9 @@ v1Router.post('/db/row/add', async (c) => {
   if (!(await canEditPageImpl(c.get('db'), user.userId, parsed.data.databaseId))) {
     return c.json({ error: 'forbidden' }, 403);
   }
-  const row = await addRowImpl(c.get('db'), user.userId, {
+  const row = await dbDataSource(c).createRow({
     databaseId: parsed.data.databaseId,
+    ownerId: user.userId,
     title: parsed.data.title,
     templateId: parsed.data.templateId ?? null,
     subItemParentId: parsed.data.subItemParentId ?? null,
@@ -841,7 +846,8 @@ v1Router.post('/db/row/update', async (c) => {
   if ((await rowDatabaseImpl(c.get('db'), parsed.data.id)) === null) {
     return c.json({ error: 'not found' }, 404);
   }
-  const ok = await updateRowImpl(c.get('db'), parsed.data.id, {
+  const ok = await dbDataSource(c).updateRow({
+    rowId: parsed.data.id,
     title: parsed.data.title,
     props: parsed.data.props,
   });
@@ -883,7 +889,7 @@ v1Router.post('/db/row/delete', async (c) => {
   if ((await rowDatabaseImpl(c.get('db'), parsed.data.id)) === null) {
     return c.json({ error: 'not found' }, 404);
   }
-  const ok = await deleteRowImpl(c.get('db'), parsed.data.id);
+  const ok = await dbDataSource(c).deleteRow(parsed.data.id);
   if (!ok) return c.json({ error: 'not found' }, 404);
   return c.json({ ok: true }, 200);
 });
