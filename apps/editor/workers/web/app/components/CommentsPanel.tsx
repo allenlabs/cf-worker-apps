@@ -25,6 +25,7 @@ import {
   type ReactionGroup,
 } from '~/server/docs';
 import { EmojiPicker } from '~/components/EmojiPicker';
+import { Skeleton } from '~/components/Skeleton';
 
 /** Render a comment body, turning @[label](id) mention tokens into chips. */
 function renderBody(body: string): React.ReactNode {
@@ -185,11 +186,11 @@ export function CommentsPanel({
   }
 
   return (
-    <aside className="w-80 shrink-0 border-l border-gray-200 bg-white flex flex-col h-full">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
-        <span className="text-sm font-semibold text-gray-900">{t('comments.title')}</span>
+    <aside className="w-80 shrink-0 border-l border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 flex flex-col h-full">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+        <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">{t('comments.title')}</span>
         <button
-          className="text-gray-400 hover:text-gray-700 text-sm"
+          className="text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200 text-sm"
           onClick={onClose}
           aria-label={t('comments.close')}
         >
@@ -199,13 +200,18 @@ export function CommentsPanel({
 
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
         {loading ? (
-          <p className="text-xs text-gray-400">{t('comments.loading')}</p>
+          <div className="space-y-3" aria-label={t('comments.loading')} aria-busy="true">
+            <Skeleton className="h-4 w-1/3" />
+            <Skeleton className="h-12 w-full" />
+            <Skeleton className="h-4 w-1/2" />
+            <Skeleton className="h-10 w-full" />
+          </div>
         ) : (
           <>
             {/* Inline threads */}
             {(threads.length > 0 || showPending) && (
               <section data-testid="inline-threads">
-                <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-2">
                   {t('comments.inlineThreads')}
                 </h3>
                 <div className="space-y-3">
@@ -244,22 +250,22 @@ export function CommentsPanel({
 
             {/* Page comments */}
             <section data-testid="page-comments">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-2">
                 {t('comments.pageComments')}
               </h3>
               {pageComments.length === 0 ? (
-                <p className="text-xs text-gray-400">{t('comments.noPageComments')}</p>
+                <p className="text-xs text-gray-400 dark:text-gray-500">{t('comments.noPageComments')}</p>
               ) : (
                 <div className="space-y-3">
                   {pageComments.map((c) => (
                     <div
                       key={c.id}
-                      className={`rounded border border-gray-200 p-2 text-sm ${
+                      className={`rounded border border-gray-200 dark:border-gray-700 p-2 text-sm ${
                         c.resolved ? 'opacity-60' : ''
                       }`}
                     >
                       <CommentHeader comment={c} />
-                      <p className="whitespace-pre-wrap break-words text-gray-700">
+                      <p className="whitespace-pre-wrap break-words text-gray-700 dark:text-gray-300">
                         {renderBody(c.body)}
                       </p>
                       <ReactionBar
@@ -268,7 +274,7 @@ export function CommentsPanel({
                       />
                       <div className="mt-1.5 flex items-center gap-3 text-xs">
                         <button
-                          className="text-gray-500 hover:text-gray-800"
+                          className="text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-100"
                           onClick={() => void resolvePageComment(c)}
                         >
                           {c.resolved ? t('comments.reopen') : t('comments.resolve')}
@@ -297,10 +303,10 @@ function CommentHeader({ comment }: { comment: CommentItem }) {
   const { t } = useT();
   return (
     <div className="flex items-center justify-between gap-2 mb-1">
-      <span className="font-medium text-gray-800 truncate">
+      <span className="font-medium text-gray-800 dark:text-gray-200 truncate">
         {comment.authorName || t('comments.someone')}
       </span>
-      <span className="text-[10px] text-gray-400 shrink-0">
+      <span className="text-[10px] text-gray-400 dark:text-gray-500 shrink-0">
         {new Date(comment.createdAt).toLocaleString()}
       </span>
     </div>
@@ -337,20 +343,20 @@ function ThreadCard({
   return (
     <div
       className={`rounded border p-2 text-sm cursor-pointer ${
-        active ? 'border-amber-400 bg-amber-50' : 'border-gray-200'
+        active ? 'border-amber-400 bg-amber-50' : 'border-gray-200 dark:border-gray-700'
       }`}
       onClick={onFocus}
       data-testid="thread-card"
     >
       {context ? (
-        <p className="text-xs italic text-gray-500 border-l-2 border-amber-300 pl-2 mb-2 break-words">
+        <p className="text-xs italic text-gray-500 dark:text-gray-400 border-l-2 border-amber-300 pl-2 mb-2 break-words">
           “{context}”
         </p>
       ) : null}
       {comments.map((c) => (
         <div key={c.id} className={`mb-2 ${c.resolved ? 'opacity-60' : ''}`}>
           <CommentHeader comment={c} />
-          <p className="whitespace-pre-wrap break-words text-gray-700">{renderBody(c.body)}</p>
+          <p className="whitespace-pre-wrap break-words text-gray-700 dark:text-gray-300">{renderBody(c.body)}</p>
           <div onClick={(e) => e.stopPropagation()}>
             <ReactionBar
               groups={reactions[c.id] ?? []}
@@ -376,7 +382,7 @@ function ThreadCard({
       />
       {comments.length > 0 ? (
         <button
-          className="mt-2 text-xs text-gray-500 hover:text-gray-800"
+          className="mt-2 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-100"
           onClick={(e) => {
             e.stopPropagation();
             onResolve();
@@ -403,7 +409,7 @@ function ReactionBar({
     return (
       <div className="mt-1.5">
         <button
-          className="text-xs text-gray-400 hover:text-gray-700"
+          className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200"
           onClick={(e) => {
             e.stopPropagation();
             setPicking(true);
@@ -433,7 +439,7 @@ function ReactionBar({
           className={`px-1.5 py-0.5 rounded-full border text-xs ${
             g.mine
               ? 'border-blue-300 bg-blue-50 dark:bg-blue-900/40'
-              : 'border-gray-200 hover:bg-gray-50'
+              : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700'
           }`}
           onClick={(e) => {
             e.stopPropagation();
@@ -445,7 +451,7 @@ function ReactionBar({
         </button>
       ))}
       <button
-        className="text-xs text-gray-400 hover:text-gray-700 px-1"
+        className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200 px-1"
         onClick={(e) => {
           e.stopPropagation();
           setPicking((v) => !v);
@@ -548,7 +554,7 @@ function NewCommentBox({
     <div className="mt-2 relative" onClick={(e) => e.stopPropagation()}>
       <textarea
         ref={taRef}
-        className="w-full text-sm border border-gray-200 rounded p-2 outline-none focus:border-gray-400 resize-none"
+        className="w-full text-sm border border-gray-200 dark:border-gray-700 rounded p-2 outline-none focus:border-gray-400 resize-none"
         rows={2}
         placeholder={placeholder}
         value={draft}
@@ -563,7 +569,7 @@ function NewCommentBox({
       />
       {suggestions.length > 0 ? (
         <ul
-          className="absolute z-30 left-0 right-0 mt-0.5 max-h-40 overflow-y-auto rounded border border-gray-200 bg-white shadow-lg dark:bg-gray-800 dark:border-gray-700"
+          className="absolute z-30 left-0 right-0 mt-0.5 max-h-40 overflow-y-auto rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-lg dark:bg-gray-800 dark:border-gray-700"
           data-testid="mention-suggestions"
         >
           {suggestions.map((s) => (

@@ -94,3 +94,146 @@
   color: #93c5fd;
 }
 
+/* ---------- editor floating menus (dark) ----------
+   The @allenlabs/editor package ships these chrome surfaces light-only and we
+   MUST NOT edit the package. Mirror its selectors here under `.dark` so the
+   slash menu, @-mention popup, bubble toolbar, block menu, and drag/add-block
+   affordances are legible on the dark page surface. Values track the package's
+   light defaults (see packages/editor/src/styles.css). */
+.dark .ae-slash-menu,
+.dark .ae-mention-menu,
+.dark .ae-block-menu {
+  background: #1f2937;
+  border-color: #374151;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+}
+.dark .ae-slash-empty,
+.dark .ae-slash-hint,
+.dark .ae-slash-icon {
+  color: #9ca3af;
+}
+.dark .ae-slash-title {
+  color: #f3f4f6;
+}
+.dark .ae-slash-item.ae-slash-active {
+  background: #374151;
+}
+.dark .ae-block-menu-item {
+  color: #f3f4f6;
+}
+.dark .ae-block-menu-item:hover {
+  background: #374151;
+}
+.dark .ae-block-menu-item.ae-block-menu-danger {
+  color: #f87171;
+}
+.dark .ae-block-menu-glyph,
+.dark .ae-block-menu-swatch,
+.dark .ae-block-menu-chevron,
+.dark .ae-block-menu-back {
+  color: #9ca3af;
+}
+.dark .ae-block-menu-swatch-bg {
+  border-color: #4b5563;
+}
+.dark .ae-block-menu-back {
+  border-bottom-color: #374151;
+}
+.dark .ae-block-menu-back:hover {
+  color: #f3f4f6;
+}
+/* The bubble toolbar is already dark in the package; nudge its hover/active so
+   it reads on the darker page rather than the light one. */
+.dark .ae-bubble-menu {
+  background: #0b1220;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.6);
+}
+.dark .drag-handle:hover,
+.dark .ae-add-block:hover {
+  background-color: #374151;
+  color: #e5e7eb;
+}
+
+/* ---------- database view native form controls (dark) ----------
+   DatabaseView uses many bare <input>/<select>/<textarea> elements whose
+   default (browser) chrome is white-on-dark in dark mode. Scope a dark surface
+   to them via the `[data-db-view]` marker on the view root so they read
+   correctly without touching every element's class list. */
+.dark [data-db-view] input,
+.dark [data-db-view] select,
+.dark [data-db-view] textarea {
+  background-color: #1f2937;
+  color: #e5e7eb;
+}
+.dark [data-db-view] input::placeholder,
+.dark [data-db-view] textarea::placeholder {
+  color: #6b7280;
+}
+.dark [data-db-view] option {
+  background-color: #1f2937;
+  color: #e5e7eb;
+}
+
+/* ---------- skeleton shimmer (perceived speed) ---------- */
+@keyframes ae-skeleton-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.ae-skeleton {
+  border-radius: 0.375rem;
+  background: linear-gradient(90deg, #eceef1 25%, #f5f6f8 37%, #eceef1 63%);
+  background-size: 200% 100%;
+  animation: ae-skeleton-shimmer 1.4s ease-in-out infinite;
+}
+.dark .ae-skeleton {
+  background: linear-gradient(90deg, #1f2937 25%, #374151 37%, #1f2937 63%);
+  background-size: 200% 100%;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ae-skeleton { animation: none; }
+}
+
+/* ---------- focus-visible rings (accessibility) ----------
+   Give keyboard users a clear, on-brand focus indicator on interactive
+   controls in the app chrome (sidebar, database view, page header) without
+   editing every element's class list. Mouse clicks don't trigger :focus-visible
+   so there's no visual noise for pointer users. The ring uses the editor accent
+   so it matches the brand. */
+.ae-sidebar button:focus-visible,
+.ae-sidebar a:focus-visible,
+.ae-sidebar input:focus-visible,
+.ae-sidebar select:focus-visible,
+[data-db-view] button:focus-visible,
+[data-db-view] a:focus-visible,
+[data-db-view] input:focus-visible,
+[data-db-view] select:focus-visible,
+[data-db-view] textarea:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--color-editor-500);
+  border-radius: 0.25rem;
+}
+.dark .ae-sidebar button:focus-visible,
+.dark .ae-sidebar a:focus-visible,
+.dark .ae-sidebar input:focus-visible,
+.dark .ae-sidebar select:focus-visible,
+.dark [data-db-view] button:focus-visible,
+.dark [data-db-view] a:focus-visible,
+.dark [data-db-view] input:focus-visible,
+.dark [data-db-view] select:focus-visible,
+.dark [data-db-view] textarea:focus-visible {
+  box-shadow: 0 0 0 2px var(--color-editor-400);
+}
+
+/* ---------- popover / menu mount transition (cheap fade + scale) ---------- */
+@keyframes ae-pop-in {
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: scale(1); }
+}
+.ae-pop-in {
+  animation: ae-pop-in 0.12s ease-out;
+  transform-origin: top;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ae-pop-in { animation: none; }
+}
+

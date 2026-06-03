@@ -58,7 +58,7 @@ export function PageCover({ cover, editable, uploadFile, onChange }: PageCoverPr
       <div className="group/cover relative h-8 mb-1">
         {hiddenInput}
         <button
-          className="opacity-0 group-hover/cover:opacity-100 transition text-xs text-gray-400 hover:text-gray-700 px-2 py-1"
+          className="opacity-0 group-hover/cover:opacity-100 transition text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200 px-2 py-1"
           onClick={pickFile}
           disabled={busy}
           data-testid="cover-add"
@@ -81,7 +81,7 @@ export function PageCover({ cover, editable, uploadFile, onChange }: PageCoverPr
       {editable ? (
         <div className="absolute right-3 bottom-3 opacity-0 group-hover/cover:opacity-100 transition flex gap-1">
           <button
-            className="text-xs px-2 py-1 bg-white/90 border border-gray-200 rounded hover:bg-white shadow-sm"
+            className="text-xs px-2 py-1 bg-white/90 border border-gray-200 dark:border-gray-700 rounded hover:bg-white shadow-sm"
             onClick={pickFile}
             disabled={busy}
             data-testid="cover-change"
@@ -89,7 +89,7 @@ export function PageCover({ cover, editable, uploadFile, onChange }: PageCoverPr
             {busy ? t('cover.uploading') : t('cover.change')}
           </button>
           <button
-            className="text-xs px-2 py-1 bg-white/90 border border-gray-200 rounded hover:bg-white shadow-sm"
+            className="text-xs px-2 py-1 bg-white/90 border border-gray-200 dark:border-gray-700 rounded hover:bg-white shadow-sm"
             onClick={() => onChange(null)}
             data-testid="cover-remove"
           >

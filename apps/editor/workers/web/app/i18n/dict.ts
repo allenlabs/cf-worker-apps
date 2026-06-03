@@ -265,6 +265,21 @@ const editor: Dict = {
     'db.op.on': 'is on',
     'db.op.within_days': 'within next (days)',
 
+    // Database view misc labels (UI polish pass)
+    'db.noRows': 'No rows.',
+    'db.noRowsWithDate': 'No rows with a date.',
+    'db.noMatches': 'No matches',
+    'db.noTargetDb': 'No target DB',
+    'db.relatedTo': 'Related to',
+    'db.relation': 'Relation',
+    'db.property': 'Property',
+    'db.calculate': 'Calculate',
+    'db.expression': 'Expression',
+    'db.formulaProperties': 'Properties:',
+    'db.pickDateCalendar': 'Pick a date property to place rows on the calendar.',
+    'db.pickDateTimeline': 'Pick a date property to plot rows on the timeline.',
+    'db.groupNoValue': 'No {prop}',
+
     // Wiki + verified pages (Phase 15)
     'pageMenu.turnIntoWiki': 'Turn into wiki',
     'pageMenu.turnOffWiki': 'Turn off wiki',
@@ -625,6 +640,21 @@ const editor: Dict = {
     'db.op.after': '이후',
     'db.op.on': '해당일',
     'db.op.within_days': '향후 (일) 이내',
+
+    // Database view misc labels (UI polish pass)
+    'db.noRows': '행이 없습니다.',
+    'db.noRowsWithDate': '날짜가 있는 행이 없습니다.',
+    'db.noMatches': '일치 항목 없음',
+    'db.noTargetDb': '대상 DB 없음',
+    'db.relatedTo': '연결 대상',
+    'db.relation': '관계',
+    'db.property': '속성',
+    'db.calculate': '계산',
+    'db.expression': '수식',
+    'db.formulaProperties': '속성:',
+    'db.pickDateCalendar': '캘린더에 행을 배치할 날짜 속성을 선택하세요.',
+    'db.pickDateTimeline': '타임라인에 행을 표시할 날짜 속성을 선택하세요.',
+    'db.groupNoValue': '{prop} 없음',
 
     // Wiki + verified pages (Phase 15)
     'pageMenu.turnIntoWiki': '위키로 전환',

@@ -66,11 +66,11 @@ export function VersionHistoryPanel({ pageId, onClose }: VersionHistoryPanelProp
   }
 
   return (
-    <aside className="w-96 shrink-0 border-l border-gray-200 bg-white flex flex-col h-full">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
-        <span className="text-sm font-semibold text-gray-900">Version history</span>
+    <aside className="w-96 shrink-0 border-l border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 flex flex-col h-full">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+        <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">Version history</span>
         <button
-          className="text-gray-400 hover:text-gray-700 text-sm"
+          className="text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200 text-sm"
           onClick={onClose}
           aria-label="Close history"
         >
@@ -78,25 +78,25 @@ export function VersionHistoryPanel({ pageId, onClose }: VersionHistoryPanelProp
         </button>
       </div>
 
-      <div className="border-b border-gray-200 max-h-56 overflow-y-auto">
+      <div className="border-b border-gray-200 dark:border-gray-700 max-h-56 overflow-y-auto">
         {loading ? (
-          <p className="text-xs text-gray-400 px-4 py-3">Loading…</p>
+          <p className="text-xs text-gray-400 dark:text-gray-500 px-4 py-3">Loading…</p>
         ) : versions.length === 0 ? (
-          <p className="text-xs text-gray-400 px-4 py-3">No saved versions yet.</p>
+          <p className="text-xs text-gray-400 dark:text-gray-500 px-4 py-3">No saved versions yet.</p>
         ) : (
-          <ul className="divide-y divide-gray-100">
+          <ul className="divide-y divide-gray-100 dark:divide-gray-700">
             {versions.map((v) => (
               <li key={v.id}>
                 <button
-                  className={`w-full text-left px-4 py-2 hover:bg-gray-50 ${
-                    selectedId === v.id ? 'bg-gray-100' : ''
+                  className={`w-full text-left px-4 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 ${
+                    selectedId === v.id ? 'bg-gray-100 dark:bg-gray-700' : ''
                   }`}
                   onClick={() => void handleSelect(v.id)}
                 >
-                  <div className="text-xs text-gray-800">
+                  <div className="text-xs text-gray-800 dark:text-gray-200">
                     {new Date(v.createdAt).toLocaleString()}
                   </div>
-                  <div className="text-[11px] text-gray-500">{v.authorName || 'Unknown'}</div>
+                  <div className="text-[11px] text-gray-500 dark:text-gray-400">{v.authorName || 'Unknown'}</div>
                 </button>
               </li>
             ))}
@@ -115,13 +115,13 @@ export function VersionHistoryPanel({ pageId, onClose }: VersionHistoryPanelProp
               {busy ? 'Restoring…' : 'Restore this version'}
             </button>
             <div
-              className="prose prose-sm max-w-none text-gray-700"
+              className="prose prose-sm max-w-none text-gray-700 dark:text-gray-300"
               // Preview only — sanitised content comes from our own editor.
               dangerouslySetInnerHTML={{ __html: previewHtml }}
             />
           </>
         ) : (
-          <p className="text-xs text-gray-400">Select a version to preview it.</p>
+          <p className="text-xs text-gray-400 dark:text-gray-500">Select a version to preview it.</p>
         )}
       </div>
     </aside>

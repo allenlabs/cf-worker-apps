@@ -54,6 +54,7 @@ import {
   type AutomationTrigger,
 } from '~/server/docs';
 import { describeAction, type ButtonAction } from '@allenlabs/editor';
+import { TableSkeleton } from '~/components/Skeleton';
 
 const PROPERTY_TYPES: { value: PropertyType; label: string }[] = [
   { value: 'text', label: 'Text' },
@@ -459,20 +460,20 @@ export function DatabaseView({
   }
 
   if (!activeView) {
-    return <div className="text-sm text-gray-400">{t('db.noViews')}</div>;
+    return <div className="text-sm text-gray-400 dark:text-gray-500">{t('db.noViews')}</div>;
   }
 
   return (
-    <div>
+    <div data-db-view>
       {/* View switcher */}
-      <div className="flex items-center gap-1 border-b border-gray-200 mb-3 text-sm">
+      <div className="flex items-center gap-1 border-b border-gray-200 dark:border-gray-700 mb-3 text-sm">
         {schema.views.map((v) => (
           <button
             key={v.id}
             className={`px-3 py-1.5 -mb-px border-b-2 ${
               v.id === activeView.id
-                ? 'border-gray-800 text-gray-900 font-medium'
-                : 'border-transparent text-gray-500 hover:text-gray-800'
+                ? 'border-gray-800 text-gray-900 dark:text-gray-100 font-medium'
+                : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-100'
             }`}
             onClick={() => setActiveViewId(v.id)}
           >
@@ -482,7 +483,7 @@ export function DatabaseView({
         {editable ? (
           <div className="ml-1 flex items-center gap-1">
             <select
-              className="px-1 py-1 text-gray-400 hover:text-gray-700 bg-transparent outline-none"
+              className="px-1 py-1 text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200 bg-transparent outline-none"
               value=""
               onChange={(e) => {
                 const t = e.target.value as ViewType;
@@ -507,7 +508,7 @@ export function DatabaseView({
         ) : null}
         {editable && !activeView.sourceDatabaseId ? (
           <button
-            className="ml-auto px-2 py-1 text-gray-400 hover:text-gray-700"
+            className="ml-auto px-2 py-1 text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200"
             onClick={() => setShowAutomations((s) => !s)}
             data-testid="automations-toggle"
             title={t('db.automations')}
@@ -535,7 +536,7 @@ export function DatabaseView({
       ) : null}
 
       {loading ? (
-        <div className="text-sm text-gray-400 py-4">{t('db.loadingRows')}</div>
+        <TableSkeleton />
       ) : activeView.type === 'board' ? (
         <BoardView
           view={activeView}
@@ -627,7 +628,7 @@ function FilterSortGroupBar({ view, properties, onSetConfig }: FilterSortGroupBa
   const tab = (key: 'filter' | 'sort' | 'group', label: string, count: number) => (
     <button
       className={`px-2 py-1 rounded text-xs ${
-        open === key ? 'bg-gray-100 text-gray-900' : 'text-gray-500 hover:text-gray-800'
+        open === key ? 'bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100' : 'text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-100'
       }`}
       onClick={() => setOpen((v) => (v === key ? null : key))}
     >
@@ -660,10 +661,10 @@ function FilterSortGroupBar({ view, properties, onSetConfig }: FilterSortGroupBa
           onClose={() => setOpen(null)}
         />
       ) : open === 'group' ? (
-        <div className="mt-1 p-2 border border-gray-200 rounded bg-white inline-flex items-center gap-2">
-          <span className="text-xs text-gray-500">{t('db.groupBy')}</span>
+        <div className="mt-1 p-2 border border-gray-200 dark:border-gray-700 rounded bg-white dark:bg-gray-800 inline-flex items-center gap-2">
+          <span className="text-xs text-gray-500 dark:text-gray-400">{t('db.groupBy')}</span>
           <select
-            className="border border-gray-300 rounded px-1 py-0.5 text-xs"
+            className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5 text-xs"
             value={groupBy}
             onChange={(e) => onSetConfig({ groupBy: e.target.value })}
           >
@@ -718,11 +719,11 @@ function FilterBuilder({
     onChange({ ...group, conditions: group.conditions.map((c, j) => (j === i ? next : c)) });
 
   return (
-    <div className="mt-1 p-2 border border-gray-200 rounded bg-white max-w-2xl">
-      <div className="flex items-center gap-2 mb-2 text-xs text-gray-500">
+    <div className="mt-1 p-2 border border-gray-200 dark:border-gray-700 rounded bg-white dark:bg-gray-800 max-w-2xl">
+      <div className="flex items-center gap-2 mb-2 text-xs text-gray-500 dark:text-gray-400">
         <span>{t('db.where')}</span>
         <select
-          className="border border-gray-300 rounded px-1 py-0.5"
+          className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5"
           value={group.conjunction}
           onChange={(e) => setConjunction(e.target.value as 'and' | 'or')}
           aria-label={t('db.where')}
@@ -734,8 +735,8 @@ function FilterBuilder({
       <div className="flex flex-col gap-1">
         {group.conditions.map((cond, i) =>
           'conditions' in cond ? (
-            <div key={i} className="border-l-2 border-gray-200 pl-2">
-              <div className="flex items-center justify-between text-[11px] text-gray-400 mb-1">
+            <div key={i} className="border-l-2 border-gray-200 dark:border-gray-700 pl-2">
+              <div className="flex items-center justify-between text-[11px] text-gray-400 dark:text-gray-500 mb-1">
                 <span>{cond.conjunction === 'or' ? t('db.conjOr') : t('db.conjAnd')}</span>
                 <button className="hover:text-red-600" onClick={() => removeAt(i)}>
                   {t('db.removeRule')}
@@ -764,7 +765,7 @@ function FilterBuilder({
                 ),
               )}
               <button
-                className="text-[11px] text-gray-400 hover:text-gray-700 mt-1"
+                className="text-[11px] text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200 mt-1"
                 onClick={() =>
                   updateAt(i, {
                     ...cond,
@@ -788,10 +789,10 @@ function FilterBuilder({
         )}
       </div>
       <div className="flex items-center gap-3 mt-2">
-        <button className="text-xs text-gray-500 hover:text-gray-800" onClick={addCondition}>
+        <button className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-100" onClick={addCondition} data-testid="filter-add">
           {t('db.addFilter')}
         </button>
-        <button className="text-xs text-gray-500 hover:text-gray-800" onClick={addNestedGroup}>
+        <button className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-100" onClick={addNestedGroup}>
           {t('db.addFilterGroup')}
         </button>
         <button className="ml-auto text-xs text-blue-600 hover:text-blue-800" onClick={onClose}>
@@ -823,10 +824,11 @@ function ConditionRow({
   const selectOptions = valueOptionsFor(properties, cond.propId);
 
   return (
-    <div className="flex items-center gap-1 text-xs">
+    <div className="flex items-center gap-1 text-xs" data-testid="filter-condition">
       <select
-        className="border border-gray-300 rounded px-1 py-0.5"
+        className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5"
         value={cond.propId}
+        data-testid="filter-prop"
         onChange={(e) => {
           const nextType = propOpts.find((p) => p.id === e.target.value)?.type ?? 'text';
           const nextOps = operatorsForType(nextType);
@@ -840,7 +842,7 @@ function ConditionRow({
         ))}
       </select>
       <select
-        className="border border-gray-300 rounded px-1 py-0.5"
+        className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5"
         value={cond.op}
         onChange={(e) => onChange({ ...cond, op: e.target.value as FilterOp })}
       >
@@ -852,8 +854,9 @@ function ConditionRow({
       </select>
       {valueless ? null : selectOptions.length > 0 ? (
         <select
-          className="border border-gray-300 rounded px-1 py-0.5"
+          className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5"
           value={typeof cond.value === 'string' ? cond.value : ''}
+          data-testid="filter-value"
           onChange={(e) => onChange({ ...cond, value: e.target.value })}
         >
           <option value="">—</option>
@@ -865,8 +868,9 @@ function ConditionRow({
         </select>
       ) : (
         <input
-          className="border border-gray-300 rounded px-1 py-0.5 w-28"
+          className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5 w-28"
           placeholder={t('db.value')}
+          data-testid="filter-value"
           value={cond.value === null || cond.value === undefined ? '' : String(cond.value)}
           onChange={(e) =>
             onChange({
@@ -879,7 +883,7 @@ function ConditionRow({
           }
         />
       )}
-      <button className="text-gray-300 hover:text-red-600" onClick={onRemove} aria-label={t('db.removeRule')}>
+      <button className="text-gray-300 dark:text-gray-600 hover:text-red-600" onClick={onRemove} aria-label={t('db.removeRule')}>
         ✕
       </button>
     </div>
@@ -912,18 +916,18 @@ function SortBuilder({
   };
 
   return (
-    <div className="mt-1 p-2 border border-gray-200 rounded bg-white max-w-lg">
+    <div className="mt-1 p-2 border border-gray-200 dark:border-gray-700 rounded bg-white dark:bg-gray-800 max-w-lg">
       <div className="flex flex-col gap-1">
         {sorts.map((s, i) => (
           <div key={i} className="flex items-center gap-1 text-xs">
-            <button className="text-gray-300 hover:text-gray-700" onClick={() => move(i, -1)} aria-label="up">
+            <button className="text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-gray-200" onClick={() => move(i, -1)} aria-label="up">
               ↑
             </button>
-            <button className="text-gray-300 hover:text-gray-700" onClick={() => move(i, 1)} aria-label="down">
+            <button className="text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-gray-200" onClick={() => move(i, 1)} aria-label="down">
               ↓
             </button>
             <select
-              className="border border-gray-300 rounded px-1 py-0.5"
+              className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5"
               value={s.propId}
               onChange={(e) => updateAt(i, { ...s, propId: e.target.value })}
             >
@@ -934,21 +938,21 @@ function SortBuilder({
               ))}
             </select>
             <select
-              className="border border-gray-300 rounded px-1 py-0.5"
+              className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5"
               value={s.dir ?? 'asc'}
               onChange={(e) => updateAt(i, { ...s, dir: e.target.value as 'asc' | 'desc' })}
             >
               <option value="asc">{t('db.sortAsc')}</option>
               <option value="desc">{t('db.sortDesc')}</option>
             </select>
-            <button className="text-gray-300 hover:text-red-600" onClick={() => removeAt(i)}>
+            <button className="text-gray-300 dark:text-gray-600 hover:text-red-600" onClick={() => removeAt(i)}>
               ✕
             </button>
           </div>
         ))}
       </div>
       <div className="flex items-center gap-3 mt-2">
-        <button className="text-xs text-gray-500 hover:text-gray-800" onClick={add}>
+        <button className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-100" onClick={add} data-testid="sort-add">
           {t('db.addSort')}
         </button>
         <button className="ml-auto text-xs text-blue-600 hover:text-blue-800" onClick={onClose}>
@@ -988,14 +992,14 @@ function NewRowButton({
   return (
     <div className="relative inline-flex items-center mt-2" ref={ref}>
       <button
-        className="text-sm text-gray-500 hover:text-gray-800 px-2 py-1 border border-gray-200 rounded-l"
+        className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-100 px-2 py-1 border border-gray-200 dark:border-gray-700 rounded-l"
         onClick={onAddRow}
         data-testid="db-new-row"
       >
         ＋ {t('db.newRow')}
       </button>
       <button
-        className="text-sm text-gray-400 hover:text-gray-800 px-1 py-1 border border-l-0 border-gray-200 rounded-r"
+        className="text-sm text-gray-400 dark:text-gray-500 hover:text-gray-800 dark:hover:text-gray-100 px-1 py-1 border border-l-0 border-gray-200 dark:border-gray-700 rounded-r"
         onClick={() => setOpen((v) => !v)}
         aria-label={t('db.newRowMenu')}
         aria-haspopup="menu"
@@ -1007,10 +1011,10 @@ function NewRowButton({
       {open ? (
         <div
           role="menu"
-          className="absolute left-0 top-9 z-20 w-56 bg-white border border-gray-200 rounded shadow-lg p-1 text-sm"
+          className="absolute left-0 top-9 z-20 w-56 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-lg p-1 text-sm"
         >
           <button
-            className="w-full text-left px-2 py-1 rounded hover:bg-gray-100"
+            className="w-full text-left px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
             role="menuitem"
             onClick={() => {
               onAddRow();
@@ -1021,13 +1025,13 @@ function NewRowButton({
           </button>
           {templates.length > 0 ? (
             <>
-              <div className="px-2 py-1 text-[11px] uppercase tracking-wide text-gray-400">
+              <div className="px-2 py-1 text-[11px] uppercase tracking-wide text-gray-400 dark:text-gray-500">
                 {t('db.templates')}
               </div>
               {templates.map((tpl) => (
                 <div key={tpl.id} className="flex items-center group">
                   <button
-                    className="flex-1 text-left px-2 py-1 rounded hover:bg-gray-100 truncate"
+                    className="flex-1 text-left px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 truncate"
                     role="menuitem"
                     onClick={() => {
                       onAddFromTemplate(tpl.id);
@@ -1038,13 +1042,13 @@ function NewRowButton({
                   </button>
                   <a
                     href={`/p/${tpl.id}`}
-                    className="px-1 text-gray-300 hover:text-gray-700 text-xs"
+                    className="px-1 text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-gray-200 text-xs"
                     title={t('db.renameTemplate')}
                   >
                     ✎
                   </a>
                   <button
-                    className="px-1 text-gray-300 hover:text-red-600 text-xs"
+                    className="px-1 text-gray-300 dark:text-gray-600 hover:text-red-600 text-xs"
                     onClick={() => onDeleteTemplate(tpl.id)}
                     aria-label={t('db.deleteTemplate')}
                   >
@@ -1054,9 +1058,9 @@ function NewRowButton({
               ))}
             </>
           ) : null}
-          <div className="my-1 border-t border-gray-100" />
+          <div className="my-1 border-t border-gray-100 dark:border-gray-700" />
           <button
-            className="w-full text-left px-2 py-1 rounded hover:bg-gray-100 text-gray-600"
+            className="w-full text-left px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300"
             role="menuitem"
             onClick={() => {
               onCreateTemplate();
@@ -1164,13 +1168,13 @@ function TableView({
   function renderRow(row: DbRow, depth: number, hasChildren: boolean) {
     const isCollapsed = collapsed.has(row.id);
     return (
-      <tr key={row.id} className="border-b border-gray-100 hover:bg-gray-50 group">
+      <tr key={row.id} className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 group">
         <td className="py-1 px-2">
           <div className="flex items-center gap-1" style={{ paddingLeft: `${depth * 1.25}rem` }}>
             {subItemsEnabled ? (
               hasChildren ? (
                 <button
-                  className="text-gray-400 hover:text-gray-700 text-xs w-4"
+                  className="text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200 text-xs w-4"
                   onClick={() => toggleCollapse(row.id)}
                   aria-label={isCollapsed ? t('db.expandRow') : t('db.collapseRow')}
                 >
@@ -1182,13 +1186,13 @@ function TableView({
             ) : null}
             <a
               href={`/p/${row.id}`}
-              className="no-underline text-gray-900 hover:underline truncate"
+              className="no-underline text-gray-900 dark:text-gray-100 hover:underline truncate"
             >
               {row.title || 'Untitled'}
             </a>
             {editable && subItemsEnabled ? (
               <button
-                className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-gray-700 text-xs"
+                className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-gray-200 text-xs"
                 onClick={() => onAddSubItem(row.id)}
                 title={t('db.addSubItem')}
                 aria-label={t('db.addSubItem')}
@@ -1198,7 +1202,7 @@ function TableView({
             ) : null}
             {editable && subItemsEnabled && row.subItemParentId ? (
               <button
-                className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-gray-700 text-xs"
+                className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-gray-200 text-xs"
                 onClick={() => onSetSubItemParent(row.id, null)}
                 title={t('db.removeRule')}
                 aria-label={t('db.removeRule')}
@@ -1208,7 +1212,7 @@ function TableView({
             ) : null}
             {editable ? (
               <button
-                className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-600 text-xs"
+                className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-300 dark:text-gray-600 hover:text-red-600 text-xs"
                 onClick={() => onDeleteRow(row.id)}
                 title="Delete row"
                 aria-label="Delete row"
@@ -1221,13 +1225,13 @@ function TableView({
         {properties.map((p) => (
           <td key={p.id} className="py-1 px-2">
             {!editable ? (
-              <span className="text-gray-700">{renderValueText(row, p) || '—'}</span>
+              <span className="text-gray-700 dark:text-gray-300">{renderValueText(row, p) || '—'}</span>
             ) : p.type === 'formula' ? (
               <FormulaCell property={p} row={row} />
             ) : p.type === 'button' ? (
               <ButtonPropertyCell property={p} databaseId={writeDbId} rowId={row.id} />
             ) : AUTO_PROPERTY_TYPES.has(p.type) || p.type === 'rollup' ? (
-              <span className="text-gray-500">{renderValueText(row, p) || '—'}</span>
+              <span className="text-gray-500 dark:text-gray-400">{renderValueText(row, p) || '—'}</span>
             ) : p.type === 'relation' ? (
               <RelationCell
                 property={p}
@@ -1271,7 +1275,7 @@ function TableView({
   return (
     <div className="overflow-x-auto">
       {editable ? (
-        <label className="flex items-center gap-1 text-xs text-gray-400 mb-1">
+        <label className="flex items-center gap-1 text-xs text-gray-400 dark:text-gray-500 mb-1">
           <input
             type="checkbox"
             checked={subItemsEnabled}
@@ -1282,7 +1286,7 @@ function TableView({
       ) : null}
       <table className="w-full text-sm border-collapse">
         <thead>
-          <tr className="border-b border-gray-200 text-left text-gray-500">
+          <tr className="border-b border-gray-200 dark:border-gray-700 text-left text-gray-500 dark:text-gray-400">
             <th className="py-1.5 px-2 font-medium min-w-[12rem]">{t('db.title')}</th>
             {properties.map((p) => (
               <th key={p.id} className="py-1.5 px-2 font-medium min-w-[8rem]">
@@ -1294,14 +1298,15 @@ function TableView({
                 <span className="flex items-center gap-1">
                   <input
                     autoFocus
-                    className="border border-gray-300 rounded px-1 py-0.5 w-24 text-gray-800"
-                    placeholder="Name"
+                    className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5 w-24 text-gray-800 dark:text-gray-200"
+                    placeholder={t('db.title')}
+                    data-testid="prop-add-name"
                     value={newPropName}
                     onChange={(e) => setNewPropName(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && !needsConfig && submitNewProp()}
                   />
                   <select
-                    className="border border-gray-300 rounded px-1 py-0.5 text-gray-800"
+                    className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5 text-gray-800 dark:text-gray-200"
                     value={newPropType}
                     onChange={(e) => setNewPropType(e.target.value as PropertyType)}
                   >
@@ -1313,14 +1318,15 @@ function TableView({
                   </select>
                   {needsConfig ? null : (
                     <button
-                      className="text-gray-700 hover:text-gray-900"
+                      className="text-gray-700 dark:text-gray-300 hover:text-gray-900"
                       onClick={() => submitNewProp()}
+                      data-testid="prop-add-confirm"
                     >
                       ✓
                     </button>
                   )}
                   <button
-                    className="text-gray-400 hover:text-gray-700"
+                    className="text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200"
                     onClick={() => setAddingProp(false)}
                   >
                     ✕
@@ -1353,8 +1359,9 @@ function TableView({
                 </span>
               ) : (
                 <button
-                  className="text-gray-400 hover:text-gray-700"
+                  className="text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-editor-500 dark:focus-visible:ring-editor-400 rounded"
                   onClick={() => setAddingProp(true)}
+                  data-testid="prop-add-open"
                 >
                   ＋ property
                 </button>
@@ -1366,10 +1373,10 @@ function TableView({
           {groups
             ? groups.map((g) => (
                 <Fragment key={g.key ?? '__none__'}>
-                  <tr className="bg-gray-50">
-                    <td colSpan={colCount} className="py-1 px-2 text-xs font-medium text-gray-600">
+                  <tr className="bg-gray-50 dark:bg-gray-800">
+                    <td colSpan={colCount} className="py-1 px-2 text-xs font-medium text-gray-600 dark:text-gray-300">
                       {groupLabel(g.key)}{' '}
-                      <span className="text-gray-400">{g.rows.length}</span>
+                      <span className="text-gray-400 dark:text-gray-500">{g.rows.length}</span>
                     </td>
                   </tr>
                   {renderBodyRows(g.rows)}
@@ -1508,7 +1515,7 @@ function SelectCell({ options, value, onChange, onAddOption }: SelectCellProps) 
       <span className="flex items-center gap-1">
         <input
           autoFocus
-          className="border border-gray-300 rounded px-1 py-0.5 w-20"
+          className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5 w-20"
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && void submitOption()}
@@ -1571,19 +1578,19 @@ function MultiSelectCell({ options, value, onChange, onAddOption }: MultiSelectC
         onClick={() => setOpen((v) => !v)}
       >
         {value.length === 0 ? (
-          <span className="text-gray-300">—</span>
+          <span className="text-gray-300 dark:text-gray-600">—</span>
         ) : (
           value.map((id) => (
-            <span key={id} className="bg-gray-100 rounded px-1 text-xs">
+            <span key={id} className="bg-gray-100 dark:bg-gray-700 rounded px-1 text-xs">
               {byId.get(id)?.name ?? id}
             </span>
           ))
         )}
       </button>
       {open ? (
-        <div className="absolute z-10 mt-1 bg-white border border-gray-200 rounded shadow p-1 min-w-[8rem]">
+        <div className="absolute z-10 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow p-1 min-w-[8rem]">
           {options.map((o) => (
-            <label key={o.id} className="flex items-center gap-1 px-1 py-0.5 hover:bg-gray-50">
+            <label key={o.id} className="flex items-center gap-1 px-1 py-0.5 hover:bg-gray-50 dark:hover:bg-gray-700">
               <input
                 type="checkbox"
                 checked={value.includes(o.id)}
@@ -1592,9 +1599,9 @@ function MultiSelectCell({ options, value, onChange, onAddOption }: MultiSelectC
               <span className="text-xs">{o.name}</span>
             </label>
           ))}
-          <div className="flex items-center gap-1 mt-1 border-t border-gray-100 pt-1">
+          <div className="flex items-center gap-1 mt-1 border-t border-gray-100 dark:border-gray-700 pt-1">
             <input
-              className="border border-gray-300 rounded px-1 py-0.5 w-20 text-xs"
+              className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5 w-20 text-xs"
               placeholder="New"
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -1620,6 +1627,7 @@ interface RelationCellProps {
 }
 
 function RelationCell({ property, chips, value, onChange }: RelationCellProps) {
+  const { t } = useT();
   const targetDatabaseId =
     typeof property.config.targetDatabaseId === 'string' ? property.config.targetDatabaseId : '';
   const [open, setOpen] = useState(false);
@@ -1655,7 +1663,7 @@ function RelationCell({ property, chips, value, onChange }: RelationCellProps) {
   }
 
   if (!targetDatabaseId) {
-    return <span className="text-gray-300 text-xs">No target DB</span>;
+    return <span className="text-gray-300 dark:text-gray-600 text-xs">{t('db.noTargetDb')}</span>;
   }
 
   return (
@@ -1666,7 +1674,7 @@ function RelationCell({ property, chips, value, onChange }: RelationCellProps) {
         aria-label={property.name}
       >
         {value.length === 0 ? (
-          <span className="text-gray-300">—</span>
+          <span className="text-gray-300 dark:text-gray-600">—</span>
         ) : (
           value.map((id) => (
             <a
@@ -1681,16 +1689,16 @@ function RelationCell({ property, chips, value, onChange }: RelationCellProps) {
         )}
       </button>
       {open ? (
-        <div className="absolute z-10 mt-1 bg-white border border-gray-200 rounded shadow p-1 min-w-[12rem]">
+        <div className="absolute z-10 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow p-1 min-w-[12rem]">
           <input
             autoFocus
-            className="border border-gray-300 rounded px-1 py-0.5 w-full text-xs mb-1"
+            className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5 w-full text-xs mb-1"
             placeholder="Search rows…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />
           {results.map((r) => (
-            <label key={r.id} className="flex items-center gap-1 px-1 py-0.5 hover:bg-gray-50">
+            <label key={r.id} className="flex items-center gap-1 px-1 py-0.5 hover:bg-gray-50 dark:hover:bg-gray-700">
               <input
                 type="checkbox"
                 checked={value.includes(r.id)}
@@ -1703,7 +1711,7 @@ function RelationCell({ property, chips, value, onChange }: RelationCellProps) {
             </label>
           ))}
           {results.length === 0 ? (
-            <div className="text-xs text-gray-400 px-1 py-0.5">No matches</div>
+            <div className="text-xs text-gray-400 dark:text-gray-500 px-1 py-0.5">{t('db.noMatches')}</div>
           ) : null}
         </div>
       ) : null}
@@ -1720,6 +1728,7 @@ interface RelationConfigPanelProps {
 }
 
 function RelationConfigPanel({ workspaceId, onCancel, onConfirm }: RelationConfigPanelProps) {
+  const { t } = useT();
   const [databases, setDatabases] = useState<DatabaseListItem[]>([]);
   const [targetId, setTargetId] = useState('');
 
@@ -1734,10 +1743,10 @@ function RelationConfigPanel({ workspaceId, onCancel, onConfirm }: RelationConfi
   }, [workspaceId]);
 
   return (
-    <div className="absolute z-20 top-9 right-0 bg-white border border-gray-200 rounded shadow-lg p-2 min-w-[14rem] text-left font-normal">
-      <div className="text-xs text-gray-500 mb-1">Related to</div>
+    <div className="absolute z-20 top-9 right-0 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-lg p-2 min-w-[14rem] text-left font-normal">
+      <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">{t('db.relatedTo')}</div>
       <select
-        className="border border-gray-300 rounded px-1 py-0.5 w-full text-sm text-gray-800 mb-2"
+        className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5 w-full text-sm text-gray-800 dark:text-gray-200 mb-2"
         value={targetId}
         onChange={(e) => setTargetId(e.target.value)}
       >
@@ -1749,7 +1758,7 @@ function RelationConfigPanel({ workspaceId, onCancel, onConfirm }: RelationConfi
         ))}
       </select>
       <div className="flex items-center justify-end gap-2">
-        <button className="text-xs text-gray-400 hover:text-gray-700" onClick={onCancel}>
+        <button className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200" onClick={onCancel}>
           Cancel
         </button>
         <button
@@ -1789,6 +1798,7 @@ interface RollupConfigPanelProps {
 }
 
 function RollupConfigPanel({ properties, onCancel, onConfirm }: RollupConfigPanelProps) {
+  const { t } = useT();
   const relationProps = properties.filter((p) => p.type === 'relation');
   const [relationPropId, setRelationPropId] = useState('');
   const [targetPropId, setTargetPropId] = useState('title');
@@ -1816,10 +1826,10 @@ function RollupConfigPanel({ properties, onCancel, onConfirm }: RollupConfigPane
 
   if (relationProps.length === 0) {
     return (
-      <div className="absolute z-20 top-9 right-0 bg-white border border-gray-200 rounded shadow-lg p-2 min-w-[14rem] text-left font-normal text-xs text-gray-600">
+      <div className="absolute z-20 top-9 right-0 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-lg p-2 min-w-[14rem] text-left font-normal text-xs text-gray-600 dark:text-gray-300">
         Add a relation property first, then a rollup can aggregate it.
         <div className="flex justify-end mt-1">
-          <button className="text-gray-400 hover:text-gray-700" onClick={onCancel}>
+          <button className="text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200" onClick={onCancel}>
             Cancel
           </button>
         </div>
@@ -1828,10 +1838,10 @@ function RollupConfigPanel({ properties, onCancel, onConfirm }: RollupConfigPane
   }
 
   return (
-    <div className="absolute z-20 top-9 right-0 bg-white border border-gray-200 rounded shadow-lg p-2 min-w-[15rem] text-left font-normal">
-      <div className="text-xs text-gray-500 mb-1">Relation</div>
+    <div className="absolute z-20 top-9 right-0 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-lg p-2 min-w-[15rem] text-left font-normal">
+      <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">{t('db.relation')}</div>
       <select
-        className="border border-gray-300 rounded px-1 py-0.5 w-full text-sm text-gray-800 mb-2"
+        className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5 w-full text-sm text-gray-800 dark:text-gray-200 mb-2"
         value={relationPropId}
         onChange={(e) => setRelationPropId(e.target.value)}
       >
@@ -1842,9 +1852,9 @@ function RollupConfigPanel({ properties, onCancel, onConfirm }: RollupConfigPane
           </option>
         ))}
       </select>
-      <div className="text-xs text-gray-500 mb-1">Property</div>
+      <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">{t('db.property')}</div>
       <select
-        className="border border-gray-300 rounded px-1 py-0.5 w-full text-sm text-gray-800 mb-2"
+        className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5 w-full text-sm text-gray-800 dark:text-gray-200 mb-2"
         value={targetPropId}
         onChange={(e) => setTargetPropId(e.target.value)}
       >
@@ -1855,9 +1865,9 @@ function RollupConfigPanel({ properties, onCancel, onConfirm }: RollupConfigPane
           </option>
         ))}
       </select>
-      <div className="text-xs text-gray-500 mb-1">Calculate</div>
+      <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">{t('db.calculate')}</div>
       <select
-        className="border border-gray-300 rounded px-1 py-0.5 w-full text-sm text-gray-800 mb-2"
+        className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5 w-full text-sm text-gray-800 dark:text-gray-200 mb-2"
         value={fn}
         onChange={(e) => setFn(e.target.value)}
       >
@@ -1868,7 +1878,7 @@ function RollupConfigPanel({ properties, onCancel, onConfirm }: RollupConfigPane
         ))}
       </select>
       <div className="flex items-center justify-end gap-2">
-        <button className="text-xs text-gray-400 hover:text-gray-700" onClick={onCancel}>
+        <button className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200" onClick={onCancel}>
           Cancel
         </button>
         <button
@@ -1895,13 +1905,13 @@ function FormulaCell({ property, row }: FormulaCellProps) {
   const err = formulaError(value);
   if (err) {
     return (
-      <span className="text-gray-400 text-xs" title={err}>
+      <span className="text-gray-400 dark:text-gray-500 text-xs" title={err}>
         ⚠ {err}
       </span>
     );
   }
   const text = formatFormula(value);
-  return <span className="text-gray-500">{text || '—'}</span>;
+  return <span className="text-gray-500 dark:text-gray-400">{text || '—'}</span>;
 }
 
 // ---------- Formula property config panel (expression textarea + prop hint) ----------
@@ -1913,28 +1923,29 @@ interface FormulaConfigPanelProps {
 }
 
 function FormulaConfigPanel({ properties, onCancel, onConfirm }: FormulaConfigPanelProps) {
+  const { t } = useT();
   const [expression, setExpression] = useState('');
   // The implicit Name (title) column plus every defined property.
   const names = ['Name', ...properties.map((p) => p.name)];
 
   return (
-    <div className="absolute z-20 top-9 right-0 bg-white border border-gray-200 rounded shadow-lg p-2 min-w-[20rem] text-left font-normal">
-      <div className="text-xs text-gray-500 mb-1">Expression</div>
+    <div className="absolute z-20 top-9 right-0 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-lg p-2 min-w-[20rem] text-left font-normal">
+      <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">{t('db.expression')}</div>
       <textarea
         autoFocus
-        className="border border-gray-300 rounded px-1.5 py-1 w-full text-sm text-gray-800 font-mono h-20 resize-y"
+        className="border border-gray-300 dark:border-gray-600 rounded px-1.5 py-1 w-full text-sm text-gray-800 dark:text-gray-200 font-mono h-20 resize-y"
         placeholder={'e.g. if({{Done}}, "✓", round({{Price}} * 1.1, 2))'}
         value={expression}
         onChange={(e) => setExpression(e.target.value)}
       />
-      <div className="text-[11px] text-gray-400 mt-1 leading-snug">
+      <div className="text-[11px] text-gray-400 dark:text-gray-500 mt-1 leading-snug">
         Reference properties as <code>{'{{Name}}'}</code> or <code>prop(&quot;Name&quot;)</code>.
         <div className="mt-0.5">
-          Properties: <span className="text-gray-500">{names.join(', ')}</span>
+          {t('db.formulaProperties')} <span className="text-gray-500 dark:text-gray-400">{names.join(', ')}</span>
         </div>
       </div>
       <div className="flex items-center justify-end gap-2 mt-2">
-        <button className="text-xs text-gray-400 hover:text-gray-700" onClick={onCancel}>
+        <button className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200" onClick={onCancel}>
           Cancel
         </button>
         <button
@@ -1970,17 +1981,18 @@ function BoardView({
   onAddRow,
   onPatchRow,
 }: BoardViewProps) {
+  const { t } = useT();
   const groupable = properties.filter((p) => SELECT_TYPES.has(p.type));
   const groupBy = view.config.groupBy ?? groupable[0]?.id ?? '';
   const groupProp = properties.find((p) => p.id === groupBy);
 
   if (!groupProp) {
     return (
-      <div className="text-sm text-gray-500">
+      <div className="text-sm text-gray-500 dark:text-gray-400">
         Board views need a select or status property to group by.{' '}
         {groupable.length > 0 ? (
           <select
-            className="border border-gray-300 rounded px-1 py-0.5 ml-1"
+            className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5 ml-1"
             value={groupBy}
             onChange={(e) => onSetGroupBy(e.target.value)}
           >
@@ -2014,10 +2026,10 @@ function BoardView({
 
   return (
     <div>
-      <div className="mb-2 text-xs text-gray-500 flex items-center gap-1">
+      <div className="mb-2 text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1">
         Group by:
         <select
-          className="border border-gray-300 rounded px-1 py-0.5"
+          className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5"
           value={groupBy}
           onChange={(e) => onSetGroupBy(e.target.value)}
         >
@@ -2030,27 +2042,27 @@ function BoardView({
       </div>
       <div className="flex gap-3 overflow-x-auto pb-2">
         {columns.map((col) => (
-          <div key={col.id ?? '__none__'} className="w-64 shrink-0 bg-gray-50 rounded p-2">
-            <div className="text-xs font-medium text-gray-600 mb-2 px-1">
-              {col.label} <span className="text-gray-400">{rowsFor(col.id).length}</span>
+          <div key={col.id ?? '__none__'} className="w-64 shrink-0 bg-gray-50 dark:bg-gray-800 rounded p-2">
+            <div className="text-xs font-medium text-gray-600 dark:text-gray-300 mb-2 px-1">
+              {col.label} <span className="text-gray-400 dark:text-gray-500">{rowsFor(col.id).length}</span>
             </div>
             <div className="flex flex-col gap-2">
               {rowsFor(col.id).map((row) => (
-                <div key={row.id} className="bg-white border border-gray-200 rounded p-2 text-sm">
+                <div key={row.id} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded p-2 text-sm">
                   <a
                     href={`/p/${row.id}`}
-                    className="no-underline text-gray-900 hover:underline block truncate"
+                    className="no-underline text-gray-900 dark:text-gray-100 hover:underline block truncate"
                   >
                     {row.title || 'Untitled'}
                   </a>
                   {editable ? (
                     <select
-                      className="mt-1 text-xs text-gray-500 bg-transparent outline-none w-full"
+                      className="mt-1 text-xs text-gray-500 dark:text-gray-400 bg-transparent outline-none w-full"
                       value={(row.props[groupProp.id] as string) ?? ''}
                       onChange={(e) => onPatchRow(row.id, { props: { [groupProp.id]: e.target.value || null } })}
                       aria-label="Move card"
                     >
-                      <option value="">No {groupProp.name}</option>
+                      <option value="">{t('db.groupNoValue', { prop: groupProp.name })}</option>
                       {options.map((o) => (
                         <option key={o.id} value={o.id}>
                           {o.name}
@@ -2063,7 +2075,7 @@ function BoardView({
             </div>
             {editable ? (
               <button
-                className="mt-2 w-full text-left text-xs text-gray-400 hover:text-gray-700 px-1"
+                className="mt-2 w-full text-left text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200 px-1"
                 onClick={() => onAddRow(col.id ? { [groupProp.id]: col.id } : {})}
               >
                 ＋ card
@@ -2084,6 +2096,7 @@ interface PersonCellProps {
 }
 
 function PersonCell({ value, onChange }: PersonCellProps) {
+  const { t } = useT();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const [results, setResults] = useState<{ id: string; label: string }[]>([]);
@@ -2119,23 +2132,23 @@ function PersonCell({ value, onChange }: PersonCellProps) {
         aria-label="Person"
       >
         {display ? (
-          <span className="bg-gray-100 rounded px-1 text-xs">{display}</span>
+          <span className="bg-gray-100 dark:bg-gray-700 rounded px-1 text-xs">{display}</span>
         ) : (
-          <span className="text-gray-300">—</span>
+          <span className="text-gray-300 dark:text-gray-600">—</span>
         )}
       </button>
       {open ? (
-        <div className="absolute z-10 mt-1 bg-white border border-gray-200 rounded shadow p-1 min-w-[10rem]">
+        <div className="absolute z-10 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow p-1 min-w-[10rem]">
           <input
             autoFocus
-            className="border border-gray-300 rounded px-1 py-0.5 w-full text-xs mb-1"
+            className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5 w-full text-xs mb-1"
             placeholder="Search people…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />
           {value ? (
             <button
-              className="block w-full text-left text-xs px-1 py-0.5 text-gray-400 hover:bg-gray-50"
+              className="block w-full text-left text-xs px-1 py-0.5 text-gray-400 dark:text-gray-500 hover:bg-gray-50 dark:hover:bg-gray-700"
               onClick={() => {
                 setLabel(null);
                 onChange(null);
@@ -2148,14 +2161,14 @@ function PersonCell({ value, onChange }: PersonCellProps) {
           {results.map((r) => (
             <button
               key={r.id}
-              className="block w-full text-left text-xs px-1 py-0.5 hover:bg-gray-50"
+              className="block w-full text-left text-xs px-1 py-0.5 hover:bg-gray-50 dark:hover:bg-gray-700"
               onClick={() => pick(r.id, r.label)}
             >
               {r.label}
             </button>
           ))}
           {results.length === 0 ? (
-            <div className="text-xs text-gray-400 px-1 py-0.5">No matches</div>
+            <div className="text-xs text-gray-400 dark:text-gray-500 px-1 py-0.5">{t('db.noMatches')}</div>
           ) : null}
         </div>
       ) : null}
@@ -2201,7 +2214,7 @@ function FilesCell({ value, onChange }: FilesCellProps) {
         <span key={`${f.url}-${i}`} className="inline-flex items-center gap-1">
           {isImage(f.url) ? (
             <a href={f.url} target="_blank" rel="noreferrer">
-              <img src={f.url} alt={f.name} className="h-6 w-6 object-cover rounded border border-gray-200" />
+              <img src={f.url} alt={f.name} className="h-6 w-6 object-cover rounded border border-gray-200 dark:border-gray-700" />
             </a>
           ) : (
             <a href={f.url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline">
@@ -2209,7 +2222,7 @@ function FilesCell({ value, onChange }: FilesCellProps) {
             </a>
           )}
           <button
-            className="text-gray-300 hover:text-red-600 text-xs"
+            className="text-gray-300 dark:text-gray-600 hover:text-red-600 text-xs"
             onClick={() => onChange(value.filter((_, j) => j !== i))}
             aria-label="Remove file"
           >
@@ -2217,7 +2230,7 @@ function FilesCell({ value, onChange }: FilesCellProps) {
           </button>
         </span>
       ))}
-      <label className="text-xs text-gray-400 hover:text-gray-700 cursor-pointer">
+      <label className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200 cursor-pointer">
         {busy ? '…' : '＋'}
         <input
           type="file"
@@ -2239,19 +2252,20 @@ interface ListViewProps {
 }
 
 function ListView({ properties, rows }: ListViewProps) {
+  const { t } = useT();
   // Show up to two inline props next to each row's title (skip files for brevity).
   const inlineProps = properties.filter((p) => !FILE_TYPES.has(p.type)).slice(0, 2);
-  if (rows.length === 0) return <div className="text-sm text-gray-400 py-4">No rows.</div>;
+  if (rows.length === 0) return <div className="text-sm text-gray-400 dark:text-gray-500 py-4">{t('db.noRows')}</div>;
   return (
-    <div className="divide-y divide-gray-100 border-t border-gray-100">
+    <div className="divide-y divide-gray-100 dark:divide-gray-700 border-t border-gray-100 dark:border-gray-700">
       {rows.map((row) => (
         <a
           key={row.id}
           href={`/p/${row.id}`}
-          className="flex items-center gap-3 py-2 px-1 no-underline text-gray-900 hover:bg-gray-50"
+          className="flex items-center gap-3 py-2 px-1 no-underline text-gray-900 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-gray-700"
         >
           <span className="truncate font-medium">{row.title || 'Untitled'}</span>
-          <span className="flex items-center gap-3 text-xs text-gray-500 truncate">
+          <span className="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400 truncate">
             {inlineProps.map((p) => {
               const text = renderValueText(row, p);
               return text ? (
@@ -2277,14 +2291,15 @@ interface GalleryViewProps {
 }
 
 function GalleryView({ view, properties, rows, onSetCardProp }: GalleryViewProps) {
+  const { t } = useT();
   const cardPropId = view.config.cardPropId ?? properties[0]?.id ?? '';
   const cardProp = properties.find((p) => p.id === cardPropId);
   return (
     <div>
-      <div className="mb-2 text-xs text-gray-500 flex items-center gap-1">
+      <div className="mb-2 text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1">
         Card preview:
         <select
-          className="border border-gray-300 rounded px-1 py-0.5"
+          className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5"
           value={cardPropId}
           onChange={(e) => onSetCardProp(e.target.value)}
         >
@@ -2297,7 +2312,7 @@ function GalleryView({ view, properties, rows, onSetCardProp }: GalleryViewProps
         </select>
       </div>
       {rows.length === 0 ? (
-        <div className="text-sm text-gray-400 py-4">No rows.</div>
+        <div className="text-sm text-gray-400 dark:text-gray-500 py-4">{t('db.noRows')}</div>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
           {rows.map((row) => {
@@ -2307,16 +2322,16 @@ function GalleryView({ view, properties, rows, onSetCardProp }: GalleryViewProps
               <a
                 key={row.id}
                 href={`/p/${row.id}`}
-                className="block no-underline text-gray-900 border border-gray-200 rounded overflow-hidden hover:shadow"
+                className="block no-underline text-gray-900 dark:text-gray-100 border border-gray-200 dark:border-gray-700 rounded overflow-hidden hover:shadow"
               >
                 {img ? (
                   <img src={img} alt="" className="w-full h-28 object-cover" />
                 ) : (
-                  <div className="w-full h-28 bg-gray-50" />
+                  <div className="w-full h-28 bg-gray-50 dark:bg-gray-800" />
                 )}
                 <div className="p-2">
                   <div className="font-medium text-sm truncate">{row.title || 'Untitled'}</div>
-                  {preview ? <div className="text-xs text-gray-500 truncate">{preview}</div> : null}
+                  {preview ? <div className="text-xs text-gray-500 dark:text-gray-400 truncate">{preview}</div> : null}
                 </div>
               </a>
             );
@@ -2351,6 +2366,7 @@ interface CalendarViewProps {
 }
 
 function CalendarView({ view, properties, rows, onSetDateProp }: CalendarViewProps) {
+  const { t } = useT();
   const dateProps = properties.filter((p) => DATE_TYPES.has(p.type));
   const datePropId = view.config.datePropId ?? dateProps[0]?.id ?? '';
   const [cursor, setCursor] = useState(() => {
@@ -2389,11 +2405,11 @@ function CalendarView({ view, properties, rows, onSetDateProp }: CalendarViewPro
 
   return (
     <div>
-      <div className="mb-2 flex items-center justify-between text-xs text-gray-500">
+      <div className="mb-2 flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
         <div className="flex items-center gap-1">
           Date property:
           <select
-            className="border border-gray-300 rounded px-1 py-0.5"
+            className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5"
             value={datePropId}
             onChange={(e) => onSetDateProp(e.target.value)}
           >
@@ -2407,15 +2423,15 @@ function CalendarView({ view, properties, rows, onSetDateProp }: CalendarViewPro
         </div>
         <div className="flex items-center gap-2">
           <button
-            className="px-2 hover:text-gray-800"
+            className="px-2 hover:text-gray-800 dark:hover:text-gray-100"
             onClick={() => setCursor((c) => new Date(c.getFullYear(), c.getMonth() - 1, 1))}
             aria-label="Previous month"
           >
             ‹
           </button>
-          <span className="font-medium text-gray-700">{monthLabel}</span>
+          <span className="font-medium text-gray-700 dark:text-gray-300">{monthLabel}</span>
           <button
-            className="px-2 hover:text-gray-800"
+            className="px-2 hover:text-gray-800 dark:hover:text-gray-100"
             onClick={() => setCursor((c) => new Date(c.getFullYear(), c.getMonth() + 1, 1))}
             aria-label="Next month"
           >
@@ -2424,25 +2440,25 @@ function CalendarView({ view, properties, rows, onSetDateProp }: CalendarViewPro
         </div>
       </div>
       {!datePropId ? (
-        <div className="text-sm text-gray-500">Pick a date property to place rows on the calendar.</div>
+        <div className="text-sm text-gray-500 dark:text-gray-400">{t('db.pickDateCalendar')}</div>
       ) : (
-        <div className="grid grid-cols-7 gap-px bg-gray-200 border border-gray-200 text-xs">
+        <div className="grid grid-cols-7 gap-px bg-gray-200 dark:bg-gray-700 border border-gray-200 dark:border-gray-700 text-xs">
           {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
-            <div key={d} className="bg-gray-50 px-1 py-1 font-medium text-gray-500 text-center">
+            <div key={d} className="bg-gray-50 dark:bg-gray-800 px-1 py-1 font-medium text-gray-500 dark:text-gray-400 text-center">
               {d}
             </div>
           ))}
           {grid.map((cell, i) => (
-            <div key={i} className="bg-white min-h-[5rem] p-1 align-top">
+            <div key={i} className="bg-white dark:bg-gray-800 min-h-[5rem] p-1 align-top">
               {cell ? (
                 <>
-                  <div className="text-gray-400 text-[10px] mb-1">{cell.getDate()}</div>
+                  <div className="text-gray-400 dark:text-gray-500 text-[10px] mb-1">{cell.getDate()}</div>
                   <div className="flex flex-col gap-0.5">
                     {(byDay.get(ymd(cell)) ?? []).map((row) => (
                       <a
                         key={row.id}
                         href={`/p/${row.id}`}
-                        className="block truncate no-underline bg-gray-100 hover:bg-gray-200 rounded px-1 text-[11px] text-gray-800"
+                        className="block truncate no-underline bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 rounded px-1 text-[11px] text-gray-800 dark:text-gray-200"
                       >
                         {row.title || 'Untitled'}
                       </a>
@@ -2468,6 +2484,7 @@ interface TimelineViewProps {
 }
 
 function TimelineView({ view, properties, rows, onSetDateProp }: TimelineViewProps) {
+  const { t } = useT();
   const dateProps = properties.filter((p) => DATE_TYPES.has(p.type));
   const datePropId = view.config.datePropId ?? dateProps[0]?.id ?? '';
 
@@ -2496,10 +2513,10 @@ function TimelineView({ view, properties, rows, onSetDateProp }: TimelineViewPro
 
   return (
     <div>
-      <div className="mb-2 text-xs text-gray-500 flex items-center gap-1">
+      <div className="mb-2 text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1">
         Date property:
         <select
-          className="border border-gray-300 rounded px-1 py-0.5"
+          className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5"
           value={datePropId}
           onChange={(e) => onSetDateProp(e.target.value)}
         >
@@ -2512,9 +2529,9 @@ function TimelineView({ view, properties, rows, onSetDateProp }: TimelineViewPro
         </select>
       </div>
       {!datePropId ? (
-        <div className="text-sm text-gray-500">Pick a date property to plot rows on the timeline.</div>
+        <div className="text-sm text-gray-500 dark:text-gray-400">{t('db.pickDateTimeline')}</div>
       ) : !placed || !placed.start || placed.dated.length === 0 ? (
-        <div className="text-sm text-gray-400 py-4">No rows with a date.</div>
+        <div className="text-sm text-gray-400 dark:text-gray-500 py-4">{t('db.noRowsWithDate')}</div>
       ) : (
         <div className="overflow-x-auto pb-2">
           <div className="flex flex-col gap-1 min-w-max">
@@ -2525,7 +2542,7 @@ function TimelineView({ view, properties, rows, onSetDateProp }: TimelineViewPro
                   <div className="relative h-5" style={{ width: `${placed.days * 1.5}rem` }}>
                     <a
                       href={`/p/${row.id}`}
-                      className="absolute top-0 h-5 flex items-center bg-blue-100 hover:bg-blue-200 rounded px-2 no-underline text-gray-800 whitespace-nowrap"
+                      className="absolute top-0 h-5 flex items-center bg-blue-100 hover:bg-blue-200 rounded px-2 no-underline text-gray-800 dark:text-gray-200 whitespace-nowrap"
                       style={{ left: `${off * 1.5}rem` }}
                       title={`${row.title || 'Untitled'} — ${date.toLocaleDateString()}`}
                     >
@@ -2590,7 +2607,7 @@ function ActionListEditor({
   return (
     <div className="ae-action-list" data-testid="action-list">
       {actions.map((a, i) => (
-        <div key={i} className="border border-gray-200 rounded p-1.5 mb-1 text-xs" data-testid="action-row">
+        <div key={i} className="border border-gray-200 dark:border-gray-700 rounded p-1.5 mb-1 text-xs" data-testid="action-row">
           <div className="flex items-center justify-between mb-1">
             <span className="font-medium">{describeAction(a, t)}</span>
             <span className="flex gap-1">
@@ -2611,7 +2628,7 @@ function ActionListEditor({
                 ))}
               </select>
               <input
-                className="border border-gray-300 rounded px-1"
+                className="border border-gray-300 dark:border-gray-600 rounded px-1"
                 placeholder={t('automation.value')}
                 value={String((a.value as string) ?? '')}
                 onChange={(e) => patch(i, { value: e.target.value } as Partial<ButtonAction>)}
@@ -2620,7 +2637,7 @@ function ActionListEditor({
           ) : a.kind === 'send_notification' ? (
             <div className="flex flex-wrap gap-1 items-center">
               <input
-                className="border border-gray-300 rounded px-1"
+                className="border border-gray-300 dark:border-gray-600 rounded px-1"
                 placeholder={t('automation.recipients')}
                 value={(a.recipients ?? []).join(', ')}
                 onChange={(e) =>
@@ -2630,7 +2647,7 @@ function ActionListEditor({
                 }
               />
               <input
-                className="border border-gray-300 rounded px-1"
+                className="border border-gray-300 dark:border-gray-600 rounded px-1"
                 placeholder={t('automation.message')}
                 value={a.body ?? ''}
                 onChange={(e) => patch(i, { body: e.target.value } as Partial<ButtonAction>)}
@@ -2638,21 +2655,21 @@ function ActionListEditor({
             </div>
           ) : a.kind === 'send_webhook' ? (
             <input
-              className="border border-gray-300 rounded px-1 w-full"
+              className="border border-gray-300 dark:border-gray-600 rounded px-1 w-full"
               placeholder="https://…"
               value={a.url ?? ''}
               onChange={(e) => patch(i, { url: e.target.value } as Partial<ButtonAction>)}
             />
           ) : a.kind === 'add_page_to_db' ? (
             <input
-              className="border border-gray-300 rounded px-1"
+              className="border border-gray-300 dark:border-gray-600 rounded px-1"
               placeholder={t('automation.title')}
               value={a.title ?? ''}
               onChange={(e) => patch(i, { title: e.target.value } as Partial<ButtonAction>)}
             />
           ) : a.kind === 'show_confirm' ? (
             <input
-              className="border border-gray-300 rounded px-1 w-full"
+              className="border border-gray-300 dark:border-gray-600 rounded px-1 w-full"
               placeholder={t('automation.message')}
               value={a.message ?? ''}
               onChange={(e) => patch(i, { message: e.target.value } as Partial<ButtonAction>)}
@@ -2698,10 +2715,10 @@ function ButtonConfigPanel({
   // The DB id isn't available here directly; actions default their own
   // databaseId at run-time to the current row's DB on the server.
   return (
-    <div className="absolute z-20 mt-1 bg-white border border-gray-200 rounded shadow-lg p-2 w-80 text-left" data-testid="button-config-panel">
+    <div className="absolute z-20 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-lg p-2 w-80 text-left" data-testid="button-config-panel">
       <div className="flex gap-1 mb-2">
-        <input className="border border-gray-300 rounded px-1 w-12" placeholder={t('button.icon')} maxLength={4} value={icon} onChange={(e) => setIcon(e.target.value)} />
-        <input className="border border-gray-300 rounded px-1 flex-1" placeholder={t('button.label')} value={label} onChange={(e) => setLabel(e.target.value)} />
+        <input className="border border-gray-300 dark:border-gray-600 rounded px-1 w-12" placeholder={t('button.icon')} maxLength={4} value={icon} onChange={(e) => setIcon(e.target.value)} />
+        <input className="border border-gray-300 dark:border-gray-600 rounded px-1 flex-1" placeholder={t('button.label')} value={label} onChange={(e) => setLabel(e.target.value)} />
       </div>
       <ActionListEditor actions={actions} properties={properties} databaseId="" onChange={setActions} />
       <div className="flex justify-end gap-2 mt-2">
@@ -2810,17 +2827,17 @@ function AutomationsPanel({
   const editableProps = properties.filter((p) => !AUTO_PROPERTY_TYPES.has(p.type) && p.type !== 'button');
 
   return (
-    <div className="border border-gray-200 rounded p-3 mb-3 bg-gray-50" data-testid="automations-panel">
+    <div className="border border-gray-200 dark:border-gray-700 rounded p-3 mb-3 bg-gray-50 dark:bg-gray-800" data-testid="automations-panel">
       <div className="flex items-center justify-between mb-2">
         <h3 className="font-medium text-sm">⚡ {t('db.automations')}</h3>
         <button type="button" onClick={onClose}>✕</button>
       </div>
       {loading ? (
-        <div className="text-xs text-gray-400">…</div>
+        <div className="text-xs text-gray-400 dark:text-gray-500">…</div>
       ) : (
         <ul className="mb-3 space-y-1">
           {list.map((a) => (
-            <li key={a.id} className="flex items-center justify-between text-xs border border-gray-200 rounded px-2 py-1 bg-white" data-testid="automation-item">
+            <li key={a.id} className="flex items-center justify-between text-xs border border-gray-200 dark:border-gray-700 rounded px-2 py-1 bg-white dark:bg-gray-800" data-testid="automation-item">
               <span>
                 <strong>{t('automation.when')}</strong> {t(`trigger.${a.trigger.kind}`)} →{' '}
                 <strong>{t('automation.then')}</strong> {a.actions.length} {t('automation.action')}
@@ -2849,10 +2866,10 @@ function AutomationsPanel({
               </span>
             </li>
           ))}
-          {list.length === 0 ? <li className="text-xs text-gray-400">—</li> : null}
+          {list.length === 0 ? <li className="text-xs text-gray-400 dark:text-gray-500">—</li> : null}
         </ul>
       )}
-      <div className="border-t border-gray-200 pt-2">
+      <div className="border-t border-gray-200 dark:border-gray-700 pt-2">
         <div className="flex flex-wrap items-center gap-2 text-xs mb-2">
           <strong>{t('automation.when')}</strong>
           <select value={triggerKind} onChange={(e) => setTriggerKind(e.target.value as AutomationTrigger['kind'])} data-testid="trigger-kind">

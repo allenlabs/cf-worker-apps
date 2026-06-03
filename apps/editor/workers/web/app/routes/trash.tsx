@@ -112,19 +112,19 @@ function TrashPage() {
       <div className="flex-1 overflow-y-auto p-8">
         <div className="max-w-2xl mx-auto">
           <h1 className="text-xl font-semibold mb-1">{t('trash.title')}</h1>
-          <p className="text-sm text-gray-500 mb-6">{t('trash.body')}</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">{t('trash.body')}</p>
           {trash.length === 0 ? (
-            <p className="text-sm text-gray-400">{t('trash.empty')}</p>
+            <p className="text-sm text-gray-400 dark:text-gray-500">{t('trash.empty')}</p>
           ) : (
-            <ul className="divide-y divide-gray-100 border border-gray-200 rounded">
+            <ul className="divide-y divide-gray-100 dark:divide-gray-700 border border-gray-200 dark:border-gray-700 rounded">
               {trash.map((item) => (
                 <li key={item.id} className="flex items-center gap-2 px-3 py-2 text-sm">
                   <span className="shrink-0">{item.icon ?? '📄'}</span>
-                  <span className="flex-1 truncate text-gray-800">
+                  <span className="flex-1 truncate text-gray-800 dark:text-gray-200">
                     {item.title || t('sidebar.untitled')}
                   </span>
                   <button
-                    className="text-gray-600 hover:text-gray-900"
+                    className="text-gray-600 dark:text-gray-300 hover:text-gray-900"
                     onClick={() => void handleRestore(item.id)}
                     disabled={busy}
                   >

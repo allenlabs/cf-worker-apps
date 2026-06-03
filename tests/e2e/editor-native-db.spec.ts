@@ -117,12 +117,12 @@ test.describe('editor native_do database', () => {
       await waitForDatabaseView(page);
 
       // ----- add a text "Priority" property via the "＋ property" header -----
-      await page.getByRole('button', { name: /property/i }).click();
-      const propName = page.getByPlaceholder('Name');
+      await page.getByTestId('prop-add-open').click();
+      const propName = page.getByTestId('prop-add-name');
       await propName.waitFor({ state: 'visible', timeout: 10_000 });
       await propName.fill('Priority'); // default type is "text"
       // The ✓ confirm button submits the new property.
-      await page.getByRole('button', { name: '✓' }).click();
+      await page.getByTestId('prop-add-confirm').click();
       // The Priority column header appears once the DO persisted + schema reloaded.
       await expect(page.locator('th', { hasText: 'Priority' })).toBeVisible({ timeout: 15_000 });
 
@@ -149,13 +149,14 @@ test.describe('editor native_do database', () => {
       await expect.poll(() => visibleRowCount(page), { timeout: 15_000 }).toBe(2);
       // Open the Filter tab, add a condition, target the Priority property, and
       // filter to the marker — only the first row matches.
-      await page.getByRole('button', { name: /^Filter/ }).click();
-      await page.getByRole('button', { name: /Add filter/i }).first().click();
+      await page.getByRole('button', { name: 'Filter', exact: true }).click();
+      await page.getByTestId('filter-add').click();
       // The new condition row: property select → choose "Priority"; value input.
-      const propSelect = page.locator('select').filter({ hasText: 'Priority' }).last();
-      await propSelect.selectOption({ label: 'Priority' });
-      await page.getByPlaceholder('Value').fill(marker);
-      // The filter re-queries rows; only the marked row should remain.
+      const cond = page.getByTestId('filter-condition').last();
+      await cond.getByTestId('filter-prop').selectOption({ label: 'Priority' });
+      await cond.getByTestId('filter-value').fill(marker);
+      // The filter re-queries rows (native view-config update carries databaseId);
+      // only the marked row should remain.
       await expect.poll(() => visibleRowCount(page), { timeout: 15_000 }).toBe(1);
 
       // ----- delete the database through the app (drops DO data + container) -----

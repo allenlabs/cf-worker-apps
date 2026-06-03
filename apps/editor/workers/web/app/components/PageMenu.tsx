@@ -116,7 +116,7 @@ export function PageMenu({
   return (
     <div className="relative" ref={ref}>
       <button
-        className="px-2 py-1 rounded text-sm text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700"
+        className="px-2 py-1 rounded text-sm text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
         onClick={() => setOpen((v) => !v)}
         aria-label={t('page.moreActions')}
         aria-haspopup="menu"

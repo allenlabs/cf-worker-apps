@@ -206,13 +206,13 @@ export function EmojiPicker({ onPick, onRemove, onClose }: EmojiPickerProps) {
   return (
     <div
       ref={ref}
-      className="absolute left-0 top-12 z-30 w-72 bg-white border border-gray-200 rounded-lg shadow-lg p-2"
+      className="ae-pop-in absolute left-0 top-12 z-30 w-72 bg-white dark:bg-gray-800 dark:text-gray-100 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg p-2"
       data-testid="emoji-picker"
     >
       <div className="flex items-center gap-1 mb-2">
         <input
           autoFocus
-          className="flex-1 text-sm border border-gray-200 rounded px-2 py-1 outline-none focus:border-gray-400"
+          className="flex-1 text-sm border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 rounded px-2 py-1 outline-none focus:border-gray-400"
           placeholder={t('emoji.search')}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -220,7 +220,7 @@ export function EmojiPicker({ onPick, onRemove, onClose }: EmojiPickerProps) {
         />
         {onRemove ? (
           <button
-            className="text-xs px-2 py-1 border border-gray-200 rounded hover:bg-gray-100 whitespace-nowrap"
+            className="text-xs px-2 py-1 border border-gray-200 dark:border-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-700 whitespace-nowrap"
             onClick={onRemove}
             data-testid="emoji-remove"
           >
@@ -233,7 +233,7 @@ export function EmojiPicker({ onPick, onRemove, onClose }: EmojiPickerProps) {
           <button
             key={emoji}
             type="button"
-            className="text-xl rounded hover:bg-gray-100 aspect-square flex items-center justify-center"
+            className="text-xl rounded hover:bg-gray-100 dark:hover:bg-gray-700 aspect-square flex items-center justify-center"
             title={aliases[0]}
             onClick={() => onPick(emoji)}
           >
@@ -241,7 +241,7 @@ export function EmojiPicker({ onPick, onRemove, onClose }: EmojiPickerProps) {
           </button>
         ))}
         {results.length === 0 ? (
-          <p className="col-span-8 text-xs text-gray-400 py-3 text-center">{t('emoji.noResults')}</p>
+          <p className="col-span-8 text-xs text-gray-400 dark:text-gray-500 py-3 text-center">{t('emoji.noResults')}</p>
         ) : null}
       </div>
     </div>

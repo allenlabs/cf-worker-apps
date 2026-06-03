@@ -12,6 +12,7 @@ import { PageCover } from '~/components/PageCover';
 import { PageMenu } from '~/components/PageMenu';
 import { Backlinks } from '~/components/Backlinks';
 import { RemindersPanel } from '~/components/RemindersPanel';
+import { PageSkeleton } from '~/components/Skeleton';
 import {
   collabToken,
   createPage,
@@ -449,7 +450,11 @@ function PageView() {
 
   // A database page has no collab token (no editor); a normal page needs one.
   if (!page || (!isDatabase && !token)) {
-    return <div className="card p-8 text-gray-500">{t('page.loading')}</div>;
+    return (
+      <div className="card p-8" aria-label={t('page.loading')}>
+        <PageSkeleton />
+      </div>
+    );
   }
 
   return (
@@ -467,52 +472,57 @@ function PageView() {
         <div className={`${fullWidth ? 'max-w-5xl' : 'max-w-3xl'} mx-auto px-8 py-6`}>
           <div className="flex items-center justify-end gap-1 mb-2 relative">
             <button
-              className={`px-2 py-1 rounded text-sm hover:bg-gray-100 ${
-                favorited ? 'text-yellow-500' : 'text-gray-400'
+              className={`w-8 h-8 inline-flex items-center justify-center rounded text-sm transition-colors hover:bg-gray-100 dark:hover:bg-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-editor-500 dark:focus-visible:ring-editor-400 ${
+                favorited ? 'text-yellow-500' : 'text-gray-400 dark:text-gray-500'
               }`}
               onClick={() => void handleToggleFav()}
               title={favorited ? t('page.favoriteRemove') : t('page.favoriteAdd')}
               aria-label={t('page.toggleFavorite')}
+              aria-pressed={favorited}
             >
               {favorited ? '★' : '☆'}
             </button>
             <button
-              className="px-2 py-1 rounded text-sm text-gray-500 hover:bg-gray-100"
+              className="px-2 h-8 inline-flex items-center rounded text-sm text-gray-500 dark:text-gray-400 transition-colors hover:bg-gray-100 dark:hover:bg-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-editor-500 dark:focus-visible:ring-editor-400"
               onClick={() => setShareOpen((v) => !v)}
               aria-label={t('page.share')}
+              aria-pressed={shareOpen}
             >
               {t('page.share')}
             </button>
             <button
-              className={`px-2 py-1 rounded text-sm hover:bg-gray-100 ${
-                commentsOpen ? 'text-gray-900' : 'text-gray-500'
+              className={`w-8 h-8 inline-flex items-center justify-center rounded text-sm transition-colors hover:bg-gray-100 dark:hover:bg-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-editor-500 dark:focus-visible:ring-editor-400 ${
+                commentsOpen ? 'text-gray-900 dark:text-gray-100 bg-gray-100 dark:bg-gray-800' : 'text-gray-500 dark:text-gray-400'
               }`}
               onClick={() => setCommentsOpen((v) => !v)}
               title={t('page.comments')}
               aria-label={t('page.toggleComments')}
+              aria-pressed={commentsOpen}
             >
               💬
             </button>
             {isDatabase ? null : (
               <button
-                className={`px-2 py-1 rounded text-sm hover:bg-gray-100 ${
-                  historyOpen ? 'text-gray-900' : 'text-gray-500'
+                className={`px-2 h-8 inline-flex items-center rounded text-sm transition-colors hover:bg-gray-100 dark:hover:bg-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-editor-500 dark:focus-visible:ring-editor-400 ${
+                  historyOpen ? 'text-gray-900 dark:text-gray-100 bg-gray-100 dark:bg-gray-800' : 'text-gray-500 dark:text-gray-400'
                 }`}
                 onClick={() => setHistoryOpen((v) => !v)}
                 title={t('page.history')}
                 aria-label={t('page.toggleHistory')}
+                aria-pressed={historyOpen}
               >
                 {t('page.history')}
               </button>
             )}
 
             <button
-              className={`px-2 py-1 rounded text-sm hover:bg-gray-100 ${
-                remindersOpen ? 'text-gray-900' : 'text-gray-500'
+              className={`w-8 h-8 inline-flex items-center justify-center rounded text-sm transition-colors hover:bg-gray-100 dark:hover:bg-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-editor-500 dark:focus-visible:ring-editor-400 ${
+                remindersOpen ? 'text-gray-900 dark:text-gray-100 bg-gray-100 dark:bg-gray-800' : 'text-gray-500 dark:text-gray-400'
               }`}
               onClick={() => setRemindersOpen((v) => !v)}
               title={t('reminder.remindMe')}
               aria-label={t('reminder.remindMe')}
+              aria-pressed={remindersOpen}
               data-testid="reminders-toggle"
             >
               ⏰
@@ -539,12 +549,12 @@ function PageView() {
             />
 
             {shareOpen ? (
-              <div className="absolute right-0 top-9 z-20 w-80 bg-white border border-gray-200 rounded shadow-lg p-3 text-sm">
+              <div className="ae-pop-in absolute right-0 top-9 z-20 w-80 bg-white dark:bg-gray-800 dark:text-gray-100 border border-gray-200 dark:border-gray-700 rounded shadow-lg p-3 text-sm">
                 {/* Invite people (per-user sharing) */}
-                <p className="text-gray-800 font-medium mb-1.5">{t('share.invitePeople')}</p>
+                <p className="text-gray-800 dark:text-gray-200 font-medium mb-1.5">{t('share.invitePeople')}</p>
                 <div className="flex items-center gap-1 mb-1">
                   <input
-                    className="flex-1 text-xs border border-gray-200 rounded px-2 py-1 outline-none focus:border-gray-400"
+                    className="flex-1 text-xs border border-gray-200 dark:border-gray-700 rounded px-2 py-1 outline-none focus:border-gray-400"
                     placeholder={t('share.invitePlaceholder')}
                     value={inviteQuery}
                     onChange={(e) => setInviteQuery(e.target.value)}
@@ -557,7 +567,7 @@ function PageView() {
                     aria-label={t('share.invitePeople')}
                   />
                   <select
-                    className="text-xs border border-gray-200 rounded px-1 py-1 bg-white outline-none"
+                    className="text-xs border border-gray-200 dark:border-gray-700 rounded px-1 py-1 bg-white dark:bg-gray-800 outline-none"
                     value={inviteRole}
                     onChange={(e) => setInviteRole(e.target.value as ShareRole)}
                     aria-label={t('share.invitePeople')}
@@ -566,7 +576,7 @@ function PageView() {
                     <option value="edit">{t('share.roleEdit')}</option>
                   </select>
                   <button
-                    className="text-xs px-2 py-1 border border-gray-200 rounded hover:bg-gray-100 disabled:opacity-50"
+                    className="text-xs px-2 py-1 border border-gray-200 dark:border-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
                     onClick={() => void handleInvite()}
                     disabled={inviting || !inviteQuery.trim()}
                   >
@@ -579,14 +589,14 @@ function PageView() {
 
                 {shares.length > 0 ? (
                   <div className="mb-3">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mt-2 mb-1">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 mt-2 mb-1">
                       {t('share.peopleWithAccess')}
                     </p>
                     <ul className="space-y-1">
                       {shares.map((s) => (
                         <li key={s.userId} className="flex items-center gap-2 text-xs">
-                          <span className="flex-1 truncate text-gray-800">{s.name}</span>
-                          <span className="text-gray-400">
+                          <span className="flex-1 truncate text-gray-800 dark:text-gray-200">{s.name}</span>
+                          <span className="text-gray-400 dark:text-gray-500">
                             {s.role === 'edit' ? t('share.roleEdit') : t('share.roleView')}
                           </span>
                           <button
@@ -605,7 +615,7 @@ function PageView() {
                 {isOwner ? (
                   <div className="border-t border-gray-100 pt-2 mb-2">
                     <label className="flex items-center justify-between gap-2">
-                      <span className="text-gray-800">{t('share.restrict')}</span>
+                      <span className="text-gray-800 dark:text-gray-200">{t('share.restrict')}</span>
                       <input
                         type="checkbox"
                         checked={restricted}
@@ -613,7 +623,7 @@ function PageView() {
                         aria-label={t('share.restrict')}
                       />
                     </label>
-                    <p className="text-xs text-gray-400 mt-1">
+                    <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
                       {restricted ? t('share.restrictOn') : t('share.restrictOff')}
                     </p>
                   </div>
@@ -621,7 +631,7 @@ function PageView() {
 
                 <div className="border-t border-gray-100 pt-2">
                   <label className="flex items-center justify-between gap-2 mb-2">
-                    <span className="text-gray-800">{t('share.toWeb')}</span>
+                    <span className="text-gray-800 dark:text-gray-200">{t('share.toWeb')}</span>
                     <input
                       type="checkbox"
                       checked={isPublic}
@@ -631,16 +641,16 @@ function PageView() {
                   </label>
                   {isPublic ? (
                     <div className="space-y-2">
-                      <p className="text-xs text-gray-500">{t('share.anyoneCanView')}</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">{t('share.anyoneCanView')}</p>
                       <div className="flex items-center gap-1">
                         <input
                           readOnly
-                          className="flex-1 text-xs border border-gray-200 rounded px-2 py-1 bg-gray-50"
+                          className="flex-1 text-xs border border-gray-200 dark:border-gray-700 rounded px-2 py-1 bg-gray-50 dark:bg-gray-900"
                           value={shareUrl}
                           onFocus={(e) => e.currentTarget.select()}
                         />
                         <button
-                          className="text-xs px-2 py-1 border border-gray-200 rounded hover:bg-gray-100"
+                          className="text-xs px-2 py-1 border border-gray-200 dark:border-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
                           onClick={() => void handleCopyLink()}
                         >
                           {copied ? t('share.copied') : t('share.copy')}
@@ -648,7 +658,7 @@ function PageView() {
                       </div>
                     </div>
                   ) : (
-                    <p className="text-xs text-gray-400">{t('share.off')}</p>
+                    <p className="text-xs text-gray-400 dark:text-gray-500">{t('share.off')}</p>
                   )}
                 </div>
               </div>
@@ -656,17 +666,17 @@ function PageView() {
           </div>
 
           {ancestors.length > 0 ? (
-            <nav className="text-xs text-gray-400 mb-4 flex flex-wrap items-center gap-1">
+            <nav className="text-xs text-gray-400 dark:text-gray-500 mb-4 flex flex-wrap items-center gap-1">
               {ancestors.map((a) => (
                 <span key={a.id} className="flex items-center gap-1">
-                  <a href={`/p/${a.id}`} className="no-underline hover:text-gray-600 hover:underline">
+                  <a href={`/p/${a.id}`} className="no-underline hover:text-gray-600 dark:hover:text-gray-300 hover:underline">
                     {a.icon ? `${a.icon} ` : ''}
                     {a.title || t('page.untitled')}
                   </a>
                   <span>/</span>
                 </span>
               ))}
-              <span className="text-gray-500">{title || t('page.untitled')}</span>
+              <span className="text-gray-500 dark:text-gray-400">{title || t('page.untitled')}</span>
             </nav>
           ) : null}
 
@@ -703,14 +713,14 @@ function PageView() {
             <div className="relative">
               <button
                 type="button"
-                className="w-12 h-12 text-3xl flex items-center justify-center rounded hover:bg-gray-100 disabled:hover:bg-transparent"
+                className="w-12 h-12 text-3xl flex items-center justify-center rounded hover:bg-gray-100 dark:hover:bg-gray-700 disabled:hover:bg-transparent"
                 onClick={() => !readOnly && setIconPickerOpen((v) => !v)}
                 disabled={readOnly}
                 aria-label={icon ? t('icon.change') : t('icon.add')}
                 title={icon ? t('icon.change') : t('icon.add')}
                 data-testid="page-icon"
               >
-                {icon || (readOnly ? '' : <span className="text-base text-gray-300">＋</span>)}
+                {icon || (readOnly ? '' : <span className="text-base text-gray-300 dark:text-gray-600">＋</span>)}
               </button>
               {iconPickerOpen && !readOnly ? (
                 <EmojiPicker
@@ -815,12 +825,14 @@ function PageView() {
             />
             </div>
           ) : (
-            <div className="text-gray-400 text-sm">{t('page.loadingEditor')}</div>
+            <div aria-label={t('page.loadingEditor')}>
+              <PageSkeleton />
+            </div>
           )}
 
           {isDatabase || readOnly ? null : (
             <button
-              className="mt-6 text-sm text-gray-500 hover:text-gray-800"
+              className="mt-6 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-100"
               onClick={handleNewSub}
             >
               {t('page.addSubPage')}
@@ -858,11 +870,11 @@ function WikiDirectory({ entries, canEdit }: { entries: WikiEntry[]; canEdit: bo
   void canEdit;
   return (
     <section className="my-4" data-testid="wiki-directory">
-      <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">
+      <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-2">
         {t('wiki.title')}
       </h2>
       {entries.length === 0 ? (
-        <p className="text-sm text-gray-400">{t('wiki.empty')}</p>
+        <p className="text-sm text-gray-400 dark:text-gray-500">{t('wiki.empty')}</p>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
           {entries.map((e) => (
@@ -880,7 +892,7 @@ function WikiDirectory({ entries, canEdit }: { entries: WikiEntry[]; canEdit: bo
                   </span>
                 ) : null}
               </div>
-              <div className="text-xs text-gray-400 mt-1">
+              <div className="text-xs text-gray-400 dark:text-gray-500 mt-1">
                 {t('wiki.lastEdited')}: {new Date(e.updatedAt).toLocaleDateString()}
                 {e.verified && e.verifiedBy ? ` · ${t('wiki.verifiedBy', { who: e.verifiedBy })}` : ''}
               </div>

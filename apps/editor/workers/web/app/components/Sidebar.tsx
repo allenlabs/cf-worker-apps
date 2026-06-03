@@ -161,7 +161,7 @@ export function Sidebar({
   }
 
   return (
-    <aside className="w-64 shrink-0 bg-gray-50 dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 flex flex-col h-full text-gray-800 dark:text-gray-200">
+    <aside className="ae-sidebar w-64 shrink-0 bg-gray-50 dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 flex flex-col h-full text-gray-800 dark:text-gray-200">
       <div className="px-3 py-3 border-b border-gray-200 dark:border-gray-700">
         {workspaces.length > 1 ? (
           <select
@@ -176,20 +176,20 @@ export function Sidebar({
             ))}
           </select>
         ) : (
-          <span className="text-sm font-semibold text-gray-900">
+          <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">
             {current?.name ?? t('sidebar.workspace')}
           </span>
         )}
       </div>
 
-      <div className="px-2 py-2 border-b border-gray-200">
+      <div className="px-2 py-2 border-b border-gray-200 dark:border-gray-700">
         <SearchBox />
       </div>
 
       <nav className="flex-1 overflow-y-auto py-2">
         {favorites.length > 0 ? (
           <div className="mb-2">
-            <p className="px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+            <p className="px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
               {t('sidebar.favorites')}
             </p>
             <ul className="text-sm">
@@ -197,8 +197,8 @@ export function Sidebar({
                 <li key={f.pageId}>
                   <a
                     href={`/p/${f.pageId}`}
-                    className={`flex items-center gap-1 px-3 py-1 rounded no-underline text-gray-800 hover:bg-gray-100 ${
-                      f.pageId === activePageId ? 'bg-gray-200 font-medium' : ''
+                    className={`flex items-center gap-1 px-3 py-1 rounded no-underline text-gray-800 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 ${
+                      f.pageId === activePageId ? 'bg-gray-200 dark:bg-gray-700 font-medium' : ''
                     }`}
                   >
                     <span className="shrink-0">{f.icon ?? '★'}</span>
@@ -211,7 +211,7 @@ export function Sidebar({
         ) : null}
 
         {tree.length === 0 ? (
-          <p className="px-3 py-2 text-xs text-gray-400">{t('sidebar.noPages')}</p>
+          <p className="px-3 py-2 text-xs text-gray-400 dark:text-gray-500">{t('sidebar.noPages')}</p>
         ) : (
           groups.map((g) => (
             <TeamspaceSection
@@ -225,7 +225,7 @@ export function Sidebar({
 
         {sharedWithMe.length > 0 ? (
           <div className="mt-2">
-            <p className="px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+            <p className="px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
               {t('sidebar.sharedWithMe')}
             </p>
             <ul className="text-sm">
@@ -233,8 +233,8 @@ export function Sidebar({
                 <li key={s.id}>
                   <a
                     href={`/p/${s.id}`}
-                    className={`flex items-center gap-1 px-3 py-1 rounded no-underline text-gray-800 hover:bg-gray-100 ${
-                      s.id === activePageId ? 'bg-gray-200 font-medium' : ''
+                    className={`flex items-center gap-1 px-3 py-1 rounded no-underline text-gray-800 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 ${
+                      s.id === activePageId ? 'bg-gray-200 dark:bg-gray-700 font-medium' : ''
                     }`}
                   >
                     <span className="shrink-0">{s.icon ?? '📄'}</span>
@@ -247,9 +247,9 @@ export function Sidebar({
         ) : null}
       </nav>
 
-      <div className="px-2 py-2 border-t border-gray-200 space-y-0.5">
+      <div className="px-2 py-2 border-t border-gray-200 dark:border-gray-700 space-y-0.5">
         <button
-          className="w-full text-left px-2 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded"
+          className="w-full text-left px-2 py-1.5 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
           onClick={handleNewRoot}
           disabled={busy}
           data-testid="new-page"
@@ -257,7 +257,7 @@ export function Sidebar({
           {t('sidebar.newPage')}
         </button>
         <button
-          className="w-full text-left px-2 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded"
+          className="w-full text-left px-2 py-1.5 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
           onClick={handleNewDatabase}
           disabled={busy}
         >
@@ -265,10 +265,10 @@ export function Sidebar({
         </button>
         {/* Datasource Step 2 opt-in: storage backend for the NEXT new database.
             Default 'postgres' keeps the existing UX. */}
-        <label className="flex items-center gap-1 px-2 py-0.5 text-xs text-gray-500">
+        <label className="flex items-center gap-1 px-2 py-0.5 text-xs text-gray-500 dark:text-gray-400">
           <span className="shrink-0">{t('db.storage')}</span>
           <select
-            className="flex-1 min-w-0 bg-transparent outline-none cursor-pointer text-gray-600"
+            className="flex-1 min-w-0 bg-transparent outline-none cursor-pointer text-gray-600 dark:text-gray-300"
             value={dbBackend}
             onChange={(e) => setDbBackend(e.target.value as 'postgres' | 'native_do')}
             disabled={busy}
@@ -280,7 +280,7 @@ export function Sidebar({
           </select>
         </label>
         <button
-          className="w-full text-left px-2 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded"
+          className="w-full text-left px-2 py-1.5 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
           onClick={handleNewTeamspace}
           disabled={busy}
         >
@@ -288,7 +288,7 @@ export function Sidebar({
         </button>
         <a
           href={`/trash?ws=${workspaceId}`}
-          className="block px-2 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded no-underline"
+          className="block px-2 py-1.5 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded no-underline"
         >
           {t('sidebar.trash')}
         </a>
@@ -317,7 +317,7 @@ function TeamspaceSection({ group, workspaceId, activePageId }: TeamspaceSection
     <div className="mb-1">
       <div className="group flex items-center pr-2">
         <button
-          className="flex-1 flex items-center gap-1 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400 hover:text-gray-600"
+          className="flex-1 flex items-center gap-1 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
         >
@@ -326,7 +326,7 @@ function TeamspaceSection({ group, workspaceId, activePageId }: TeamspaceSection
         </button>
         {ts ? (
           <button
-            className="opacity-0 group-hover:opacity-100 text-[11px] text-gray-400 hover:text-gray-700"
+            className="opacity-0 group-hover:opacity-100 transition-opacity text-[11px] text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200"
             onClick={() => setMembersOpen((v) => !v)}
             aria-label={t('sidebar.teamspaceMembers')}
             title={t('sidebar.teamspaceMembers')}
@@ -340,7 +340,7 @@ function TeamspaceSection({ group, workspaceId, activePageId }: TeamspaceSection
       ) : null}
       {open ? (
         group.roots.length === 0 ? (
-          <p className="px-6 py-1 text-xs text-gray-300">{t('sidebar.noPages')}</p>
+          <p className="px-6 py-1 text-xs text-gray-300 dark:text-gray-600">{t('sidebar.noPages')}</p>
         ) : (
           <ul className="text-sm">
             {group.roots.map((node) => (
@@ -416,16 +416,16 @@ function TeamspaceMembersPanel({ teamspace, onClose }: TeamspaceMembersPanelProp
   }
 
   return (
-    <div className="mx-3 mb-2 p-2 bg-white border border-gray-200 rounded text-xs shadow-sm">
+    <div className="mx-3 mb-2 p-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded text-xs shadow-sm">
       <div className="flex items-center justify-between mb-1">
-        <span className="font-semibold text-gray-600">{t('sidebar.teamspaceMembers')}</span>
-        <button className="text-gray-400 hover:text-gray-700" onClick={onClose} aria-label={t('sidebar.collapse')}>
+        <span className="font-semibold text-gray-600 dark:text-gray-300">{t('sidebar.teamspaceMembers')}</span>
+        <button className="text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200" onClick={onClose} aria-label={t('sidebar.collapse')}>
           ✕
         </button>
       </div>
       <div className="flex items-center gap-1 mb-1">
         <input
-          className="flex-1 border border-gray-200 rounded px-1.5 py-1 outline-none focus:border-gray-400"
+          className="flex-1 border border-gray-200 dark:border-gray-700 rounded px-1.5 py-1 outline-none focus:border-gray-400"
           placeholder={t('share.invitePlaceholder')}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -438,7 +438,7 @@ function TeamspaceMembersPanel({ teamspace, onClose }: TeamspaceMembersPanelProp
           aria-label={t('sidebar.teamspaceMembers')}
         />
         <button
-          className="px-2 py-1 border border-gray-200 rounded hover:bg-gray-100 disabled:opacity-50"
+          className="px-2 py-1 border border-gray-200 dark:border-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
           onClick={() => void handleAdd()}
           disabled={busy || !query.trim()}
         >
@@ -447,12 +447,12 @@ function TeamspaceMembersPanel({ teamspace, onClose }: TeamspaceMembersPanelProp
       </div>
       {error ? <p className="text-red-600 mb-1">{error}</p> : null}
       {members.length === 0 ? (
-        <p className="text-gray-400">{t('sidebar.teamspaceOpen')}</p>
+        <p className="text-gray-400 dark:text-gray-500">{t('sidebar.teamspaceOpen')}</p>
       ) : (
         <ul className="space-y-1">
           {members.map((m) => (
             <li key={m.userId} className="flex items-center gap-2">
-              <span className="flex-1 truncate text-gray-800">{m.name}</span>
+              <span className="flex-1 truncate text-gray-800 dark:text-gray-200">{m.name}</span>
               <button
                 className="text-red-600 hover:text-red-800"
                 onClick={() => void handleRemove(m.userId)}
@@ -502,7 +502,7 @@ function SearchBox() {
   return (
     <div className="relative">
       <input
-        className="w-full text-sm bg-white border border-gray-200 rounded px-2 py-1 outline-none focus:border-gray-400"
+        className="w-full text-sm bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded px-2 py-1 outline-none focus:border-gray-400"
         placeholder={t('sidebar.searchPlaceholder')}
         value={q}
         onChange={(e) => setQ(e.target.value)}
@@ -513,16 +513,16 @@ function SearchBox() {
         aria-label={t('sidebar.searchAria')}
       />
       {open ? (
-        <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-gray-200 rounded shadow-md max-h-72 overflow-y-auto">
+        <div className="absolute z-10 left-0 right-0 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-md max-h-72 overflow-y-auto">
           {results.length === 0 ? (
-            <p className="px-3 py-2 text-xs text-gray-400">{t('sidebar.noResults')}</p>
+            <p className="px-3 py-2 text-xs text-gray-400 dark:text-gray-500">{t('sidebar.noResults')}</p>
           ) : (
             <ul className="text-sm">
               {results.map((r) => (
                 <li key={r.id}>
                   <a
                     href={`/p/${r.id}`}
-                    className="flex items-center gap-1 px-3 py-1.5 no-underline text-gray-800 hover:bg-gray-100"
+                    className="flex items-center gap-1 px-3 py-1.5 no-underline text-gray-800 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
                   >
                     <span className="shrink-0">{r.icon ?? '📄'}</span>
                     <span className="truncate">{r.title || t('sidebar.untitled')}</span>
@@ -569,13 +569,13 @@ function TreeRow({ node, depth, workspaceId, activePageId }: TreeRowProps) {
   return (
     <li>
       <div
-        className={`group flex items-center gap-1 pr-2 py-1 rounded cursor-pointer hover:bg-gray-100 ${
-          active ? 'bg-gray-200 font-medium' : ''
+        className={`group flex items-center gap-1 pr-2 py-1 rounded cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 ${
+          active ? 'bg-gray-200 dark:bg-gray-700 font-medium' : ''
         }`}
         style={{ paddingLeft: `${depth * 14 + 8}px` }}
       >
         <button
-          className="w-4 h-4 flex items-center justify-center text-gray-400 hover:text-gray-700"
+          className="w-4 h-4 flex items-center justify-center text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200"
           onClick={(e) => {
             e.stopPropagation();
             if (hasChildren) setOpen((v) => !v);
@@ -586,7 +586,7 @@ function TreeRow({ node, depth, workspaceId, activePageId }: TreeRowProps) {
         </button>
         <a
           href={`/p/${node.id}`}
-          className="flex-1 min-w-0 flex items-center gap-1 no-underline text-gray-800 truncate"
+          className="flex-1 min-w-0 flex items-center gap-1 no-underline text-gray-800 dark:text-gray-200 truncate"
         >
           <span className="shrink-0">
             {node.icon ?? (node.kind === 'database' ? '⊞' : '📄')}
@@ -594,7 +594,7 @@ function TreeRow({ node, depth, workspaceId, activePageId }: TreeRowProps) {
           <span className="truncate">{node.title || t('sidebar.untitled')}</span>
         </a>
         <button
-          className="opacity-0 group-hover:opacity-100 w-4 h-4 text-gray-400 hover:text-gray-700"
+          className="opacity-0 group-hover:opacity-100 transition-opacity w-4 h-4 text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200"
           onClick={handleAddSub}
           disabled={busy}
           aria-label={t('sidebar.addSubPage')}
