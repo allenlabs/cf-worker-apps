@@ -123,6 +123,66 @@ describe('native_do create flow (live DO via NativeDataSource)', () => {
     expect(persisted.map((r) => r.title)).toEqual(['keep-me', 'keep-too']);
   });
 
+  it('a filter over a PROPERTY cell value NARROWS to the matching row (prod over-filter guard)', async () => {
+    // Reproduces the EXACT prod E2E shape (the reported 2 → 0 over-filter):
+    //   1. create a native DB, add a text property "Priority";
+    //   2. add 2 rows; set row #1's Priority cell via the row-update path the
+    //      web uses (props keyed by the property id) to a marker;
+    //   3. persist a filterGroup referencing that property id + 'contains' +
+    //      the marker (exactly what the filter builder emits);
+    //   4. listRows(viewId) must NARROW to the single marked row.
+    const ds = nativeDataSource();
+    const id = dbId('prop-filter');
+    await ds.createDatabase({ id, title: 'Prop Filter DB', seedDefaults: true });
+
+    const seededView = (await ds.listViews(id)).find((v) => v.type === 'table')!;
+
+    // The UI adds a text property; its id is what `filter-prop` emits AND what
+    // the cell value is stored under (props[property.id]).
+    const priority = await ds.createProperty({ databaseId: id, name: 'Priority', type: 'text' });
+    expect(priority.id).toBeTruthy();
+
+    const r1 = await ds.createRow({ databaseId: id, ownerId: OWNER, title: 'Row 1' });
+    await ds.createRow({ databaseId: id, ownerId: OWNER, title: 'Row 2' });
+
+    // Set row #1's Priority cell exactly as the web does:
+    //   onPatchRow(row.id, { props: { [property.id]: value } })
+    const marker = 'keep-ab12';
+    await ds.updateRow({ rowId: r1.id, props: { [priority.id]: marker } });
+
+    // Persist the filter the FilterBuilder emits: filterGroup referencing the
+    // PROPERTY id (not 'title'), op 'contains', value = the marker.
+    const ok = await ds.updateView({
+      id: seededView.id,
+      config: {
+        filterGroup: {
+          conjunction: 'and',
+          conditions: [{ propId: priority.id, op: 'contains', value: marker }],
+        },
+        filters: [],
+      },
+    });
+    expect(ok).toBe(true);
+
+    // EXPECTED: exactly the one row whose Priority contains the marker (NOT 0).
+    // The prod over-filter symptom (2 → 0) would surface here if the stored
+    // props key diverged from the property id the filter condition references,
+    // or if the cell value round-tripped in a shape `contains` can't read.
+    const filtered = await ds.listRows({ databaseId: id, viewId: seededView.id });
+    expect(filtered.map((r) => r.title)).toEqual(['Row 1']);
+
+    // The marked row's value really is stored under the property id (the key
+    // the filter condition uses), so reload-render + filter agree.
+    const raw = await ds.listRows({ databaseId: id });
+    const markedRaw = raw.find((r) => r.id === r1.id)!;
+    expect(markedRaw.props[priority.id]).toBe(marker);
+
+    // Survives a fresh datasource (no in-process cache) — DO persistence path.
+    const fresh = nativeDataSource();
+    const persisted = await fresh.listRows({ databaseId: id, viewId: seededView.id });
+    expect(persisted.map((r) => r.title)).toEqual(['Row 1']);
+  });
+
   it('dropDatabase removes the DO data so an in-app delete leaves no orphans', async () => {
     const ds = nativeDataSource();
     const id = dbId('drop');
