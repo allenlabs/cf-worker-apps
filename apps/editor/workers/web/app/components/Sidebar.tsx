@@ -110,6 +110,9 @@ export function Sidebar({
   const tree = useMemo(() => buildTree(pages), [pages]);
   const groups = useMemo(() => groupByTeamspace(tree, teamspaces), [tree, teamspaces]);
   const [busy, setBusy] = useState(false);
+  // Datasource Step 2 opt-in: which storage backend a NEW database uses. Default
+  // stays Postgres so existing UX is unchanged unless the user picks Native.
+  const [dbBackend, setDbBackend] = useState<'postgres' | 'native_do'>('postgres');
 
   const current = workspaces.find((w) => w.id === workspaceId) ?? workspaces[0];
 
@@ -128,7 +131,9 @@ export function Sidebar({
     if (busy) return;
     setBusy(true);
     try {
-      const created = await dbCreate({ data: { workspaceId, title: 'Untitled database' } });
+      const created = await dbCreate({
+        data: { workspaceId, title: 'Untitled database', backend: dbBackend },
+      });
       // Full-page nav so SSR re-reads the cookie (established repo lesson).
       window.location.href = `/p/${created.id}`;
     } catch {
@@ -258,6 +263,22 @@ export function Sidebar({
         >
           {t('sidebar.newDatabase')}
         </button>
+        {/* Datasource Step 2 opt-in: storage backend for the NEXT new database.
+            Default 'postgres' keeps the existing UX. */}
+        <label className="flex items-center gap-1 px-2 py-0.5 text-xs text-gray-500">
+          <span className="shrink-0">{t('db.storage')}</span>
+          <select
+            className="flex-1 min-w-0 bg-transparent outline-none cursor-pointer text-gray-600"
+            value={dbBackend}
+            onChange={(e) => setDbBackend(e.target.value as 'postgres' | 'native_do')}
+            disabled={busy}
+            aria-label={t('db.storage')}
+            data-testid="db-storage-backend"
+          >
+            <option value="postgres">{t('db.storage.postgres')}</option>
+            <option value="native_do">{t('db.storage.native')}</option>
+          </select>
+        </label>
         <button
           className="w-full text-left px-2 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded"
           onClick={handleNewTeamspace}

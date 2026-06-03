@@ -8,7 +8,11 @@
 //     default path is byte-identical to before.
 
 import { describe, it, expect } from 'vitest';
-import { dbBackendImpl, createDatabaseImpl } from '@api/handlers/db';
+import {
+  dbBackendImpl,
+  createDatabaseImpl,
+  nativeDatabasesInSubtreeImpl,
+} from '@api/handlers/db';
 import type { Sql } from '@api/lib/db';
 
 interface Call {
@@ -93,5 +97,29 @@ describe('createDatabaseImpl backend branching', () => {
     // NO PG-side view/property seeding for native — the DO owns those.
     expect(calls.some((c) => c.text.includes('INSERT INTO editor.db_views'))).toBe(false);
     expect(calls.some((c) => c.text.includes('INSERT INTO editor.db_properties'))).toBe(false);
+  });
+});
+
+describe('nativeDatabasesInSubtreeImpl', () => {
+  it('returns native_do database containers found in the page subtree', async () => {
+    const { sql, calls } = fakeSql(() => [
+      { databaseId: 'd1', workspaceId: WS },
+      { databaseId: 'd2', workspaceId: WS },
+    ]);
+    const out = await nativeDatabasesInSubtreeImpl(sql, DB);
+    expect(out).toEqual([
+      { databaseId: 'd1', workspaceId: WS },
+      { databaseId: 'd2', workspaceId: WS },
+    ]);
+    // Recursive subtree walk filtered to kind='database' + native_do.
+    const q = calls[0]!.text;
+    expect(q).toContain('RECURSIVE subtree');
+    expect(q).toContain("kind = 'database'");
+    expect(q).toContain("db_backend = 'native_do'");
+  });
+
+  it('returns [] when the subtree has no native databases', async () => {
+    const { sql } = fakeSql(() => []);
+    expect(await nativeDatabasesInSubtreeImpl(sql, DB)).toEqual([]);
   });
 });

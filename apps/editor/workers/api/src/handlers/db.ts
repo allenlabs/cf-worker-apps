@@ -212,6 +212,36 @@ export async function dbBackendImpl(sql: Sql, databaseId: string): Promise<DbBac
   return { backend, workspaceId: row.workspaceId };
 }
 
+/**
+ * A native_do database container that lives in (or under) a page subtree, with
+ * its workspace — used to drop the DO-side rows/props/views when the page tree
+ * is archived or purged. Walks the page's descendant subtree (the page itself
+ * may be the database, or contain databases as children) and returns every
+ * kind='database' page whose db_backend='native_do'. Includes archived rows so
+ * a re-archive / purge still finds + cleans the DO data.
+ */
+export interface NativeDbInSubtree {
+  databaseId: string;
+  workspaceId: string;
+}
+export async function nativeDatabasesInSubtreeImpl(
+  sql: Sql,
+  rootId: string,
+): Promise<NativeDbInSubtree[]> {
+  const rows = await sql<{ databaseId: string; workspaceId: string }[]>`
+    WITH RECURSIVE subtree AS (
+      SELECT id, parent_id FROM editor.pages WHERE id = ${rootId}
+      UNION ALL
+      SELECT p.id, p.parent_id FROM editor.pages p JOIN subtree s ON p.parent_id = s.id
+    )
+    SELECT pg.id AS "databaseId", pg.workspace_id AS "workspaceId"
+    FROM editor.pages pg
+    JOIN subtree st ON st.id = pg.id
+    WHERE pg.kind = 'database' AND pg.db_backend = 'native_do'
+  `;
+  return rows.map((r) => ({ databaseId: r.databaseId, workspaceId: r.workspaceId }));
+}
+
 /** Resolve the database a row (page) belongs to (null when not a row). */
 export async function rowDatabaseImpl(sql: Sql, rowId: string): Promise<string | null> {
   const [row] = await sql<{ databaseId: string | null }[]>`

@@ -54,6 +54,13 @@ function fakeStub(state: {
       created.push({ id: input.id });
       return { id: input.id };
     },
+    async dropDatabase(id) {
+      const existed = Boolean(state.rows?.[id] || state.properties?.[id]);
+      delete state.rows?.[id];
+      delete state.properties?.[id];
+      delete state.views?.[id];
+      return existed;
+    },
     async listProperties(id) {
       return state.properties?.[id] ?? [];
     },
@@ -308,6 +315,20 @@ describe('NativeDataSource CRUD delegation', () => {
     const ds = new NativeDataSource(stub);
     await ds.createDatabase({ id: DB, title: 'New', seedDefaults: true });
     expect(stub.created).toEqual([{ id: DB }]);
+  });
+
+  it('dropDatabase delegates to the stub and reports prior existence', async () => {
+    const stub = fakeStub({
+      properties: { [DB]: [{ id: 'p', databaseId: DB, name: 'X', type: 'text', config: {}, position: 0 }] },
+      rows: { [DB]: [{ id: 'r', title: 'Row', props: {}, meta: meta(), subItemParentId: null }] },
+    });
+    const ds = new NativeDataSource(stub);
+    // First drop: the database existed → true; second drop: gone → false.
+    expect(await ds.dropDatabase(DB)).toBe(true);
+    expect(await ds.dropDatabase(DB)).toBe(false);
+    // After drop the rows/props are gone.
+    expect(await ds.listRows({ databaseId: DB })).toEqual([]);
+    expect(await ds.listProperties(DB)).toEqual([]);
   });
 });
 

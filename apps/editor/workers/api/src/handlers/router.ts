@@ -60,6 +60,7 @@ import {
   deleteTemplateImpl,
   listDatabasesImpl,
   listTemplatesImpl,
+  nativeDatabasesInSubtreeImpl,
   propertyDatabaseImpl,
   relatedRowsImpl,
   renameTemplateImpl,
@@ -205,6 +206,39 @@ async function dataSourceForLeaf(
     }
   }
   return null;
+}
+
+/**
+ * Datasource Step 2 cleanup — when a page (sub)tree is archived or purged, any
+ * native_do database CONTAINER inside it keeps its rows/properties/views in the
+ * per-workspace WorkspaceDB DO (the `editor.pages` delete does NOT reach the
+ * DO). Drop that DO-side data so deleting the container fully cleans up (and so
+ * the e2e `editor.pages` title-prefix cleanup leaves no orphaned DO rows).
+ *
+ * MUST run BEFORE the PG archive/purge mutation: `nativeDatabasesInSubtreeImpl`
+ * (and `dbBackendImpl`) read the live tree, so once the container is archived
+ * it would no longer resolve. Best-effort — a DO hiccup never blocks the page
+ * delete (the PG container is still removed; a stale DO is harmless + retryable).
+ */
+async function dropNativeDatabasesInSubtree(
+  c: Context<AppBindings>,
+  rootPageId: string,
+): Promise<void> {
+  let natives: { databaseId: string; workspaceId: string }[];
+  try {
+    natives = await nativeDatabasesInSubtreeImpl(c.get('db'), rootPageId);
+  } catch (e) {
+    console.error('[native-do] subtree lookup failed', e);
+    return;
+  }
+  for (const n of natives) {
+    try {
+      const ds = makeNativeDataSource(c.env, n.workspaceId);
+      await ds.dropDatabase(n.databaseId);
+    } catch (e) {
+      console.error('[native-do] dropDatabase failed', n.databaseId, e);
+    }
+  }
 }
 
 // ---------- workspaces ----------
@@ -382,6 +416,10 @@ v1Router.post('/pages/archive', async (c) => {
   if (!(await canEditPageImpl(c.get('db'), user.userId, parsed.data.id))) {
     return c.json({ error: 'forbidden' }, 403);
   }
+  // Drop any native_do database's DO-side data BEFORE the PG archive (the
+  // backend lookup needs the page non-archived). Postgres-backed DBs are
+  // unaffected — they have nothing in the DO.
+  await dropNativeDatabasesInSubtree(c, parsed.data.id);
   const ok = await archivePageImpl(c.get('db'), parsed.data.id);
   if (!ok) return c.json({ error: 'not found' }, 404);
   return c.json({ ok: true }, 200);
@@ -1235,6 +1273,10 @@ v1Router.post('/pages/purge', async (c) => {
   }
   const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.id);
   if (!can) return c.json({ error: 'not found' }, 404);
+  // Drop any native_do database's DO-side data before the hard delete. The
+  // subtree lookup is archived-agnostic, so it still finds containers that were
+  // archived into the trash before being purged.
+  await dropNativeDatabasesInSubtree(c, parsed.data.id);
   const ok = await purgePageImpl(c.get('db'), parsed.data.id);
   if (!ok) return c.json({ error: 'not found' }, 404);
   return c.json({ ok: true }, 200);

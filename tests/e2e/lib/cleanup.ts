@@ -176,6 +176,14 @@ export async function cleanup(opts: CleanupOptions = {}): Promise<DeleteResult[]
       // Editor pages: children / comments / versions cascade via FKs, so a
       // single delete on the root title prefix is sufficient. Schema may not
       // exist on every install; the "does not exist" guard below swallows it.
+      //
+      // NOTE (Datasource Step 2): a native_do database's rows/properties/views
+      // live in the per-workspace WorkspaceDB Durable Object, NOT in
+      // editor.pages — so this DELETE removes the lightweight PG container page
+      // but NOT the DO data. editor-native-db.spec deletes the database through
+      // the app (which calls the dropDatabase DO RPC), so the DO data is cleaned
+      // up by the spec itself; this row only mops up the container page if the
+      // spec aborted before its in-app delete (a stale DO is harmless + bounded).
       {
         table: 'editor.pages',
         sql: `DELETE FROM editor.pages WHERE title LIKE 'e2e-%'`,

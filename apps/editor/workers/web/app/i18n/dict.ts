@@ -64,6 +64,8 @@ const editor: Dict = {
     'pageMenu.export': 'Export',
     'pageMenu.exportMarkdown': 'Markdown (.md)',
     'pageMenu.exportHtml': 'HTML (.html)',
+    'pageMenu.delete': 'Delete',
+    'pageMenu.deleteConfirm': 'Move this page (and everything under it) to trash?',
 
     // ⌘K quick find (Phase 14)
     'cmdK.placeholder': 'Search everything or jump to an action…',
@@ -180,6 +182,11 @@ const editor: Dict = {
     'trash.deleteForever': 'Delete forever',
     'trash.purgeConfirm':
       'Permanently delete "{title}" and everything inside it? This cannot be undone.',
+
+    // Database storage backend (Datasource Step 2 opt-in)
+    'db.storage': 'Storage',
+    'db.storage.postgres': 'Postgres (default)',
+    'db.storage.native': 'Native (scalable)',
 
     // Database views
     'db.viewTable': 'Table',
@@ -418,6 +425,8 @@ const editor: Dict = {
     'pageMenu.export': '내보내기',
     'pageMenu.exportMarkdown': 'Markdown (.md)',
     'pageMenu.exportHtml': 'HTML (.html)',
+    'pageMenu.delete': '삭제',
+    'pageMenu.deleteConfirm': '이 페이지(및 하위 항목 전체)를 휴지통으로 옮길까요?',
 
     // ⌘K quick find (Phase 14)
     'cmdK.placeholder': '전체 검색 또는 작업으로 이동…',
@@ -534,6 +543,11 @@ const editor: Dict = {
     'trash.deleteForever': '영구 삭제',
     'trash.purgeConfirm':
       '"{title}"와(과) 그 안의 모든 항목을 영구히 삭제하시겠어요? 되돌릴 수 없습니다.',
+
+    // Database storage backend (Datasource Step 2 opt-in)
+    'db.storage': '저장소',
+    'db.storage.postgres': 'Postgres (기본)',
+    'db.storage.native': '네이티브 (확장형)',
 
     // Database views
     'db.viewTable': '테이블',

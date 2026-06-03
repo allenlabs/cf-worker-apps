@@ -591,7 +591,14 @@ export function uploadFileImpl(
 export function dbCreateImpl(
   env: ApiClientEnv,
   user: CurrentUser,
-  input: { workspaceId: string; parentId?: string | null; title?: string },
+  input: {
+    workspaceId: string;
+    parentId?: string | null;
+    title?: string;
+    // Datasource Step 2: opt into the per-workspace DO SQLite backend. Omitted
+    // / 'postgres' keeps the default behavior, so existing UX is unchanged.
+    backend?: 'postgres' | 'native_do';
+  },
   deps?: ApiClientDeps,
 ): Promise<{ id: string }> {
   return apiPostImpl<{ id: string }>(env, '/v1/db/create', userBody(user, input), deps);
@@ -618,7 +625,16 @@ export function propAddImpl(
 export function propUpdateImpl(
   env: ApiClientEnv,
   user: CurrentUser,
-  input: { id: string; name?: string; type?: PropertyType; config?: Record<string, unknown> },
+  // `databaseId` is the Datasource Step 2 native hint: required so a native_do
+  // property (whose id isn't in Postgres) routes to its workspace DO. Ignored on
+  // the PG path.
+  input: {
+    id: string;
+    name?: string;
+    type?: PropertyType;
+    config?: Record<string, unknown>;
+    databaseId?: string;
+  },
   deps?: ApiClientDeps,
 ): Promise<{ ok: boolean }> {
   return apiPostImpl<{ ok: boolean }>(env, '/v1/db/property/update', userBody(user, input), deps);
@@ -627,10 +643,10 @@ export function propUpdateImpl(
 export function propDeleteImpl(
   env: ApiClientEnv,
   user: CurrentUser,
-  id: string,
+  input: { id: string; databaseId?: string },
   deps?: ApiClientDeps,
 ): Promise<{ ok: boolean }> {
-  return apiPostImpl<{ ok: boolean }>(env, '/v1/db/property/delete', userBody(user, { id }), deps);
+  return apiPostImpl<{ ok: boolean }>(env, '/v1/db/property/delete', userBody(user, input), deps);
 }
 
 export function viewAddImpl(
@@ -651,7 +667,13 @@ export function viewAddImpl(
 export function viewUpdateImpl(
   env: ApiClientEnv,
   user: CurrentUser,
-  input: { id: string; name?: string; config?: Record<string, unknown>; sourceDatabaseId?: string | null },
+  input: {
+    id: string;
+    name?: string;
+    config?: Record<string, unknown>;
+    sourceDatabaseId?: string | null;
+    databaseId?: string;
+  },
   deps?: ApiClientDeps,
 ): Promise<{ ok: boolean }> {
   return apiPostImpl<{ ok: boolean }>(env, '/v1/db/view/update', userBody(user, input), deps);
@@ -660,10 +682,10 @@ export function viewUpdateImpl(
 export function viewDeleteImpl(
   env: ApiClientEnv,
   user: CurrentUser,
-  id: string,
+  input: { id: string; databaseId?: string },
   deps?: ApiClientDeps,
 ): Promise<{ ok: boolean }> {
-  return apiPostImpl<{ ok: boolean }>(env, '/v1/db/view/delete', userBody(user, { id }), deps);
+  return apiPostImpl<{ ok: boolean }>(env, '/v1/db/view/delete', userBody(user, input), deps);
 }
 
 export function dbRowsImpl(
@@ -767,7 +789,7 @@ export function wikiEntriesImpl(
 export function rowUpdateImpl(
   env: ApiClientEnv,
   user: CurrentUser,
-  input: { id: string; title?: string; props?: Record<string, unknown> },
+  input: { id: string; title?: string; props?: Record<string, unknown>; databaseId?: string },
   deps?: ApiClientDeps,
 ): Promise<{ ok: boolean }> {
   return apiPostImpl<{ ok: boolean }>(env, '/v1/db/row/update', userBody(user, input), deps);
@@ -776,10 +798,10 @@ export function rowUpdateImpl(
 export function rowDeleteImpl(
   env: ApiClientEnv,
   user: CurrentUser,
-  id: string,
+  input: { id: string; databaseId?: string },
   deps?: ApiClientDeps,
 ): Promise<{ ok: boolean }> {
-  return apiPostImpl<{ ok: boolean }>(env, '/v1/db/row/delete', userBody(user, { id }), deps);
+  return apiPostImpl<{ ok: boolean }>(env, '/v1/db/row/delete', userBody(user, input), deps);
 }
 
 // ---------- relation / rollup impls (Phase 6) ----------
@@ -1511,6 +1533,7 @@ export const dbCreate = createServerFn({ method: 'POST' })
         workspaceId: z.string().uuid(),
         parentId: z.string().uuid().nullish(),
         title: z.string().max(255).optional(),
+        backend: z.enum(['postgres', 'native_do']).optional(),
       })
       .parse(d),
   )
@@ -1520,6 +1543,7 @@ export const dbCreate = createServerFn({ method: 'POST' })
       workspaceId: data.workspaceId,
       parentId: data.parentId ?? null,
       title: data.title,
+      backend: data.backend,
     });
   });
 
@@ -1554,6 +1578,7 @@ export const propUpdate = createServerFn({ method: 'POST' })
         name: z.string().min(1).max(120).optional(),
         type: propertyTypeSchema.optional(),
         config: z.record(z.string(), z.unknown()).optional(),
+        databaseId: z.string().uuid().optional(),
       })
       .parse(d),
   )
@@ -1563,10 +1588,12 @@ export const propUpdate = createServerFn({ method: 'POST' })
   });
 
 export const propDelete = createServerFn({ method: 'POST' })
-  .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
+  .inputValidator((d: unknown) =>
+    z.object({ id: z.string().uuid(), databaseId: z.string().uuid().optional() }).parse(d),
+  )
   .handler(async ({ data }) => {
     const user = await requireUser();
-    return propDeleteImpl(getEnv(), user, data.id);
+    return propDeleteImpl(getEnv(), user, data);
   });
 
 export const viewAdd = createServerFn({ method: 'POST' })
@@ -1594,6 +1621,7 @@ export const viewUpdate = createServerFn({ method: 'POST' })
         name: z.string().max(120).optional(),
         config: z.record(z.string(), z.unknown()).optional(),
         sourceDatabaseId: z.string().uuid().nullish(),
+        databaseId: z.string().uuid().optional(),
       })
       .parse(d),
   )
@@ -1603,10 +1631,12 @@ export const viewUpdate = createServerFn({ method: 'POST' })
   });
 
 export const viewDelete = createServerFn({ method: 'POST' })
-  .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
+  .inputValidator((d: unknown) =>
+    z.object({ id: z.string().uuid(), databaseId: z.string().uuid().optional() }).parse(d),
+  )
   .handler(async ({ data }) => {
     const user = await requireUser();
-    return viewDeleteImpl(getEnv(), user, data.id);
+    return viewDeleteImpl(getEnv(), user, data);
   });
 
 export const dbRows = createServerFn({ method: 'GET' })
@@ -1711,6 +1741,7 @@ export const rowUpdate = createServerFn({ method: 'POST' })
         id: z.string().uuid(),
         title: z.string().max(255).optional(),
         props: z.record(z.string(), z.unknown()).optional(),
+        databaseId: z.string().uuid().optional(),
       })
       .parse(d),
   )
@@ -1720,10 +1751,12 @@ export const rowUpdate = createServerFn({ method: 'POST' })
   });
 
 export const rowDelete = createServerFn({ method: 'POST' })
-  .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
+  .inputValidator((d: unknown) =>
+    z.object({ id: z.string().uuid(), databaseId: z.string().uuid().optional() }).parse(d),
+  )
   .handler(async ({ data }) => {
     const user = await requireUser();
-    return rowDeleteImpl(getEnv(), user, data.id);
+    return rowDeleteImpl(getEnv(), user, data);
   });
 
 // ---------- relation / rollup wrappers (Phase 6) ----------

@@ -132,6 +132,24 @@ export class WorkspaceDB extends DurableObject<unknown> {
     return { id: input.id };
   }
 
+  /**
+   * Drop a native database entirely from this DO: its container metadata row,
+   * every property + view, and every row (incl. templates + archived rows).
+   * Used when the database's container page is archived/deleted on PG so the
+   * DO-side data is fully cleaned up too (otherwise it would leak, since DO
+   * rows are NOT covered by the `editor.pages` cleanup). Idempotent: dropping a
+   * database that doesn't exist is a no-op that returns false.
+   */
+  async dropDatabase(databaseId: string): Promise<boolean> {
+    this.ensureSchema();
+    const existed = await this.hasDatabase(databaseId);
+    this.ctx.storage.sql.exec(`DELETE FROM rows WHERE database_id = ?`, databaseId);
+    this.ctx.storage.sql.exec(`DELETE FROM properties WHERE database_id = ?`, databaseId);
+    this.ctx.storage.sql.exec(`DELETE FROM views WHERE database_id = ?`, databaseId);
+    this.ctx.storage.sql.exec(`DELETE FROM databases WHERE id = ?`, databaseId);
+    return existed;
+  }
+
   /** True iff a native database with this id exists in this DO. */
   async hasDatabase(databaseId: string): Promise<boolean> {
     this.ensureSchema();

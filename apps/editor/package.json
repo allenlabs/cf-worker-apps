@@ -22,7 +22,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "//test:coverage": "Coverage runs the node project only: @cloudflare/vitest-pool-workers can't load @vitest/coverage-v8 (it imports node:inspector/promises, unsupported in the workers runtime — see CF vitest known-issues). The workers integration test runs (uninstrumented) under `npm run test`.",
+    "test:coverage": "vitest run --coverage --project node"
   },
   "dependencies": {
     "@allenlabs/editor": "*",
@@ -40,6 +41,7 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.16.7",
     "@cloudflare/workers-types": "4.20260521.1",
     "@types/turndown": "^5.0.6",
     "@tailwindcss/vite": "^4.3.0",

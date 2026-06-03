@@ -341,7 +341,9 @@ export function DatabaseView({
       data: { databaseId: writeDbId, templateId: templateId ?? null },
     });
     if (initialProps && Object.keys(initialProps).length > 0) {
-      await rowUpdateFn({ data: { id: created.id, props: initialProps } });
+      // `databaseId` hint routes native_do rows (whose id isn't in PG) to the
+      // workspace DO; ignored on the PG path.
+      await rowUpdateFn({ data: { id: created.id, props: initialProps, databaseId: writeDbId } });
     }
     await refreshRows();
   }
@@ -370,7 +372,7 @@ export function DatabaseView({
   }
 
   async function handleRowPatch(id: string, patch: { title?: string; props?: Record<string, JsonValue> }) {
-    await rowUpdateFn({ data: { id, ...patch } });
+    await rowUpdateFn({ data: { id, ...patch, databaseId: writeDbId } });
     setRows((prev) =>
       prev.map((r) =>
         r.id === id
@@ -385,7 +387,7 @@ export function DatabaseView({
   }
 
   async function handleDeleteRow(id: string) {
-    await rowDeleteFn({ data: { id } });
+    await rowDeleteFn({ data: { id, databaseId: writeDbId } });
     setRows((prev) => prev.filter((r) => r.id !== id));
   }
 
@@ -410,19 +412,19 @@ export function DatabaseView({
     if (type === 'board') {
       const groupProp = next.properties.find((p) => SELECT_TYPES.has(p.type));
       if (groupProp) {
-        await viewUpdateFn({ data: { id: created.id, config: { groupBy: groupProp.id } } });
+        await viewUpdateFn({ data: { id: created.id, config: { groupBy: groupProp.id }, databaseId } });
         await refreshSchema();
       }
     } else if (type === 'calendar' || type === 'timeline') {
       const dateProp = next.properties.find((p) => DATE_TYPES.has(p.type));
       if (dateProp) {
-        await viewUpdateFn({ data: { id: created.id, config: { datePropId: dateProp.id } } });
+        await viewUpdateFn({ data: { id: created.id, config: { datePropId: dateProp.id }, databaseId } });
         await refreshSchema();
       }
     } else if (type === 'gallery') {
       const cardProp = next.properties[0];
       if (cardProp) {
-        await viewUpdateFn({ data: { id: created.id, config: { cardPropId: cardProp.id } } });
+        await viewUpdateFn({ data: { id: created.id, config: { cardPropId: cardProp.id }, databaseId } });
         await refreshSchema();
       }
     }
@@ -432,7 +434,7 @@ export function DatabaseView({
   /** Shallow-merge a config patch into the active view's stored config. */
   async function handleSetViewConfig(patch: Record<string, unknown>) {
     if (!activeView) return;
-    await viewUpdateFn({ data: { id: activeView.id, config: { ...activeView.config, ...patch } } });
+    await viewUpdateFn({ data: { id: activeView.id, config: { ...activeView.config, ...patch }, databaseId } });
     await refreshSchema();
     // Filters/sorts/group changes re-query the rows.
     await refreshRows();
@@ -445,14 +447,14 @@ export function DatabaseView({
       color: 'gray',
     };
     const options = [...(property.config.options ?? []), option];
-    await propAddOptionViaUpdate(property.id, options);
+    await propAddOptionViaUpdate(property.id, options, databaseId);
     await refreshSchema();
     return option;
   }
 
   async function handleSetGroupBy(propId: string) {
     if (!activeView) return;
-    await viewUpdateFn({ data: { id: activeView.id, config: { ...activeView.config, groupBy: propId } } });
+    await viewUpdateFn({ data: { id: activeView.id, config: { ...activeView.config, groupBy: propId }, databaseId } });
     await refreshSchema();
   }
 
@@ -1069,10 +1071,16 @@ function NewRowButton({
   );
 }
 
-/** Persist a new option list onto a select/status/multi_select property. */
-async function propAddOptionViaUpdate(propertyId: string, options: SelectOption[]) {
+/** Persist a new option list onto a select/status/multi_select property. The
+ *  `databaseId` hint routes a native_do property to its workspace DO; ignored
+ *  on the PG path. */
+async function propAddOptionViaUpdate(
+  propertyId: string,
+  options: SelectOption[],
+  databaseId: string,
+) {
   const { propUpdate } = await import('~/server/docs');
-  await propUpdate({ data: { id: propertyId, config: { options } } });
+  await propUpdate({ data: { id: propertyId, config: { options }, databaseId } });
 }
 
 // ---------- Table view ----------

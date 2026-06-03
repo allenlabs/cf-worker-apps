@@ -8,6 +8,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useT } from '@allenlabs/i18n/react';
 import {
+  archivePage as archivePageFn,
   duplicatePage as duplicatePageFn,
   movePage as movePageFn,
   search as searchFn,
@@ -80,6 +81,22 @@ export function PageMenu({
       if (typeof window !== 'undefined') window.location.href = `/p/${created.id}`;
     } catch {
       /* ignore */
+    }
+  }
+
+  async function handleDelete() {
+    setOpen(false);
+    // Archiving the container page (move to trash) also drops a native_do
+    // database's DO-side rows/properties/views on the API side, so the delete
+    // is a full cleanup. Confirm first since it removes the page + its subtree.
+    if (typeof window !== 'undefined' && !window.confirm(t('pageMenu.deleteConfirm'))) return;
+    try {
+      await archivePageFn({ data: { id: pageId } });
+      // Full-page nav home so SSR re-reads the cookie + the now-trashed page
+      // disappears from the tree (established repo lesson).
+      if (typeof window !== 'undefined') window.location.href = '/';
+    } catch {
+      /* ignore — leave the user on the page if the archive failed */
     }
   }
 
@@ -215,6 +232,16 @@ export function PageMenu({
               </button>
             </div>
           ) : null}
+          <div className="my-1 border-t border-gray-100 dark:border-gray-700" />
+          <button
+            className={`${itemCls} text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30`}
+            onClick={() => void handleDelete()}
+            role="menuitem"
+            disabled={!canEdit}
+            data-testid="page-menu-delete"
+          >
+            {t('pageMenu.delete')}
+          </button>
         </div>
       ) : null}
 

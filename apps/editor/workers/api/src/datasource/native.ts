@@ -58,6 +58,7 @@ export interface WorkspaceDBStub {
     icon?: string | null;
     seedDefaults?: boolean;
   }): Promise<{ id: string }>;
+  dropDatabase(databaseId: string): Promise<boolean>;
   listProperties(databaseId: string): Promise<DbProperty[]>;
   listViews(databaseId: string): Promise<DbView[]>;
   schema(databaseId: string): Promise<DbSchema | null>;
@@ -277,6 +278,15 @@ export class NativeDataSource implements DataSource {
 
   hasDatabase(databaseId: string): Promise<boolean> {
     return this.stub.hasDatabase(databaseId);
+  }
+
+  /**
+   * Drop a native database's DO-side data (rows/properties/views + container).
+   * Called when its PG container page is archived/purged so the DO is fully
+   * cleaned up (DO rows are NOT removed by the `editor.pages` cleanup path).
+   */
+  dropDatabase(databaseId: string): Promise<boolean> {
+    return this.stub.dropDatabase(databaseId);
   }
 
   rowDatabase(rowId: string): Promise<string | null> {
