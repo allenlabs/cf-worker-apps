@@ -2,7 +2,22 @@ export { CollaborativeEditor } from './CollaborativeEditor';
 export { SlashCommand } from './extensions/slash';
 export { makeMention } from './extensions/mention';
 export { Callout } from './extensions/callout';
+export { CodeBlock, makeLowlight } from './extensions/code-block';
+export {
+  CODE_LANGUAGES,
+  DEFAULT_CODE_LANGUAGE,
+  normalizeLanguage,
+  languageLabel,
+} from './lib/code-languages';
+export type { CodeLanguage } from './lib/code-languages';
 export { Toggle, ToggleSummary } from './extensions/toggle';
+export { Tabs, Tab } from './extensions/tabs';
+export {
+  clampActiveTab,
+  activeAfterRemove,
+  activeAfterAdd,
+  defaultTabTitle,
+} from './lib/tabs';
 export { Bookmark } from './extensions/bookmark';
 export { Columns, Column } from './extensions/columns';
 export { Comment, commentThreadIdAt } from './extensions/comment';

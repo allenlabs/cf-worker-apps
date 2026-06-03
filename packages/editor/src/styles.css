@@ -805,3 +805,168 @@
   gap: 0.3rem;
   flex-wrap: wrap;
 }
+
+/* ---------- Code block (CodeBlockLowlight) ---------- */
+.ae-code-block-wrap {
+  position: relative;
+  margin: 0.5rem 0;
+}
+.ae-code-chrome {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  background: #1e293b;
+  border-top-left-radius: 0.375rem;
+  border-top-right-radius: 0.375rem;
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid #334155;
+}
+.ae-code-lang {
+  font-size: 0.75rem;
+  background: #0f172a;
+  color: #e2e8f0;
+  border: 1px solid #334155;
+  border-radius: 0.25rem;
+  padding: 0.1rem 0.3rem;
+  cursor: pointer;
+}
+.ae-code-lang:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+.ae-code-copy {
+  font-size: 0.75rem;
+  color: #cbd5e1;
+  background: transparent;
+  border: 1px solid #334155;
+  border-radius: 0.25rem;
+  padding: 0.1rem 0.5rem;
+  cursor: pointer;
+}
+.ae-code-copy:hover {
+  background: #334155;
+}
+.ae-code-block-wrap > pre.ae-code-block {
+  margin: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+/* highlight.js token theme — self-contained (no extra CSS import). Tuned for the
+ * dark `pre` background the editor already uses, so it reads in both light + dark
+ * app chrome (the code block surface is always dark). */
+.ProseMirror pre code .hljs-comment,
+.ProseMirror pre code .hljs-quote {
+  color: #94a3b8;
+  font-style: italic;
+}
+.ProseMirror pre code .hljs-keyword,
+.ProseMirror pre code .hljs-selector-tag,
+.ProseMirror pre code .hljs-literal,
+.ProseMirror pre code .hljs-section,
+.ProseMirror pre code .hljs-doctag,
+.ProseMirror pre code .hljs-type,
+.ProseMirror pre code .hljs-name,
+.ProseMirror pre code .hljs-strong {
+  color: #c792ea;
+}
+.ProseMirror pre code .hljs-string,
+.ProseMirror pre code .hljs-regexp,
+.ProseMirror pre code .hljs-addition,
+.ProseMirror pre code .hljs-attribute,
+.ProseMirror pre code .hljs-meta .hljs-string {
+  color: #c3e88d;
+}
+.ProseMirror pre code .hljs-number,
+.ProseMirror pre code .hljs-symbol,
+.ProseMirror pre code .hljs-bullet,
+.ProseMirror pre code .hljs-link,
+.ProseMirror pre code .hljs-meta,
+.ProseMirror pre code .hljs-deletion,
+.ProseMirror pre code .hljs-template-variable,
+.ProseMirror pre code .hljs-variable {
+  color: #f78c6c;
+}
+.ProseMirror pre code .hljs-title,
+.ProseMirror pre code .hljs-attr,
+.ProseMirror pre code .hljs-function .hljs-title,
+.ProseMirror pre code .hljs-built_in,
+.ProseMirror pre code .hljs-builtin-name {
+  color: #82aaff;
+}
+.ProseMirror pre code .hljs-emphasis {
+  font-style: italic;
+}
+
+/* ---------- Tabs block ---------- */
+.ae-tabs {
+  border: 1px solid #e5e7eb;
+  border-radius: 0.375rem;
+  margin: 0.5rem 0;
+  overflow: hidden;
+}
+.ae-tabs-strip {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  flex-wrap: wrap;
+  background: #f8fafc;
+  border-bottom: 1px solid #e5e7eb;
+  padding: 0.25rem 0.35rem;
+}
+.ae-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  color: #475569;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 0.25rem;
+  padding: 0.15rem 0.5rem;
+  cursor: pointer;
+}
+.ae-tab-btn[data-active='true'] {
+  background: #fff;
+  color: #0f172a;
+  border-color: #e5e7eb;
+  font-weight: 500;
+}
+.ae-tab-remove {
+  color: #94a3b8;
+  cursor: pointer;
+  line-height: 1;
+}
+.ae-tab-remove:hover {
+  color: #ef4444;
+}
+.ae-tab-add {
+  font-size: 0.9rem;
+  color: #64748b;
+  background: transparent;
+  border: none;
+  border-radius: 0.25rem;
+  padding: 0.1rem 0.4rem;
+  cursor: pointer;
+}
+.ae-tab-add:hover {
+  background: #e2e8f0;
+}
+.ae-tabs-panes {
+  padding: 0.5rem 0.75rem;
+}
+/* Show only the active pane (data-active is the 0-based index). */
+.ae-tabs .ae-tabs-panes > .ae-tab {
+  display: none;
+}
+.ae-tabs[data-active='0'] .ae-tabs-panes > .ae-tab:nth-child(1),
+.ae-tabs[data-active='1'] .ae-tabs-panes > .ae-tab:nth-child(2),
+.ae-tabs[data-active='2'] .ae-tabs-panes > .ae-tab:nth-child(3),
+.ae-tabs[data-active='3'] .ae-tabs-panes > .ae-tab:nth-child(4),
+.ae-tabs[data-active='4'] .ae-tabs-panes > .ae-tab:nth-child(5),
+.ae-tabs[data-active='5'] .ae-tabs-panes > .ae-tab:nth-child(6),
+.ae-tabs[data-active='6'] .ae-tabs-panes > .ae-tab:nth-child(7),
+.ae-tabs[data-active='7'] .ae-tabs-panes > .ae-tab:nth-child(8) {
+  display: block;
+}

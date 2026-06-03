@@ -15,6 +15,7 @@ import {
   type SearchResult,
 } from '~/server/docs';
 import { exportPageHtml, exportPageMarkdown } from '~/lib/export';
+import { PAGE_FONTS, type PageFont } from '~/lib/typography';
 
 interface PageMenuProps {
   pageId: string;
@@ -22,6 +23,9 @@ interface PageMenuProps {
   snapshotHtml: string;
   fullWidth: boolean;
   locked: boolean;
+  /** Phase 18 — page font + small-text presentation. */
+  font: PageFont;
+  smallText: boolean;
   /** owner/editor may lock + change full width; viewers see read-only items only. */
   canEdit: boolean;
   /** Phase 15 — owner-only "Turn into wiki"; owner/editor "Verify". */
@@ -32,6 +36,8 @@ interface PageMenuProps {
   isDatabase: boolean;
   onToggleFullWidth: () => void;
   onToggleLocked: () => void;
+  onSetFont: (font: PageFont) => void;
+  onToggleSmallText: () => void;
   onToggleWiki: () => void;
   onToggleVerified: () => void;
 }
@@ -44,6 +50,8 @@ export function PageMenu({
   snapshotHtml,
   fullWidth,
   locked,
+  font,
+  smallText,
   canEdit,
   isOwner,
   isWiki,
@@ -51,6 +59,8 @@ export function PageMenu({
   isDatabase,
   onToggleFullWidth,
   onToggleLocked,
+  onSetFont,
+  onToggleSmallText,
   onToggleWiki,
   onToggleVerified,
 }: PageMenuProps) {
@@ -171,6 +181,45 @@ export function PageMenu({
           >
             {locked ? t('pageMenu.unlock') : t('pageMenu.lock')}
           </button>
+          {!isDatabase ? (
+            <div className="my-1 border-t border-gray-100 dark:border-gray-700" data-testid="page-menu-typography">
+              <p className="px-3 pt-1 pb-0.5 text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                {t('pageMenu.fontSection')}
+              </p>
+              <div className="flex items-center gap-1 px-3 py-1">
+                {PAGE_FONTS.map((f) => (
+                  <button
+                    key={f}
+                    type="button"
+                    className={`flex-1 text-xs px-2 py-1 rounded border ${
+                      font === f
+                        ? 'border-editor-500 bg-editor-50 dark:bg-editor-900/30 text-gray-900 dark:text-gray-100'
+                        : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300'
+                    } disabled:opacity-50 ${f === 'serif' ? 'font-serif' : f === 'mono' ? 'font-mono' : ''}`}
+                    onClick={() => onSetFont(f)}
+                    disabled={!canEdit}
+                    aria-pressed={font === f}
+                    data-testid={`page-menu-font-${f}`}
+                  >
+                    {t(`pageMenu.font.${f}`)}
+                  </button>
+                ))}
+              </div>
+              <button
+                className={`${itemCls} flex items-center justify-between`}
+                onClick={() => {
+                  onToggleSmallText();
+                  setOpen(false);
+                }}
+                role="menuitem"
+                disabled={!canEdit}
+                data-testid="page-menu-small-text"
+              >
+                <span>{t('pageMenu.smallText')}</span>
+                <span className="text-gray-400 dark:text-gray-500">{smallText ? '✓' : ''}</span>
+              </button>
+            </div>
+          ) : null}
           {!isDatabase ? (
             <>
               <button

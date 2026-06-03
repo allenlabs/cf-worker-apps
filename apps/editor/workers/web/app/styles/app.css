@@ -237,3 +237,42 @@
   .ae-pop-in { animation: none; }
 }
 
+/* ---------- Phase 18: per-page typography ----------
+   The page container gets ae-page-serif / ae-page-mono / ae-page-small from
+   pageTypographyClass(). Scope the font swap to the editor + title so chrome
+   (menus, sidebar) keeps the app font. */
+.ae-page-serif .ProseMirror,
+.ae-page-serif [data-testid='page-title'] {
+  font-family: ui-serif, Georgia, Cambria, 'Times New Roman', Times, serif;
+}
+.ae-page-mono .ProseMirror,
+.ae-page-mono [data-testid='page-title'] {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+}
+.ae-page-small .ProseMirror {
+  font-size: 0.875rem;
+}
+
+/* ---------- Phase 18: code-block + tabs chrome (dark overrides) ----------
+   The @allenlabs/editor package ships the code block surface dark already (so
+   the hljs token theme reads in both light + dark app chrome); the tabs strip
+   is light, so mirror its surfaces under `.dark` for legibility. */
+.dark .ae-tabs {
+  border-color: #374151;
+}
+.dark .ae-tabs-strip {
+  background: #1f2937;
+  border-bottom-color: #374151;
+}
+.dark .ae-tab-btn {
+  color: #9ca3af;
+}
+.dark .ae-tab-btn[data-active='true'] {
+  background: #111827;
+  color: #f3f4f6;
+  border-color: #374151;
+}
+.dark .ae-tab-add:hover {
+  background: #374151;
+}
+

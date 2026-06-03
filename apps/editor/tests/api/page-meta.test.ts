@@ -28,6 +28,8 @@ const FULL_PAGE = (over: Partial<PageFull> = {}): PageFull => ({
   restricted: false,
   fullWidth: false,
   locked: false,
+  font: 'default',
+  smallText: false,
   isWiki: false,
   verified: false,
   verifiedBy: null,
@@ -59,6 +61,19 @@ describe('updatePageImpl — full_width', () => {
     const ok = await updatePageImpl(sql, 'p1', { fullWidth: true });
     expect(ok).toBe(true);
     expect(getAssign()).toEqual({ full_width: true });
+  });
+
+  it('includes font + small_text in the assignment (Phase 18)', async () => {
+    const { sql, getAssign } = fakeSql();
+    const ok = await updatePageImpl(sql, 'p1', { font: 'serif', smallText: true });
+    expect(ok).toBe(true);
+    expect(getAssign()).toEqual({ font: 'serif', small_text: true });
+  });
+
+  it('omits typography columns absent from the patch', async () => {
+    const { sql, getAssign } = fakeSql();
+    await updatePageImpl(sql, 'p1', { fullWidth: false });
+    expect(getAssign()).toEqual({ full_width: false });
   });
 });
 

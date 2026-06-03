@@ -136,6 +136,14 @@ export const DEFAULT_SLASH_ITEMS: SlashItem[] = [
       editor.chain().focus().deleteRange(range).setColumns().run(),
   },
   {
+    title: 'Tabs',
+    icon: '🗂️',
+    hint: 'Tabbed sections',
+    keywords: ['tab', 'tabbed', 'panel', 'sections', 'switch'],
+    command: ({ editor, range }) =>
+      editor.chain().focus().deleteRange(range).setTabs().run(),
+  },
+  {
     title: 'Bookmark',
     icon: '🔖',
     hint: 'Link card from a URL',

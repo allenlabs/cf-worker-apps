@@ -13,6 +13,7 @@ import { PageMenu } from '~/components/PageMenu';
 import { Backlinks } from '~/components/Backlinks';
 import { RemindersPanel } from '~/components/RemindersPanel';
 import { PageSkeleton } from '~/components/Skeleton';
+import { isImageIcon, normalizeFont, pageTypographyClass, type PageFont } from '~/lib/typography';
 import {
   collabToken,
   createPage,
@@ -193,6 +194,9 @@ function PageView() {
   // Phase 14: per-page presentation + lock.
   const [fullWidth, setFullWidth] = useState(page?.fullWidth ?? false);
   const [locked, setLockedState] = useState(page?.locked ?? false);
+  // Phase 18: per-page typography (font + small text).
+  const [font, setFont] = useState<PageFont>(normalizeFont(page?.font));
+  const [smallText, setSmallText] = useState(page?.smallText ?? false);
   // Phase 15: wiki home + verified state.
   const [isWiki, setIsWiki] = useState(page?.isWiki ?? false);
   const [verified, setVerified] = useState(page?.verified ?? false);
@@ -330,6 +334,26 @@ function PageView() {
     }
   }
 
+  async function handleSetFont(next: PageFont) {
+    const prev = font;
+    setFont(next);
+    try {
+      await updatePage({ data: { id: pageId, font: next } });
+    } catch {
+      setFont(prev); // revert on failure
+    }
+  }
+
+  async function handleToggleSmallText() {
+    const next = !smallText;
+    setSmallText(next);
+    try {
+      await updatePage({ data: { id: pageId, smallText: next } });
+    } catch {
+      setSmallText(!next); // revert on failure
+    }
+  }
+
   async function handleToggleLocked() {
     const next = !locked;
     setLockedState(next);
@@ -428,6 +452,13 @@ function PageView() {
     void updatePage({ data: { id: pageId, icon: emoji } }).catch(() => {});
   }
 
+  // Set a custom uploaded/linked image (its URL) as the page icon.
+  function handlePickImageIcon(url: string) {
+    setIcon(url);
+    setIconPickerOpen(false);
+    void updatePage({ data: { id: pageId, icon: url } }).catch(() => {});
+  }
+
   function handleRemoveIcon() {
     setIcon('');
     setIconPickerOpen(false);
@@ -469,7 +500,10 @@ function PageView() {
         sharedWithMe={sharedWithMe}
       />
       <div className="flex-1 overflow-y-auto dark:bg-gray-900">
-        <div className={`${fullWidth ? 'max-w-5xl' : 'max-w-3xl'} mx-auto px-8 py-6`}>
+        <div
+          className={`${fullWidth ? 'max-w-5xl' : 'max-w-3xl'} mx-auto px-8 py-6 ${pageTypographyClass(font, smallText)}`}
+          data-testid="page-container"
+        >
           <div className="flex items-center justify-end gap-1 mb-2 relative">
             <button
               className={`w-8 h-8 inline-flex items-center justify-center rounded text-sm transition-colors hover:bg-gray-100 dark:hover:bg-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-editor-500 dark:focus-visible:ring-editor-400 ${
@@ -537,6 +571,8 @@ function PageView() {
               snapshotHtml={snapshotHtml}
               fullWidth={fullWidth}
               locked={locked}
+              font={font}
+              smallText={smallText}
               canEdit={canEdit}
               isOwner={isOwner}
               isWiki={isWiki}
@@ -544,6 +580,8 @@ function PageView() {
               isDatabase={isDatabase}
               onToggleFullWidth={() => void handleToggleFullWidth()}
               onToggleLocked={() => void handleToggleLocked()}
+              onSetFont={(f) => void handleSetFont(f)}
+              onToggleSmallText={() => void handleToggleSmallText()}
               onToggleWiki={() => void handleToggleWiki()}
               onToggleVerified={() => void handleToggleVerified()}
             />
@@ -720,13 +758,24 @@ function PageView() {
                 title={icon ? t('icon.change') : t('icon.add')}
                 data-testid="page-icon"
               >
-                {icon || (readOnly ? '' : <span className="text-base text-gray-300 dark:text-gray-600">＋</span>)}
+                {isImageIcon(icon) ? (
+                  <img
+                    src={icon}
+                    alt=""
+                    className="w-12 h-12 object-cover rounded"
+                    data-testid="page-icon-image"
+                  />
+                ) : (
+                  icon || (readOnly ? '' : <span className="text-base text-gray-300 dark:text-gray-600">＋</span>)
+                )}
               </button>
               {iconPickerOpen && !readOnly ? (
                 <EmojiPicker
                   onPick={handlePickIcon}
                   onRemove={handleRemoveIcon}
                   onClose={() => setIconPickerOpen(false)}
+                  onPickImage={handlePickImageIcon}
+                  uploadImage={uploadImageFile}
                 />
               ) : null}
             </div>

@@ -175,12 +175,46 @@ interface EmojiPickerProps {
   onRemove?: () => void;
   /** Dismiss the picker (outside click / Escape). */
   onClose: () => void;
+  /**
+   * Set a custom uploaded/linked image as the icon (its URL). When provided, an
+   * "Image" tab appears alongside emoji: upload a file (via {@link uploadImage})
+   * or paste an image URL. Omit (e.g. for reaction pickers) to show emoji only.
+   */
+  onPickImage?: (url: string) => void;
+  /** Upload an image file → resolve its public URL. Wired into the Image tab. */
+  uploadImage?: (file: File) => Promise<string>;
 }
 
-export function EmojiPicker({ onPick, onRemove, onClose }: EmojiPickerProps) {
+export function EmojiPicker({ onPick, onRemove, onClose, onPickImage, uploadImage }: EmojiPickerProps) {
   const { t } = useT();
   const ref = useRef<HTMLDivElement | null>(null);
   const [query, setQuery] = useState('');
+  // 'emoji' | 'image' — only meaningful when the Image tab is available.
+  const [tab, setTab] = useState<'emoji' | 'image'>('emoji');
+  const [imageUrl, setImageUrl] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState(false);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const showImageTab = Boolean(onPickImage);
+
+  async function handleFile(file: File) {
+    if (!uploadImage || !onPickImage) return;
+    setUploading(true);
+    setUploadError(false);
+    try {
+      const url = await uploadImage(file);
+      onPickImage(url);
+    } catch {
+      setUploadError(true);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function handleUrlSubmit() {
+    const url = imageUrl.trim();
+    if (url && onPickImage) onPickImage(url);
+  }
 
   useEffect(() => {
     function onDown(e: MouseEvent) {
@@ -209,41 +243,138 @@ export function EmojiPicker({ onPick, onRemove, onClose }: EmojiPickerProps) {
       className="ae-pop-in absolute left-0 top-12 z-30 w-72 bg-white dark:bg-gray-800 dark:text-gray-100 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg p-2"
       data-testid="emoji-picker"
     >
-      <div className="flex items-center gap-1 mb-2">
-        <input
-          autoFocus
-          className="flex-1 text-sm border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 rounded px-2 py-1 outline-none focus:border-gray-400"
-          placeholder={t('emoji.search')}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          aria-label={t('emoji.search')}
-        />
-        {onRemove ? (
+      {showImageTab ? (
+        <div className="flex items-center gap-1 mb-2 border-b border-gray-100 dark:border-gray-700 pb-1" role="tablist">
           <button
-            className="text-xs px-2 py-1 border border-gray-200 dark:border-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-700 whitespace-nowrap"
-            onClick={onRemove}
-            data-testid="emoji-remove"
-          >
-            {t('emoji.remove')}
-          </button>
-        ) : null}
-      </div>
-      <div className="grid grid-cols-8 gap-0.5 max-h-52 overflow-y-auto">
-        {results.map(([emoji, ...aliases]) => (
-          <button
-            key={emoji}
             type="button"
-            className="text-xl rounded hover:bg-gray-100 dark:hover:bg-gray-700 aspect-square flex items-center justify-center"
-            title={aliases[0]}
-            onClick={() => onPick(emoji)}
+            role="tab"
+            aria-selected={tab === 'emoji'}
+            className={`text-xs px-2 py-1 rounded ${
+              tab === 'emoji'
+                ? 'bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100 font-medium'
+                : 'text-gray-500 dark:text-gray-400'
+            }`}
+            onClick={() => setTab('emoji')}
+            data-testid="emoji-tab-emoji"
           >
-            {emoji}
+            {t('icon.tabEmoji')}
           </button>
-        ))}
-        {results.length === 0 ? (
-          <p className="col-span-8 text-xs text-gray-400 dark:text-gray-500 py-3 text-center">{t('emoji.noResults')}</p>
-        ) : null}
-      </div>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'image'}
+            className={`text-xs px-2 py-1 rounded ${
+              tab === 'image'
+                ? 'bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100 font-medium'
+                : 'text-gray-500 dark:text-gray-400'
+            }`}
+            onClick={() => setTab('image')}
+            data-testid="emoji-tab-image"
+          >
+            {t('icon.tabImage')}
+          </button>
+          {onRemove ? (
+            <button
+              className="ml-auto text-xs px-2 py-1 border border-gray-200 dark:border-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-700 whitespace-nowrap"
+              onClick={onRemove}
+              data-testid="emoji-remove"
+            >
+              {t('emoji.remove')}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      {showImageTab && tab === 'image' ? (
+        <div className="space-y-2" data-testid="emoji-image-tab">
+          <button
+            type="button"
+            className="w-full text-sm px-3 py-2 border border-dashed border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+            onClick={() => fileRef.current?.click()}
+            disabled={uploading || !uploadImage}
+            data-testid="emoji-upload"
+          >
+            {uploading ? t('icon.uploading') : t('icon.uploadImage')}
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void handleFile(file);
+              e.target.value = '';
+            }}
+            aria-label={t('icon.uploadImage')}
+          />
+          {uploadError ? (
+            <p className="text-xs text-red-600" data-testid="emoji-upload-error">{t('icon.uploadError')}</p>
+          ) : null}
+          <div className="flex items-center gap-1">
+            <input
+              className="flex-1 text-xs border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 rounded px-2 py-1 outline-none focus:border-gray-400"
+              placeholder={t('icon.imageUrlPlaceholder')}
+              value={imageUrl}
+              onChange={(e) => setImageUrl(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleUrlSubmit();
+                }
+              }}
+              aria-label={t('icon.imageUrlPlaceholder')}
+            />
+            <button
+              type="button"
+              className="text-xs px-2 py-1 border border-gray-200 dark:border-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
+              onClick={handleUrlSubmit}
+              disabled={!imageUrl.trim()}
+              data-testid="emoji-image-url-submit"
+            >
+              {t('icon.imageUrlApply')}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="flex items-center gap-1 mb-2">
+            <input
+              autoFocus
+              className="flex-1 text-sm border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 rounded px-2 py-1 outline-none focus:border-gray-400"
+              placeholder={t('emoji.search')}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              aria-label={t('emoji.search')}
+            />
+            {onRemove && !showImageTab ? (
+              <button
+                className="text-xs px-2 py-1 border border-gray-200 dark:border-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-700 whitespace-nowrap"
+                onClick={onRemove}
+                data-testid="emoji-remove"
+              >
+                {t('emoji.remove')}
+              </button>
+            ) : null}
+          </div>
+          <div className="grid grid-cols-8 gap-0.5 max-h-52 overflow-y-auto">
+            {results.map(([emoji, ...aliases]) => (
+              <button
+                key={emoji}
+                type="button"
+                className="text-xl rounded hover:bg-gray-100 dark:hover:bg-gray-700 aspect-square flex items-center justify-center"
+                title={aliases[0]}
+                onClick={() => onPick(emoji)}
+              >
+                {emoji}
+              </button>
+            ))}
+            {results.length === 0 ? (
+              <p className="col-span-8 text-xs text-gray-400 dark:text-gray-500 py-3 text-center">{t('emoji.noResults')}</p>
+            ) : null}
+          </div>
+        </>
+      )}
     </div>
   );
 }

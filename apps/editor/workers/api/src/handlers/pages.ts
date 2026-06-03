@@ -43,6 +43,8 @@ export interface PageFull {
   restricted: boolean; // Phase 10 — when true, only owner + explicit shares can access
   fullWidth: boolean; // Phase 14 — render the page container edge-to-edge
   locked: boolean; // Phase 14 — when true the page is read-only for everyone
+  font: string; // Phase 18 — page font: 'default' | 'serif' | 'mono'
+  smallText: boolean; // Phase 18 — render body text one notch smaller
   isWiki: boolean; // Phase 15 — page is a wiki home (lists its sub-pages)
   verified: boolean; // Phase 15 — page marked verified
   verifiedBy: string | null; // Phase 15 — actor email who verified
@@ -545,6 +547,7 @@ export async function getPageImpl(sql: Sql, id: string): Promise<PageFull | null
            title, icon, cover, snapshot_html AS "snapshotHtml",
            kind, database_id AS "databaseId", public, restricted,
            full_width AS "fullWidth", locked,
+           font, small_text AS "smallText",
            is_wiki AS "isWiki", verified,
            verified_by AS "verifiedBy", verified_at AS "verifiedAt"
     FROM editor.pages
@@ -561,6 +564,10 @@ export interface UpdatePageInput {
   snapshotHtml?: string;
   /** Phase 14 — toggle the edge-to-edge wide layout. */
   fullWidth?: boolean;
+  /** Phase 18 — page font: 'default' | 'serif' | 'mono'. */
+  font?: string;
+  /** Phase 18 — render body text one notch smaller. */
+  smallText?: boolean;
   /** Attribution for any version row captured when snapshot_html changes. */
   author?: { id: string | null; name: string | null };
 }
@@ -587,6 +594,8 @@ export async function updatePageImpl(
   if (patch.icon !== undefined) assign.icon = patch.icon;
   if (patch.cover !== undefined) assign.cover = patch.cover;
   if (typeof patch.fullWidth === 'boolean') assign.full_width = patch.fullWidth;
+  if (typeof patch.font === 'string') assign.font = patch.font;
+  if (typeof patch.smallText === 'boolean') assign.small_text = patch.smallText;
   if (typeof patch.snapshotHtml === 'string') {
     // Capture the previous snapshot as a version BEFORE overwriting it, but
     // only when the new html is genuinely different.

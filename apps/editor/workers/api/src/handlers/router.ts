@@ -341,6 +341,8 @@ const updatePageSchema = z.object({
   cover: z.string().max(2048).nullish(),
   snapshotHtml: z.string().optional(),
   fullWidth: z.boolean().optional(),
+  font: z.enum(['default', 'serif', 'mono']).optional(),
+  smallText: z.boolean().optional(),
 });
 v1Router.post('/pages/update', async (c) => {
   const user = c.get('user');
@@ -358,6 +360,8 @@ v1Router.post('/pages/update', async (c) => {
     cover: parsed.data.cover === undefined ? undefined : parsed.data.cover ?? null,
     snapshotHtml: parsed.data.snapshotHtml,
     fullWidth: parsed.data.fullWidth,
+    font: parsed.data.font,
+    smallText: parsed.data.smallText,
     author: { id: user.userId, name: user.userName },
   });
   if (!ok) return c.json({ error: 'not found' }, 404);

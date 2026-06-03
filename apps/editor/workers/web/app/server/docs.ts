@@ -71,6 +71,8 @@ export interface PageFull {
   restricted: boolean; // Phase 10 — only owner + invited people can access
   fullWidth: boolean; // Phase 14 — render the page container edge-to-edge
   locked: boolean; // Phase 14 — read-only for everyone when true
+  font: string; // Phase 18 — page font: 'default' | 'serif' | 'mono'
+  smallText: boolean; // Phase 18 — render body text one notch smaller
   isWiki: boolean; // Phase 15 — page is a wiki home (directory of sub-pages)
   verified: boolean; // Phase 15 — marked verified
   verifiedBy: string | null; // Phase 15 — who verified
@@ -528,6 +530,8 @@ export function updatePageImpl(
     cover?: string | null;
     snapshotHtml?: string;
     fullWidth?: boolean;
+    font?: 'default' | 'serif' | 'mono';
+    smallText?: boolean;
   },
   deps?: ApiClientDeps,
 ): Promise<{ ok: boolean }> {
@@ -1426,6 +1430,8 @@ export const updatePage = createServerFn({ method: 'POST' })
         cover: z.string().max(2048).nullish(),
         snapshotHtml: z.string().optional(),
         fullWidth: z.boolean().optional(),
+        font: z.enum(['default', 'serif', 'mono']).optional(),
+        smallText: z.boolean().optional(),
       })
       .parse(d),
   )
@@ -1438,6 +1444,8 @@ export const updatePage = createServerFn({ method: 'POST' })
       cover: data.cover === undefined ? undefined : data.cover ?? null,
       snapshotHtml: data.snapshotHtml,
       fullWidth: data.fullWidth,
+      font: data.font,
+      smallText: data.smallText,
     });
   });
 

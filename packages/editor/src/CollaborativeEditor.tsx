@@ -21,7 +21,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { SlashCommand } from './extensions/slash';
 import { makeMention } from './extensions/mention';
 import { Callout } from './extensions/callout';
+import { CodeBlock } from './extensions/code-block';
 import { Toggle, ToggleSummary } from './extensions/toggle';
+import { Tabs, Tab } from './extensions/tabs';
 import { Bookmark } from './extensions/bookmark';
 import { Columns, Column } from './extensions/columns';
 import { Comment, commentThreadIdAt } from './extensions/comment';
@@ -316,7 +318,11 @@ export function CollaborativeEditor(props: EditorProps) {
       StarterKit.configure({
         ...(collab ? { history: false } : {}),
         heading: { levels: [1, 2, 3] },
+        // Use our CodeBlockLowlight-based codeBlock (same node name/storage) for
+        // syntax highlighting + a language picker; disable StarterKit's plain one.
+        codeBlock: false,
       }),
+      CodeBlock,
       Placeholder.configure({
         placeholder: props.placeholder ?? 'Type "/" for commands, "@" to mention…',
       }),
@@ -343,6 +349,9 @@ export function CollaborativeEditor(props: EditorProps) {
       Bookmark,
       Columns,
       Column,
+      // Tabs: a container of tab children with a clickable strip + active tab.
+      Tabs,
+      Tab,
       // Phase 13: equations, embeds, media, TOC. All normal nodes → sync via
       // Yjs in collab mode. HeadingId gives headings stable ids for the TOC.
       InlineMath,
