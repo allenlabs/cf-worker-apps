@@ -717,3 +717,91 @@
   color: #9ca3af;
   font-style: italic;
 }
+
+/* ---------- Phase 17: button block ---------- */
+.ae-button-block {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin: 0.4rem 0;
+}
+.ae-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid #d9d9d6;
+  border-radius: 0.35rem;
+  background: #f7f7f5;
+  color: #37352f;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+.ae-button:hover:not(:disabled) {
+  background: #efefed;
+}
+.ae-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.ae-button-icon {
+  line-height: 1;
+}
+.ae-button-configure {
+  border: none;
+  background: transparent;
+  color: #9b9a97;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0.1rem 0.3rem;
+}
+.ae-button-configure:hover {
+  color: #37352f;
+}
+.ae-button-config {
+  width: 100%;
+  border: 1px solid #e9e9e7;
+  border-radius: 0.35rem;
+  padding: 0.5rem;
+  background: #fff;
+  font-size: 0.8rem;
+}
+.ae-button-config-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.35rem;
+}
+.ae-button-config-row input {
+  border: 1px solid #d9d9d6;
+  border-radius: 0.25rem;
+  padding: 0.15rem 0.35rem;
+  flex: 1;
+}
+.ae-button-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.2rem 0.35rem;
+  border: 1px solid #f0f0ee;
+  border-radius: 0.25rem;
+  margin-bottom: 0.2rem;
+}
+.ae-button-action-ctrls button,
+.ae-button-add button {
+  border: 1px solid #e0e0de;
+  background: #fafafa;
+  border-radius: 0.25rem;
+  padding: 0.1rem 0.4rem;
+  margin-left: 0.2rem;
+  cursor: pointer;
+}
+.ae-button-add {
+  margin-top: 0.35rem;
+  display: flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}

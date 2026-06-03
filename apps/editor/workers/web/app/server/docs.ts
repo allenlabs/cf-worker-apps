@@ -219,6 +219,7 @@ export type PropertyType =
   | 'relation'
   | 'rollup'
   | 'formula'
+  | 'button'
   | 'created_time'
   | 'created_by'
   | 'last_edited_time'
@@ -1017,6 +1018,89 @@ export function reactImpl(
   deps?: ApiClientDeps,
 ): Promise<{ added: boolean }> {
   return apiPostImpl<{ added: boolean }>(env, '/v1/comments/react', userBody(user, input), deps);
+}
+
+// ---------- automations + button actions (Phase 17) ----------
+
+export interface AutomationTrigger {
+  kind: 'page_added' | 'property_edited' | 'schedule';
+  propertyId?: string;
+  condition?: Record<string, JsonValue>;
+  every?: 'day' | 'week' | 'month';
+  at?: string;
+}
+
+export interface Automation {
+  id: string;
+  databaseId: string;
+  name: string | null;
+  enabled: boolean;
+  trigger: AutomationTrigger;
+  actions: JsonValue[];
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  createdAt: string;
+  createdBy: string | null;
+}
+
+export function automationsListImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  databaseId: string,
+  deps?: ApiClientDeps,
+): Promise<Automation[]> {
+  return apiPostImpl<Automation[]>(env, '/v1/automations/list', userBody(user, { databaseId }), deps);
+}
+
+export function automationCreateImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { databaseId: string; name?: string | null; trigger: AutomationTrigger; actions: JsonValue[] },
+  deps?: ApiClientDeps,
+): Promise<Automation> {
+  return apiPostImpl<Automation>(env, '/v1/automations/create', userBody(user, input), deps);
+}
+
+export function automationUpdateImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { id: string; name?: string | null; trigger?: AutomationTrigger; actions?: JsonValue[] },
+  deps?: ApiClientDeps,
+): Promise<{ ok: boolean }> {
+  return apiPostImpl<{ ok: boolean }>(env, '/v1/automations/update', userBody(user, input), deps);
+}
+
+export function automationSetEnabledImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { id: string; enabled: boolean },
+  deps?: ApiClientDeps,
+): Promise<{ ok: boolean }> {
+  return apiPostImpl<{ ok: boolean }>(env, '/v1/automations/set-enabled', userBody(user, input), deps);
+}
+
+export function automationDeleteImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  id: string,
+  deps?: ApiClientDeps,
+): Promise<{ ok: boolean }> {
+  return apiPostImpl<{ ok: boolean }>(env, '/v1/automations/delete', userBody(user, { id }), deps);
+}
+
+/** Run an action list server-side (button blocks data actions + button props). */
+export function runActionsImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { databaseId: string; rowId?: string | null; actions: JsonValue[] },
+  deps?: ApiClientDeps,
+): Promise<{ ran: number; skipped: number; errors: string[] }> {
+  return apiPostImpl<{ ran: number; skipped: number; errors: string[] }>(
+    env,
+    '/v1/automations/run-action',
+    userBody(user, input),
+    deps,
+  );
 }
 
 export function reactionsForCommentsImpl(
@@ -1987,6 +2071,86 @@ export const commentReactions = createServerFn({ method: 'GET' })
   .handler(async ({ data }) => {
     const user = await requireUser();
     return reactionsForCommentsImpl(getEnv(), user, data.commentIds);
+  });
+
+// Phase 17: automations + button-action runner.
+const triggerInput = z.object({
+  kind: z.enum(['page_added', 'property_edited', 'schedule']),
+  propertyId: z.string().optional(),
+  condition: z.record(z.string(), z.unknown()).optional(),
+  every: z.enum(['day', 'week', 'month']).optional(),
+  at: z.string().optional(),
+});
+const actionsInput = z.array(z.record(z.string(), z.unknown()));
+
+export const automationsList = createServerFn({ method: 'GET' })
+  .inputValidator((d: unknown) => z.object({ databaseId: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return automationsListImpl(getEnv(), user, data.databaseId);
+  });
+
+export const automationCreate = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        databaseId: z.string().uuid(),
+        name: z.string().max(120).nullish(),
+        trigger: triggerInput,
+        actions: actionsInput,
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return automationCreateImpl(getEnv(), user, data as never);
+  });
+
+export const automationUpdate = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        id: z.string().uuid(),
+        name: z.string().max(120).nullish(),
+        trigger: triggerInput.optional(),
+        actions: actionsInput.optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return automationUpdateImpl(getEnv(), user, data as never);
+  });
+
+export const automationSetEnabled = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z.object({ id: z.string().uuid(), enabled: z.boolean() }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return automationSetEnabledImpl(getEnv(), user, data);
+  });
+
+export const automationDelete = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return automationDeleteImpl(getEnv(), user, data.id);
+  });
+
+export const runActions = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        databaseId: z.string().uuid(),
+        rowId: z.string().uuid().nullish(),
+        actions: actionsInput,
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return runActionsImpl(getEnv(), user, data as never);
   });
 
 /* v8 ignore stop */

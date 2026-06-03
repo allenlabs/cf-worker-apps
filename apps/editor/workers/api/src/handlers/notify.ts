@@ -95,7 +95,7 @@ export async function backlinksImpl(sql: Sql, pageId: string): Promise<BacklinkI
 // B. Notification inbox
 // ---------------------------------------------------------------------------
 
-export type NotificationKind = 'mention' | 'comment' | 'reminder' | 'reaction';
+export type NotificationKind = 'mention' | 'comment' | 'reminder' | 'reaction' | 'automation';
 
 export interface NotificationItem {
   id: string;

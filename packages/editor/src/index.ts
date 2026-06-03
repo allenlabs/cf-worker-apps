@@ -15,6 +15,29 @@ export {
 export type { LinkedDatabaseOptions } from './extensions/linked-database';
 export { SyncedBlock, syncRoom } from './extensions/synced-block';
 export type { SyncedBlockConfig, SyncedBlockOptions } from './extensions/synced-block';
+export { Button, runButtonActions, blockTemplateToNodes } from './extensions/button';
+export type { ButtonOptions } from './extensions/button';
+export {
+  ACTION_KINDS,
+  CLIENT_ACTION_KINDS,
+  SERVER_ACTION_KINDS,
+  isClientAction,
+  describeAction,
+  parseAction,
+  parseActions,
+} from './lib/actions';
+export type {
+  ButtonAction,
+  ButtonActionKind,
+  BlockTemplate,
+  InsertBlocksAction,
+  AddPageToDbAction,
+  EditPagesAction,
+  OpenPageAction,
+  ShowConfirmAction,
+  SendNotificationAction,
+  SendWebhookAction,
+} from './lib/actions';
 export { InlineMath, MathBlock, INLINE_MATH_INPUT_REGEX } from './extensions/math';
 export { Embed } from './extensions/embed';
 export { Video, Audio, FileBlock, formatFileSize, fileNameFromUrl } from './extensions/media';

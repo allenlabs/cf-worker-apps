@@ -15,6 +15,7 @@ import { RemindersPanel } from '~/components/RemindersPanel';
 import {
   collabToken,
   createPage,
+  runActions as runActionsFn,
   dbList as dbListFn,
   dbSchema as dbSchemaFn,
   favList,
@@ -793,6 +794,18 @@ function PageView() {
                 window.location.href = `/p/${id}`;
               }}
               onPickLinkedDatabase={handlePickLinkedDatabase}
+              runButtonAction={async (action) => {
+                // Data actions (add_page_to_db / edit_pages) carry a target
+                // databaseId; run them server-side via the shared action runner.
+                const dbId = (action as { databaseId?: string }).databaseId;
+                if (!dbId) return;
+                await runActionsFn({
+                  data: {
+                    databaseId: dbId,
+                    actions: [action as unknown as Record<string, unknown>],
+                  },
+                });
+              }}
               comments={{
                 onCreate: handleCommentCreate,
                 onOpenThread: handleOpenThread,

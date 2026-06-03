@@ -31,6 +31,7 @@ import { BubbleToolbar } from './extensions/bubble-toolbar';
 import { DragHandle } from './extensions/block-menu';
 import { MarkdownRules } from './extensions/markdown-rules';
 import { SyncedBlock } from './extensions/synced-block';
+import { Button } from './extensions/button';
 import { InlineMath, MathBlock } from './extensions/math';
 import { Embed } from './extensions/embed';
 import { Video, Audio, FileBlock } from './extensions/media';
@@ -42,6 +43,7 @@ import {
   makeChildPageSlashItem,
   makeLinkedDatabaseSlashItem,
   makeSyncedBlockSlashItem,
+  makeButtonSlashItem,
 } from './lib/slash-items';
 import type { EditorProps, SlashItem } from './lib/types';
 // KaTeX stylesheet — equations render via katex.renderToString, which produces
@@ -194,6 +196,11 @@ export function CollaborativeEditor(props: EditorProps) {
   const onOpenPageRef = useRef<((pageId: string) => void) | null>(null);
   onOpenPageRef.current = props.onOpenPage ?? null;
 
+  // Button data-action runner, kept in a ref so the node's (config-time)
+  // handler always sees the latest callback without rebuilding the editor.
+  const runButtonActionRef = useRef<EditorProps['runButtonAction'] | null>(null);
+  runButtonActionRef.current = props.runButtonAction ?? null;
+
   // Slash items: clone the defaults and, when an uploader is wired, swap the
   // "Image" item's command for a hidden-file-input upload flow. When a
   // child-page creator is wired, append a "Page" item that creates + embeds a
@@ -278,6 +285,16 @@ export function CollaborativeEditor(props: EditorProps) {
         ),
       ];
     }
+    // Button block (Phase 17): offered when the host can run actions OR navigate.
+    if (props.runButtonAction || props.onOpenPage) {
+      const tr = props.blockMenuT;
+      items = [
+        ...items,
+        makeButtonSlashItem(
+          tr ? { title: tr('button.block'), hint: tr('button.blockHint') } : undefined,
+        ),
+      ];
+    }
     return items;
   }, [
     uploadImage,
@@ -285,6 +302,8 @@ export function CollaborativeEditor(props: EditorProps) {
     onCreateChildPage,
     props.onPickLinkedDatabase,
     props.syncedBlock,
+    props.runButtonAction,
+    props.onOpenPage,
     props.blockMenuT,
   ]);
 
@@ -382,6 +401,20 @@ export function CollaborativeEditor(props: EditorProps) {
         }),
       );
     }
+    // Button blocks (Phase 17): register when the host can run actions OR
+    // navigate, so existing button nodes render + run. Data actions delegate to
+    // the host's runButtonAction (read through a ref so it stays current);
+    // open_page routes through the same onOpenPage ref as child pages.
+    if (props.runButtonAction || props.onOpenPage) {
+      ext.push(
+        Button.configure({
+          editable: isEditable,
+          onOpenPage: (pageId: string) => onOpenPageRef.current?.(pageId),
+          runDataAction: (action) => runButtonActionRef.current?.(action) ?? Promise.resolve(),
+          t: props.blockMenuT,
+        }),
+      );
+    }
     if (props.mention) ext.push(makeMention(props.mention));
     // Drag handle + block action menu (Notion editing feel). Only when the
     // editor is editable + the consumer hasn't opted out — viewers never get it.
@@ -419,6 +452,7 @@ export function CollaborativeEditor(props: EditorProps) {
     !!props.onOpenPage,
     !!props.onPickLinkedDatabase,
     props.syncedBlock,
+    !!props.runButtonAction,
     props.breadcrumb,
   ]);
 

@@ -79,6 +79,17 @@ import {
   viewDatabaseImpl,
   viewSourceDatabaseImpl,
 } from './db';
+import {
+  automationDatabaseImpl,
+  createAutomationImpl,
+  deleteAutomationImpl,
+  listAutomationsImpl,
+  runActionsImpl,
+  runDatabaseTriggerImpl,
+  setEnabledImpl,
+  updateAutomationImpl,
+  type ActionDeps,
+} from './automations';
 import { prepareUpload, publicUrlFor } from './files';
 import {
   commentAddImpl,
@@ -123,6 +134,15 @@ import type { AppBindings } from '../context';
 export const v1Router = new Hono<AppBindings>();
 
 const idSchema = z.object({ id: z.string().uuid() });
+
+/**
+ * Deps for automation/button action execution. `send_webhook` uses the global
+ * fetch; the URL is SSRF-guarded inside the executor (isSafeWebhookUrl). Kept as
+ * a factory so tests can inject a fetcher when calling the impls directly.
+ */
+function defaultActionDeps(): ActionDeps {
+  return { fetcher: fetch };
+}
 
 // ---------- workspaces ----------
 
@@ -412,6 +432,8 @@ const propertyType = z.enum([
   'relation',
   'rollup',
   'formula',
+  // Phase 17: a per-row button column; config holds {label, icon, actions}.
+  'button',
   'created_time',
   'created_by',
   'last_edited_time',
@@ -693,6 +715,18 @@ v1Router.post('/db/row/add', async (c) => {
     templateId: parsed.data.templateId ?? null,
     subItemParentId: parsed.data.subItemParentId ?? null,
   });
+  // Phase 17: fire page_added automations. Best-effort — never block the add.
+  try {
+    await runDatabaseTriggerImpl(c.get('db'), defaultActionDeps(), {
+      databaseId: parsed.data.databaseId,
+      event: 'page_added',
+      rowId: row.id,
+      actorEmail: user.email,
+      actorId: user.userId,
+    });
+  } catch (e) {
+    console.error('[automations] page_added trigger failed', e);
+  }
   return c.json(row, 200);
 });
 
@@ -812,6 +846,28 @@ v1Router.post('/db/row/update', async (c) => {
     props: parsed.data.props,
   });
   if (!ok) return c.json({ error: 'not found' }, 404);
+  // Phase 17: fire property_edited automations for each changed prop.
+  // Best-effort — never block the update.
+  if (parsed.data.props) {
+    const dbId = await rowDatabaseImpl(c.get('db'), parsed.data.id);
+    if (dbId) {
+      for (const [propId, value] of Object.entries(parsed.data.props)) {
+        try {
+          await runDatabaseTriggerImpl(c.get('db'), defaultActionDeps(), {
+            databaseId: dbId,
+            event: 'property_edited',
+            rowId: parsed.data.id,
+            changedPropertyId: propId,
+            newValue: value,
+            actorEmail: user.email,
+            actorId: user.userId,
+          });
+        } catch (e) {
+          console.error('[automations] property_edited trigger failed', e);
+        }
+      }
+    }
+  }
   return c.json({ ok: true }, 200);
 });
 
@@ -830,6 +886,151 @@ v1Router.post('/db/row/delete', async (c) => {
   const ok = await deleteRowImpl(c.get('db'), parsed.data.id);
   if (!ok) return c.json({ error: 'not found' }, 404);
   return c.json({ ok: true }, 200);
+});
+
+// ---------- database automations + button actions (Phase 17) ----------
+//
+// Automations live in editor.db_automations, gated on canEdit of the database.
+// Button BLOCKS run their data actions through /automations/run-action; button
+// PROPERTIES run a config'd action list (with the row in scope) the same way.
+
+const triggerSchema = z.object({
+  kind: z.enum(['page_added', 'property_edited', 'schedule']),
+  propertyId: z.string().optional(),
+  condition: z.record(z.string(), z.unknown()).optional(),
+  every: z.enum(['day', 'week', 'month']).optional(),
+  at: z.string().optional(),
+});
+const actionsSchema = z.array(z.record(z.string(), z.unknown()));
+
+v1Router.post('/automations/list', async (c) => {
+  const user = c.get('user');
+  const parsed = z.object({ databaseId: z.string().uuid() }).safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  if (!(await canEditPageImpl(c.get('db'), user.userId, parsed.data.databaseId))) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+  const list = await listAutomationsImpl(c.get('db'), parsed.data.databaseId);
+  return c.json(list, 200);
+});
+
+v1Router.post('/automations/create', async (c) => {
+  const user = c.get('user');
+  const parsed = z
+    .object({
+      databaseId: z.string().uuid(),
+      name: z.string().max(120).nullish(),
+      trigger: triggerSchema,
+      actions: actionsSchema,
+    })
+    .safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  if (!(await canEditPageImpl(c.get('db'), user.userId, parsed.data.databaseId))) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+  const created = await createAutomationImpl(c.get('db'), {
+    databaseId: parsed.data.databaseId,
+    name: parsed.data.name ?? null,
+    trigger: parsed.data.trigger,
+    actions: parsed.data.actions,
+    createdBy: user.email,
+  });
+  return c.json(created, 200);
+});
+
+v1Router.post('/automations/update', async (c) => {
+  const user = c.get('user');
+  const parsed = z
+    .object({
+      id: z.string().uuid(),
+      name: z.string().max(120).nullish(),
+      trigger: triggerSchema.optional(),
+      actions: actionsSchema.optional(),
+    })
+    .safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const dbId = await automationDatabaseImpl(c.get('db'), parsed.data.id);
+  if (!dbId) return c.json({ error: 'not found' }, 404);
+  if (!(await canEditPageImpl(c.get('db'), user.userId, dbId))) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+  const ok = await updateAutomationImpl(c.get('db'), parsed.data.id, {
+    name: parsed.data.name === undefined ? undefined : parsed.data.name,
+    trigger: parsed.data.trigger,
+    actions: parsed.data.actions,
+  });
+  if (!ok) return c.json({ error: 'not found' }, 404);
+  return c.json({ ok: true }, 200);
+});
+
+v1Router.post('/automations/set-enabled', async (c) => {
+  const user = c.get('user');
+  const parsed = z.object({ id: z.string().uuid(), enabled: z.boolean() }).safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const dbId = await automationDatabaseImpl(c.get('db'), parsed.data.id);
+  if (!dbId) return c.json({ error: 'not found' }, 404);
+  if (!(await canEditPageImpl(c.get('db'), user.userId, dbId))) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+  const ok = await setEnabledImpl(c.get('db'), parsed.data.id, parsed.data.enabled);
+  if (!ok) return c.json({ error: 'not found' }, 404);
+  return c.json({ ok: true }, 200);
+});
+
+v1Router.post('/automations/delete', async (c) => {
+  const user = c.get('user');
+  const parsed = idSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const dbId = await automationDatabaseImpl(c.get('db'), parsed.data.id);
+  if (!dbId) return c.json({ error: 'not found' }, 404);
+  if (!(await canEditPageImpl(c.get('db'), user.userId, dbId))) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+  const ok = await deleteAutomationImpl(c.get('db'), parsed.data.id);
+  if (!ok) return c.json({ error: 'not found' }, 404);
+  return c.json({ ok: true }, 200);
+});
+
+// Run an action list directly: button BLOCKS (data actions only) + button
+// PROPERTIES (per-row). Gated on canEdit of the database.
+v1Router.post('/automations/run-action', async (c) => {
+  const user = c.get('user');
+  const parsed = z
+    .object({
+      databaseId: z.string().uuid(),
+      rowId: z.string().uuid().nullish(),
+      actions: actionsSchema,
+    })
+    .safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  if (!(await canEditPageImpl(c.get('db'), user.userId, parsed.data.databaseId))) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+  // If a row is named, it must belong to this database.
+  if (parsed.data.rowId) {
+    const rowDb = await rowDatabaseImpl(c.get('db'), parsed.data.rowId);
+    if (rowDb !== parsed.data.databaseId) return c.json({ error: 'not found' }, 404);
+  }
+  const result = await runActionsImpl(c.get('db'), defaultActionDeps(), {
+    databaseId: parsed.data.databaseId,
+    rowId: parsed.data.rowId ?? null,
+    actions: parsed.data.actions,
+    actorEmail: user.email,
+    actorId: user.userId,
+  });
+  return c.json(result, 200);
 });
 
 // ---------- favorites (Phase 4) ----------

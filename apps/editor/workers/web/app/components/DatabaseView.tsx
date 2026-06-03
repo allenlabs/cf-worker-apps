@@ -22,6 +22,12 @@ import {
   rowDelete as rowDeleteFn,
   rowSetSubItem as rowSetSubItemFn,
   rowUpdate as rowUpdateFn,
+  runActions as runActionsFn,
+  automationsList as automationsListFn,
+  automationCreate as automationCreateFn,
+  automationUpdate as automationUpdateFn,
+  automationSetEnabled as automationSetEnabledFn,
+  automationDelete as automationDeleteFn,
   searchMentions as searchMentionsFn,
   templatesList as templatesListFn,
   templateCreate as templateCreateFn,
@@ -44,7 +50,10 @@ import {
   type RelationChip,
   type SelectOption,
   type ViewType,
+  type Automation,
+  type AutomationTrigger,
 } from '~/server/docs';
+import { describeAction, type ButtonAction } from '@allenlabs/editor';
 
 const PROPERTY_TYPES: { value: PropertyType; label: string }[] = [
   { value: 'text', label: 'Text' },
@@ -62,6 +71,7 @@ const PROPERTY_TYPES: { value: PropertyType; label: string }[] = [
   { value: 'relation', label: 'Relation' },
   { value: 'rollup', label: 'Rollup' },
   { value: 'formula', label: 'Formula' },
+  { value: 'button', label: 'Button' },
   { value: 'created_time', label: 'Created time' },
   { value: 'created_by', label: 'Created by' },
   { value: 'last_edited_time', label: 'Last edited time' },
@@ -272,6 +282,7 @@ export function DatabaseView({
 }: DatabaseViewProps) {
   const { t } = useT();
   const [schema, setSchema] = useState<DbSchema>(initialSchema);
+  const [showAutomations, setShowAutomations] = useState(false);
   const [activeViewId, setActiveViewId] = useState<string>(
     initialSchema.views[0]?.id ?? '',
   );
@@ -492,7 +503,25 @@ export function DatabaseView({
             {t('db.linkedBadge')}
           </span>
         ) : null}
+        {editable && !activeView.sourceDatabaseId ? (
+          <button
+            className="ml-auto px-2 py-1 text-gray-400 hover:text-gray-700"
+            onClick={() => setShowAutomations((s) => !s)}
+            data-testid="automations-toggle"
+            title={t('db.automations')}
+          >
+            ⚡ {t('db.automations')}
+          </button>
+        ) : null}
       </div>
+
+      {editable && showAutomations && !activeView.sourceDatabaseId ? (
+        <AutomationsPanel
+          databaseId={databaseId}
+          properties={schema.properties}
+          onClose={() => setShowAutomations(false)}
+        />
+      ) : null}
 
       {/* Phase 15: filter / sort / group builder toolbar. */}
       {editable ? (
@@ -541,6 +570,7 @@ export function DatabaseView({
       ) : (
         <TableView
           workspaceId={workspaceId}
+          databaseId={writeDbId}
           view={activeView}
           properties={schema.properties}
           rows={rows}
@@ -1049,6 +1079,8 @@ async function propAddOptionViaUpdate(propertyId: string, options: SelectOption[
 
 interface TableViewProps {
   workspaceId: string;
+  /** The DB rows actually belong to (sourceDatabaseId for linked views). */
+  databaseId: string;
   view: DbView;
   properties: DbProperty[];
   rows: DbRow[];
@@ -1068,6 +1100,7 @@ interface TableViewProps {
 
 function TableView({
   workspaceId,
+  databaseId: writeDbId,
   view,
   properties,
   rows,
@@ -1099,9 +1132,12 @@ function TableView({
     setAddingProp(false);
   }
 
-  // relation/rollup/formula need extra config collected before the property is created.
+  // relation/rollup/formula/button need extra config collected before creation.
   const needsConfig =
-    newPropType === 'relation' || newPropType === 'rollup' || newPropType === 'formula';
+    newPropType === 'relation' ||
+    newPropType === 'rollup' ||
+    newPropType === 'formula' ||
+    newPropType === 'button';
 
   const subItemsEnabled = view.config.subItemsEnabled === true;
   const groupBy = view.config.groupBy ?? '';
@@ -1180,6 +1216,8 @@ function TableView({
               <span className="text-gray-700">{renderValueText(row, p) || '—'}</span>
             ) : p.type === 'formula' ? (
               <FormulaCell property={p} row={row} />
+            ) : p.type === 'button' ? (
+              <ButtonPropertyCell property={p} databaseId={writeDbId} rowId={row.id} />
             ) : AUTO_PROPERTY_TYPES.has(p.type) || p.type === 'rollup' ? (
               <span className="text-gray-500">{renderValueText(row, p) || '—'}</span>
             ) : p.type === 'relation' ? (
@@ -1293,6 +1331,12 @@ function TableView({
                     />
                   ) : newPropType === 'formula' ? (
                     <FormulaConfigPanel
+                      properties={properties}
+                      onCancel={() => setAddingProp(false)}
+                      onConfirm={(config) => submitNewProp(config)}
+                    />
+                  ) : newPropType === 'button' ? (
+                    <ButtonConfigPanel
                       properties={properties}
                       onCancel={() => setAddingProp(false)}
                       onConfirm={(config) => submitNewProp(config)}
@@ -2487,6 +2531,355 @@ function TimelineView({ view, properties, rows, onSetDateProp }: TimelineViewPro
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------- Phase 17: buttons + automations ----------
+
+/** A property's button config: {label, icon, actions}. */
+interface ButtonConfig {
+  label?: string;
+  icon?: string;
+  actions?: ButtonAction[];
+}
+
+/**
+ * Editor for an action list, shared by the button property config + the
+ * automations builder. v1 supports adding edit_property / add_page_to_db /
+ * send_notification / send_webhook / show_confirm and removing/reordering them.
+ * Each action's fields are edited inline via small inputs.
+ */
+function ActionListEditor({
+  actions,
+  properties,
+  databaseId,
+  onChange,
+}: {
+  actions: ButtonAction[];
+  properties: DbProperty[];
+  databaseId: string;
+  onChange: (next: ButtonAction[]) => void;
+}) {
+  const { t } = useT();
+  function add(a: ButtonAction) {
+    onChange([...actions, a]);
+  }
+  function patch(i: number, p: Partial<ButtonAction>) {
+    onChange(actions.map((a, j) => (j === i ? ({ ...a, ...p } as ButtonAction) : a)));
+  }
+  function move(i: number, dir: -1 | 1) {
+    const j = i + dir;
+    if (j < 0 || j >= actions.length) return;
+    const next = actions.slice();
+    [next[i], next[j]] = [next[j]!, next[i]!];
+    onChange(next);
+  }
+  const editableProps = properties.filter(
+    (p) => !AUTO_PROPERTY_TYPES.has(p.type) && p.type !== 'button' && p.type !== 'formula' && p.type !== 'rollup',
+  );
+
+  return (
+    <div className="ae-action-list" data-testid="action-list">
+      {actions.map((a, i) => (
+        <div key={i} className="border border-gray-200 rounded p-1.5 mb-1 text-xs" data-testid="action-row">
+          <div className="flex items-center justify-between mb-1">
+            <span className="font-medium">{describeAction(a, t)}</span>
+            <span className="flex gap-1">
+              <button type="button" disabled={i === 0} onClick={() => move(i, -1)}>↑</button>
+              <button type="button" disabled={i === actions.length - 1} onClick={() => move(i, 1)}>↓</button>
+              <button type="button" onClick={() => onChange(actions.filter((_, j) => j !== i))}>×</button>
+            </span>
+          </div>
+          {a.kind === 'edit_pages' ? (
+            <div className="flex flex-wrap gap-1 items-center">
+              <select
+                value={a.propertyId}
+                onChange={(e) => patch(i, { propertyId: e.target.value } as Partial<ButtonAction>)}
+              >
+                <option value="">{t('automation.pickProperty')}</option>
+                {editableProps.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+              <input
+                className="border border-gray-300 rounded px-1"
+                placeholder={t('automation.value')}
+                value={String((a.value as string) ?? '')}
+                onChange={(e) => patch(i, { value: e.target.value } as Partial<ButtonAction>)}
+              />
+            </div>
+          ) : a.kind === 'send_notification' ? (
+            <div className="flex flex-wrap gap-1 items-center">
+              <input
+                className="border border-gray-300 rounded px-1"
+                placeholder={t('automation.recipients')}
+                value={(a.recipients ?? []).join(', ')}
+                onChange={(e) =>
+                  patch(i, {
+                    recipients: e.target.value.split(',').map((s) => s.trim()).filter(Boolean),
+                  } as Partial<ButtonAction>)
+                }
+              />
+              <input
+                className="border border-gray-300 rounded px-1"
+                placeholder={t('automation.message')}
+                value={a.body ?? ''}
+                onChange={(e) => patch(i, { body: e.target.value } as Partial<ButtonAction>)}
+              />
+            </div>
+          ) : a.kind === 'send_webhook' ? (
+            <input
+              className="border border-gray-300 rounded px-1 w-full"
+              placeholder="https://…"
+              value={a.url ?? ''}
+              onChange={(e) => patch(i, { url: e.target.value } as Partial<ButtonAction>)}
+            />
+          ) : a.kind === 'add_page_to_db' ? (
+            <input
+              className="border border-gray-300 rounded px-1"
+              placeholder={t('automation.title')}
+              value={a.title ?? ''}
+              onChange={(e) => patch(i, { title: e.target.value } as Partial<ButtonAction>)}
+            />
+          ) : a.kind === 'show_confirm' ? (
+            <input
+              className="border border-gray-300 rounded px-1 w-full"
+              placeholder={t('automation.message')}
+              value={a.message ?? ''}
+              onChange={(e) => patch(i, { message: e.target.value } as Partial<ButtonAction>)}
+            />
+          ) : null}
+        </div>
+      ))}
+      <div className="flex flex-wrap gap-1">
+        <button type="button" data-testid="add-edit" onClick={() => add({ kind: 'edit_pages', databaseId, propertyId: '', value: '', currentRowOnly: true })}>
+          + {t('action.edit_pages')}
+        </button>
+        <button type="button" data-testid="add-addpage" onClick={() => add({ kind: 'add_page_to_db', databaseId })}>
+          + {t('action.add_page_to_db')}
+        </button>
+        <button type="button" data-testid="add-notify" onClick={() => add({ kind: 'send_notification', recipients: [], body: '' })}>
+          + {t('action.send_notification')}
+        </button>
+        <button type="button" data-testid="add-webhook" onClick={() => add({ kind: 'send_webhook', url: '' })}>
+          + {t('action.send_webhook')}
+        </button>
+        <button type="button" data-testid="add-confirm" onClick={() => add({ kind: 'show_confirm', message: '' })}>
+          + {t('action.show_confirm')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Collect a button property's {label, icon, actions} before the prop is created. */
+function ButtonConfigPanel({
+  properties,
+  onCancel,
+  onConfirm,
+}: {
+  properties: DbProperty[];
+  onCancel: () => void;
+  onConfirm: (config: Record<string, JsonValue>) => void;
+}) {
+  const { t } = useT();
+  const [label, setLabel] = useState('');
+  const [icon, setIcon] = useState('');
+  const [actions, setActions] = useState<ButtonAction[]>([]);
+  // The DB id isn't available here directly; actions default their own
+  // databaseId at run-time to the current row's DB on the server.
+  return (
+    <div className="absolute z-20 mt-1 bg-white border border-gray-200 rounded shadow-lg p-2 w-80 text-left" data-testid="button-config-panel">
+      <div className="flex gap-1 mb-2">
+        <input className="border border-gray-300 rounded px-1 w-12" placeholder={t('button.icon')} maxLength={4} value={icon} onChange={(e) => setIcon(e.target.value)} />
+        <input className="border border-gray-300 rounded px-1 flex-1" placeholder={t('button.label')} value={label} onChange={(e) => setLabel(e.target.value)} />
+      </div>
+      <ActionListEditor actions={actions} properties={properties} databaseId="" onChange={setActions} />
+      <div className="flex justify-end gap-2 mt-2">
+        <button type="button" onClick={onCancel}>{t('common.cancel')}</button>
+        <button
+          type="button"
+          data-testid="button-config-save"
+          onClick={() => onConfirm({ label, icon, actions } as unknown as Record<string, JsonValue>)}
+        >
+          {t('common.save')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** A per-row button cell: clicking runs the property's actions for this row. */
+function ButtonPropertyCell({
+  property,
+  databaseId,
+  rowId,
+}: {
+  property: DbProperty;
+  databaseId: string;
+  rowId: string;
+}) {
+  const config = (property.config ?? {}) as unknown as ButtonConfig;
+  const actions = (config.actions ?? []) as ButtonAction[];
+  const [running, setRunning] = useState(false);
+  async function run() {
+    if (running) return;
+    setRunning(true);
+    try {
+      await runActionsFn({
+        data: {
+          databaseId,
+          rowId,
+          actions: actions as unknown as Record<string, unknown>[],
+        },
+      });
+    } finally {
+      setRunning(false);
+    }
+  }
+  return (
+    <button
+      type="button"
+      className="ae-button"
+      data-testid="button-prop-run"
+      onClick={() => void run()}
+      disabled={running}
+    >
+      {config.icon ? <span>{config.icon} </span> : null}
+      {config.label || 'Button'}
+    </button>
+  );
+}
+
+/** The ⚡ Automations panel: list + a v1-simple builder. */
+function AutomationsPanel({
+  databaseId,
+  properties,
+  onClose,
+}: {
+  databaseId: string;
+  properties: DbProperty[];
+  onClose: () => void;
+}) {
+  const { t } = useT();
+  const [list, setList] = useState<Automation[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [triggerKind, setTriggerKind] = useState<AutomationTrigger['kind']>('page_added');
+  const [triggerPropId, setTriggerPropId] = useState('');
+  const [scheduleEvery, setScheduleEvery] = useState<'day' | 'week' | 'month'>('day');
+  const [actions, setActions] = useState<ButtonAction[]>([]);
+
+  async function refresh() {
+    setLoading(true);
+    const next = await automationsListFn({ data: { databaseId } });
+    setList(next);
+    setLoading(false);
+  }
+  useEffect(() => {
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [databaseId]);
+
+  async function create() {
+    const trigger: AutomationTrigger =
+      triggerKind === 'property_edited'
+        ? { kind: 'property_edited', propertyId: triggerPropId || undefined }
+        : triggerKind === 'schedule'
+          ? { kind: 'schedule', every: scheduleEvery, at: '09:00' }
+          : { kind: 'page_added' };
+    await automationCreateFn({
+      data: {
+        databaseId,
+        trigger,
+        actions: actions as unknown as Record<string, unknown>[],
+      },
+    });
+    setActions([]);
+    await refresh();
+  }
+
+  const editableProps = properties.filter((p) => !AUTO_PROPERTY_TYPES.has(p.type) && p.type !== 'button');
+
+  return (
+    <div className="border border-gray-200 rounded p-3 mb-3 bg-gray-50" data-testid="automations-panel">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="font-medium text-sm">⚡ {t('db.automations')}</h3>
+        <button type="button" onClick={onClose}>✕</button>
+      </div>
+      {loading ? (
+        <div className="text-xs text-gray-400">…</div>
+      ) : (
+        <ul className="mb-3 space-y-1">
+          {list.map((a) => (
+            <li key={a.id} className="flex items-center justify-between text-xs border border-gray-200 rounded px-2 py-1 bg-white" data-testid="automation-item">
+              <span>
+                <strong>{t('automation.when')}</strong> {t(`trigger.${a.trigger.kind}`)} →{' '}
+                <strong>{t('automation.then')}</strong> {a.actions.length} {t('automation.action')}
+              </span>
+              <span className="flex items-center gap-2">
+                <label className="flex items-center gap-1">
+                  <input
+                    type="checkbox"
+                    checked={a.enabled}
+                    onChange={async (e) => {
+                      await automationSetEnabledFn({ data: { id: a.id, enabled: e.target.checked } });
+                      await refresh();
+                    }}
+                  />
+                  {t('automation.enable')}
+                </label>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await automationDeleteFn({ data: { id: a.id } });
+                    await refresh();
+                  }}
+                >
+                  🗑
+                </button>
+              </span>
+            </li>
+          ))}
+          {list.length === 0 ? <li className="text-xs text-gray-400">—</li> : null}
+        </ul>
+      )}
+      <div className="border-t border-gray-200 pt-2">
+        <div className="flex flex-wrap items-center gap-2 text-xs mb-2">
+          <strong>{t('automation.when')}</strong>
+          <select value={triggerKind} onChange={(e) => setTriggerKind(e.target.value as AutomationTrigger['kind'])} data-testid="trigger-kind">
+            <option value="page_added">{t('trigger.page_added')}</option>
+            <option value="property_edited">{t('trigger.property_edited')}</option>
+            <option value="schedule">{t('trigger.schedule')}</option>
+          </select>
+          {triggerKind === 'property_edited' ? (
+            <select value={triggerPropId} onChange={(e) => setTriggerPropId(e.target.value)}>
+              <option value="">{t('automation.anyProperty')}</option>
+              {editableProps.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          ) : null}
+          {triggerKind === 'schedule' ? (
+            <select value={scheduleEvery} onChange={(e) => setScheduleEvery(e.target.value as 'day' | 'week' | 'month')}>
+              <option value="day">{t('schedule.day')}</option>
+              <option value="week">{t('schedule.week')}</option>
+              <option value="month">{t('schedule.month')}</option>
+            </select>
+          ) : null}
+        </div>
+        <div className="text-xs mb-1"><strong>{t('automation.then')}</strong></div>
+        <ActionListEditor actions={actions} properties={properties} databaseId={databaseId} onChange={setActions} />
+        <button
+          type="button"
+          className="mt-2 px-2 py-1 bg-gray-800 text-white rounded text-xs"
+          data-testid="automation-create"
+          onClick={() => void create()}
+          disabled={actions.length === 0}
+        >
+          {t('automation.create')}
+        </button>
+      </div>
     </div>
   );
 }

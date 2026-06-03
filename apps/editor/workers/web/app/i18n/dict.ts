@@ -319,6 +319,47 @@ const editor: Dict = {
 
     // Phase 16 — comment reactions
     'reactions.add': 'Add reaction',
+
+    // Phase 17 — buttons
+    'button.block': 'Button',
+    'button.blockHint': 'A clickable button that runs actions',
+    'button.defaultLabel': 'Button',
+    'button.configure': 'Configure',
+    'button.label': 'Label',
+    'button.icon': 'Icon',
+    'button.confirmDefault': 'Are you sure?',
+
+    // Phase 17 — action labels (shared button blocks + properties + automations)
+    'action.insert_blocks': 'Insert blocks',
+    'action.add_page_to_db': 'Add page to DB',
+    'action.edit_pages': 'Edit property',
+    'action.open_page': 'Open page',
+    'action.show_confirm': 'Show confirm',
+    'action.send_notification': 'Send notification',
+    'action.send_webhook': 'Send webhook',
+
+    // Phase 17 — database automations
+    'db.automations': 'Automations',
+    'automation.when': 'When',
+    'automation.then': 'Then',
+    'automation.trigger': 'Trigger',
+    'automation.action': 'action(s)',
+    'automation.enable': 'Enable',
+    'automation.create': 'Add automation',
+    'automation.pickProperty': 'Property…',
+    'automation.anyProperty': 'Any property',
+    'automation.value': 'Value',
+    'automation.recipients': 'emails, comma-separated',
+    'automation.message': 'Message',
+    'automation.title': 'Title',
+    'trigger.page_added': 'a page is added',
+    'trigger.property_edited': 'a property is edited',
+    'trigger.schedule': 'on a schedule',
+    'schedule.day': 'every day',
+    'schedule.week': 'every week',
+    'schedule.month': 'every month',
+    'common.cancel': 'Cancel',
+    'common.save': 'Save',
   },
   ko: {
     'app.name': '에디터',
@@ -604,6 +645,47 @@ const editor: Dict = {
     'comments.replyPlaceholder': '답글…',
     'comments.posting': '게시 중…',
     'comments.comment': '코멘트',
+
+    // Phase 17 — buttons
+    'button.block': '버튼',
+    'button.blockHint': '액션을 실행하는 클릭 버튼',
+    'button.defaultLabel': '버튼',
+    'button.configure': '설정',
+    'button.label': '레이블',
+    'button.icon': '아이콘',
+    'button.confirmDefault': '계속하시겠어요?',
+
+    // Phase 17 — action labels
+    'action.insert_blocks': '블록 삽입',
+    'action.add_page_to_db': 'DB에 페이지 추가',
+    'action.edit_pages': '속성 편집',
+    'action.open_page': '페이지 열기',
+    'action.show_confirm': '확인 표시',
+    'action.send_notification': '알림 보내기',
+    'action.send_webhook': '웹훅 보내기',
+
+    // Phase 17 — database automations
+    'db.automations': '자동화',
+    'automation.when': '조건',
+    'automation.then': '실행',
+    'automation.trigger': '트리거',
+    'automation.action': '개 액션',
+    'automation.enable': '사용',
+    'automation.create': '자동화 추가',
+    'automation.pickProperty': '속성…',
+    'automation.anyProperty': '모든 속성',
+    'automation.value': '값',
+    'automation.recipients': '이메일(쉼표 구분)',
+    'automation.message': '메시지',
+    'automation.title': '제목',
+    'trigger.page_added': '페이지가 추가되면',
+    'trigger.property_edited': '속성이 편집되면',
+    'trigger.schedule': '예약 실행',
+    'schedule.day': '매일',
+    'schedule.week': '매주',
+    'schedule.month': '매월',
+    'common.cancel': '취소',
+    'common.save': '저장',
   },
 };
 

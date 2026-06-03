@@ -7,10 +7,16 @@
 
 import { makeDb } from '../api/src/lib/db';
 import { fireDueRemindersImpl } from '../api/src/handlers/notify';
+import { runScheduledAutomationsImpl } from '../api/src/handlers/automations';
 
 interface Env {
   HYPERDRIVE: Hyperdrive;
   APP_NAME?: string;
+}
+
+/** Action deps for scheduled automations: global fetch (URL is SSRF-guarded). */
+function actionDeps() {
+  return { fetcher: fetch };
 }
 
 const handler = {
@@ -19,8 +25,11 @@ const handler = {
       (async () => {
         const sql = makeDb(env);
         try {
-          const fired = await fireDueRemindersImpl(sql, new Date().toISOString());
-          console.log(`[editor-cron] reminders fired=${fired}`);
+          const nowIso = new Date().toISOString();
+          const fired = await fireDueRemindersImpl(sql, nowIso);
+          // Phase 17: also run due scheduled ("every-frequency") automations.
+          const autos = await runScheduledAutomationsImpl(sql, actionDeps(), nowIso);
+          console.log(`[editor-cron] reminders fired=${fired} automations fired=${autos}`);
         } finally {
           await sql.end({ timeout: 5 });
         }
@@ -34,8 +43,10 @@ const handler = {
     if (url.pathname === '/run' && req.method === 'POST') {
       const sql = makeDb(env);
       try {
-        const fired = await fireDueRemindersImpl(sql, new Date().toISOString());
-        return Response.json({ fired });
+        const nowIso = new Date().toISOString();
+        const fired = await fireDueRemindersImpl(sql, nowIso);
+        const automations = await runScheduledAutomationsImpl(sql, actionDeps(), nowIso);
+        return Response.json({ fired, automations });
       } finally {
         await sql.end({ timeout: 5 });
       }

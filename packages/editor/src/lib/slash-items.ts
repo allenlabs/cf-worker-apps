@@ -301,6 +301,24 @@ export function makeLinkedDatabaseSlashItem(
   };
 }
 
+/**
+ * Build the "Button" slash item. Inserts a `button` atom node with an empty
+ * action list (configured afterwards via the ⚙ affordance in the NodeView).
+ * Kept pure so it's unit-testable. `title`/`hint` are optional host-translated
+ * labels.
+ */
+export function makeButtonSlashItem(opts?: { title?: string; hint?: string }): SlashItem {
+  return {
+    title: opts?.title ?? 'Button',
+    icon: '🔘',
+    hint: opts?.hint ?? 'A clickable button that runs actions',
+    keywords: ['button', 'action', 'cta', 'click', 'trigger'],
+    command: ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range).setButton().run();
+    },
+  };
+}
+
 /** Case-insensitive filter over title + keywords. Pure, so it's unit-tested. */
 export function filterSlashItems(items: SlashItem[], query: string): SlashItem[] {
   const q = query.trim().toLowerCase();

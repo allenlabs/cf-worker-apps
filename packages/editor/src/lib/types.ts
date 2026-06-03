@@ -1,4 +1,5 @@
 import type { Editor, Range } from '@tiptap/core';
+import type { ButtonAction } from './actions';
 
 /** A person who can be @-mentioned. */
 export interface MentionItem {
@@ -144,6 +145,15 @@ export interface EditorProps {
    * on). Omit to disable synced blocks entirely.
    */
   syncedBlock?: SyncedBlockProps;
+  /**
+   * Button blocks (Phase 17). When set, the editor registers the `button` node +
+   * a "Button" slash item. Clicking a button runs its action list: client
+   * actions (insert_blocks, open_page, show_confirm) run in the NodeView;
+   * DATA actions (add_page_to_db, edit_pages) are delegated here so the host can
+   * call its server fns. Omit to disable button blocks entirely (existing button
+   * nodes still render + run their client-only actions when `onOpenPage` is set).
+   */
+  runButtonAction?: (action: ButtonAction) => Promise<void>;
   /**
    * Show the ⋮⋮ block drag handle + block action menu (Notion editing feel).
    * Defaults to true; set false to opt out (e.g. a minimal embed). The handle

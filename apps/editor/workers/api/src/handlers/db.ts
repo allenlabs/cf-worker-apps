@@ -67,6 +67,8 @@ export type PropertyType =
   | 'rollup'
   // Phase 7: safe expression engine (computed read-only).
   | 'formula'
+  // Phase 17: per-row button column; config holds {label, icon, actions}.
+  | 'button'
   // AUTO / read-only — derived from the row page, never stored in db_props.
   | 'created_time'
   | 'created_by'
