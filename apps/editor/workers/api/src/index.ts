@@ -11,6 +11,12 @@ import { makeDb } from './lib/db';
 import type { AppBindings } from './context';
 import type { Env } from './lib/env';
 
+// Datasource Step 2: the per-workspace SQLite Durable Object backing native
+// databases. Re-exported from the worker entry so the runtime can instantiate
+// the class named by the [[durable_objects.bindings]] + [[migrations]]
+// new_sqlite_classes entry in wrangler.toml.
+export { WorkspaceDB } from './do/workspace-db';
+
 const app = new Hono<AppBindings>();
 
 app.get('/health', (c) => c.json({ ok: true, service: 'editor-api' }));

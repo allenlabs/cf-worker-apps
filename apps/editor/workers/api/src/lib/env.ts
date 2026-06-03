@@ -1,10 +1,17 @@
 // Bindings + env vars/secrets for the editor API worker.
 
+import type { WorkspaceDB } from '../do/workspace-db';
+
 export interface Env {
   HYPERDRIVE: Hyperdrive;
 
   // R2 bucket for uploaded images (served publicly via GET /files/*).
   FILES: R2Bucket;
+
+  // Datasource Step 2: per-workspace SQLite Durable Object backing NATIVE
+  // databases (db_backend='native_do'). ADDITIVE — existing Postgres-backed
+  // databases never touch this binding.
+  WORKSPACE_DB: DurableObjectNamespace<WorkspaceDB>;
 
   APP_NAME: string;
 

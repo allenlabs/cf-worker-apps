@@ -56,6 +56,7 @@ import {
 import {
   createDatabaseImpl,
   createTemplateImpl,
+  dbBackendImpl,
   deleteTemplateImpl,
   listDatabasesImpl,
   listTemplatesImpl,
@@ -67,8 +68,10 @@ import {
   templateDatabaseImpl,
   viewDatabaseImpl,
   viewSourceDatabaseImpl,
+  type DbBackend,
 } from './db';
 import { makePostgresDataSource } from '../datasource/postgres';
+import { makeNativeDataSource, NativeDataSource } from '../datasource/native';
 import type { DataSource } from '../datasource/types';
 import {
   automationDatabaseImpl,
@@ -136,13 +139,72 @@ function defaultActionDeps(): ActionDeps {
 }
 
 /**
- * The DataSource for a /v1/db/* request. Step 1: always our internal Postgres
- * (the per-request `Sql` from `c.var.db`), wrapped so the route code is
- * backend-agnostic. Step 2 will select a NativeDataSource (DO SQLite) or an
- * external-PG source based on the database's configured backend.
+ * The fixed Postgres DataSource for a request (the per-request `Sql` from
+ * `c.var.db`), wrapped so the route code is backend-agnostic. Used directly
+ * where the database is known to be Postgres, and as the default fallback.
  */
-function dbDataSource(c: Context<AppBindings>): DataSource {
+function pgDataSource(c: Context<AppBindings>): DataSource {
   return makePostgresDataSource(c.get('db'));
+}
+
+/**
+ * Datasource Step 2 — backend-aware resolver keyed on a DATABASE id. Reads
+ * `editor.pages.db_backend`: 'native_do' → a per-workspace WorkspaceDB
+ * NativeDataSource, anything else (incl. the default 'postgres') → the internal
+ * PostgresDataSource. Existing databases default to 'postgres', so this is a
+ * no-op for them. Returns null when `databaseId` isn't a database page.
+ */
+async function dataSourceForDatabase(
+  c: Context<AppBindings>,
+  databaseId: string,
+): Promise<DataSource | null> {
+  const info = await dbBackendImpl(c.get('db'), databaseId);
+  if (!info) return null;
+  if (info.backend === 'native_do') {
+    return makeNativeDataSource(c.env, info.workspaceId);
+  }
+  return pgDataSource(c);
+}
+
+/**
+ * Resolve the owning database + DataSource for a PROPERTY / VIEW / ROW id.
+ *
+ * For Postgres databases the leaf id lives in `editor.*`, so the PG lookup
+ * (`pgLeafLookup`) finds the database and we use Postgres. For a NATIVE
+ * database the leaf id lives ONLY in the workspace DO, so the PG lookup misses;
+ * the caller passes the known `databaseId` hint (additive body field — ignored
+ * on the PG path) which we resolve to the native backend and confirm the leaf
+ * belongs to it via the DO. Returns null when nothing resolves.
+ */
+async function dataSourceForLeaf(
+  c: Context<AppBindings>,
+  opts: {
+    pgLeafLookup: () => Promise<string | null>;
+    databaseHint?: string | null;
+    confirmNative?: (ds: NativeDataSource) => Promise<string | null>;
+  },
+): Promise<{ ds: DataSource; databaseId: string } | null> {
+  // 1. Postgres path: the leaf resolves to a database in PG.
+  const pgDbId = await opts.pgLeafLookup();
+  if (pgDbId) {
+    const info = await dbBackendImpl(c.get('db'), pgDbId);
+    // A leaf row found in PG always belongs to a PG-backed database.
+    if (!info || info.backend !== 'native_do') {
+      return { ds: pgDataSource(c), databaseId: pgDbId };
+    }
+  }
+  // 2. Native path: use the database hint, confirm the leaf lives in its DO.
+  if (opts.databaseHint && opts.confirmNative) {
+    const info = await dbBackendImpl(c.get('db'), opts.databaseHint);
+    if (info?.backend === 'native_do') {
+      const ds = makeNativeDataSource(c.env, info.workspaceId);
+      const ownerDbId = await opts.confirmNative(ds);
+      if (ownerDbId === opts.databaseHint) {
+        return { ds, databaseId: ownerDbId };
+      }
+    }
+  }
+  return null;
 }
 
 // ---------- workspaces ----------
@@ -445,6 +507,10 @@ const dbCreateSchema = z.object({
   workspaceId: z.string().uuid(),
   parentId: z.string().uuid().nullish(),
   title: z.string().max(255).optional(),
+  // Datasource Step 2: opt into the per-workspace DO SQLite backend for a NEW
+  // database. Omitted / 'postgres' keeps the current behavior (default), so
+  // existing UX is unchanged unless explicitly opted in.
+  backend: z.enum(['postgres', 'native_do']).optional(),
 });
 v1Router.post('/db/create', async (c) => {
   const user = c.get('user');
@@ -460,12 +526,27 @@ v1Router.post('/db/create', async (c) => {
       return c.json({ error: 'not found' }, 404);
     }
   }
+  const backend: DbBackend = parsed.data.backend === 'native_do' ? 'native_do' : 'postgres';
+  // PG always holds the lightweight container page (tree/ACL/search). For
+  // native, that page carries db_backend='native_do' and PG-side seeding is
+  // skipped (createDatabaseImpl handles that).
   const created = await createDatabaseImpl(c.get('db'), user.userId, {
     workspaceId: parsed.data.workspaceId,
     parentId: parsed.data.parentId ?? null,
     title: parsed.data.title,
+    backend,
   });
-  return c.json(created, 200);
+  // For a native database, provision the DO-side container + default
+  // view/properties (the equivalent of the PG seeding createDatabaseImpl skips).
+  if (backend === 'native_do') {
+    const ds = makeNativeDataSource(c.env, parsed.data.workspaceId);
+    await ds.createDatabase({
+      id: created.id,
+      title: parsed.data.title?.trim() || 'Untitled database',
+      seedDefaults: true,
+    });
+  }
+  return c.json({ ...created, backend }, 200);
 });
 
 const dbIdSchema = z.object({ databaseId: z.string().uuid() });
@@ -477,7 +558,9 @@ v1Router.post('/db/schema', async (c) => {
   }
   const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.databaseId);
   if (!can) return c.json({ error: 'not found' }, 404);
-  const schema = await dbDataSource(c).schema(parsed.data.databaseId);
+  const ds = await dataSourceForDatabase(c, parsed.data.databaseId);
+  if (!ds) return c.json({ error: 'not found' }, 404);
+  const schema = await ds.schema(parsed.data.databaseId);
   if (!schema) return c.json({ error: 'not found' }, 404);
   return c.json(schema, 200);
 });
@@ -528,7 +611,9 @@ v1Router.post('/db/property/add', async (c) => {
   if (!(await canEditPageImpl(c.get('db'), user.userId, parsed.data.databaseId))) {
     return c.json({ error: 'forbidden' }, 403);
   }
-  const prop = await dbDataSource(c).createProperty({
+  const ds = await dataSourceForDatabase(c, parsed.data.databaseId);
+  if (!ds) return c.json({ error: 'not found' }, 404);
+  const prop = await ds.createProperty({
     databaseId: parsed.data.databaseId,
     name: parsed.data.name,
     type: parsed.data.type,
@@ -542,6 +627,9 @@ const propUpdateSchema = z.object({
   name: z.string().min(1).max(120).optional(),
   type: propertyType.optional(),
   config: z.record(z.string(), z.unknown()).optional(),
+  // Step 2: optional native-DB hint (ignored on the PG path; required to route
+  // a native-DO property whose id isn't in Postgres).
+  databaseId: z.string().uuid().optional(),
 });
 v1Router.post('/db/property/update', async (c) => {
   const user = c.get('user');
@@ -549,12 +637,16 @@ v1Router.post('/db/property/update', async (c) => {
   if (!parsed.success) {
     return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
   }
-  const dbId = await propertyDatabaseImpl(c.get('db'), parsed.data.id);
-  if (!dbId) return c.json({ error: 'not found' }, 404);
-  if (!(await canEditPageImpl(c.get('db'), user.userId, dbId))) {
+  const resolved = await dataSourceForLeaf(c, {
+    pgLeafLookup: () => propertyDatabaseImpl(c.get('db'), parsed.data.id),
+    databaseHint: parsed.data.databaseId ?? null,
+    confirmNative: (ds) => ds.propertyDatabase(parsed.data.id),
+  });
+  if (!resolved) return c.json({ error: 'not found' }, 404);
+  if (!(await canEditPageImpl(c.get('db'), user.userId, resolved.databaseId))) {
     return c.json({ error: 'forbidden' }, 403);
   }
-  const ok = await dbDataSource(c).updateProperty({
+  const ok = await resolved.ds.updateProperty({
     id: parsed.data.id,
     name: parsed.data.name,
     type: parsed.data.type,
@@ -564,18 +656,27 @@ v1Router.post('/db/property/update', async (c) => {
   return c.json({ ok: true }, 200);
 });
 
+const leafIdSchema = z.object({
+  id: z.string().uuid(),
+  // Step 2: optional native-DB hint (ignored on the PG path).
+  databaseId: z.string().uuid().optional(),
+});
 v1Router.post('/db/property/delete', async (c) => {
   const user = c.get('user');
-  const parsed = idSchema.safeParse(c.get('body'));
+  const parsed = leafIdSchema.safeParse(c.get('body'));
   if (!parsed.success) {
     return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
   }
-  const dbId = await propertyDatabaseImpl(c.get('db'), parsed.data.id);
-  if (!dbId) return c.json({ error: 'not found' }, 404);
-  if (!(await canEditPageImpl(c.get('db'), user.userId, dbId))) {
+  const resolved = await dataSourceForLeaf(c, {
+    pgLeafLookup: () => propertyDatabaseImpl(c.get('db'), parsed.data.id),
+    databaseHint: parsed.data.databaseId ?? null,
+    confirmNative: (ds) => ds.propertyDatabase(parsed.data.id),
+  });
+  if (!resolved) return c.json({ error: 'not found' }, 404);
+  if (!(await canEditPageImpl(c.get('db'), user.userId, resolved.databaseId))) {
     return c.json({ error: 'forbidden' }, 403);
   }
-  const ok = await dbDataSource(c).deleteProperty(parsed.data.id);
+  const ok = await resolved.ds.deleteProperty(parsed.data.id);
   if (!ok) return c.json({ error: 'not found' }, 404);
   return c.json({ ok: true }, 200);
 });
@@ -605,7 +706,9 @@ v1Router.post('/db/view/add', async (c) => {
       return c.json({ error: 'forbidden' }, 403);
     }
   }
-  const view = await dbDataSource(c).createView({
+  const ds = await dataSourceForDatabase(c, parsed.data.databaseId);
+  if (!ds) return c.json({ error: 'not found' }, 404);
+  const view = await ds.createView({
     databaseId: parsed.data.databaseId,
     type: parsed.data.type,
     name: parsed.data.name,
@@ -620,6 +723,8 @@ const viewUpdateSchema = z.object({
   name: z.string().max(120).optional(),
   config: z.record(z.string(), z.unknown()).optional(),
   sourceDatabaseId: z.string().uuid().nullish(),
+  // Step 2: optional native-DB hint (ignored on the PG path).
+  databaseId: z.string().uuid().optional(),
 });
 v1Router.post('/db/view/update', async (c) => {
   const user = c.get('user');
@@ -627,9 +732,13 @@ v1Router.post('/db/view/update', async (c) => {
   if (!parsed.success) {
     return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
   }
-  const dbId = await viewDatabaseImpl(c.get('db'), parsed.data.id);
-  if (!dbId) return c.json({ error: 'not found' }, 404);
-  if (!(await canEditPageImpl(c.get('db'), user.userId, dbId))) {
+  const resolved = await dataSourceForLeaf(c, {
+    pgLeafLookup: () => viewDatabaseImpl(c.get('db'), parsed.data.id),
+    databaseHint: parsed.data.databaseId ?? null,
+    confirmNative: (ds) => ds.viewDatabase(parsed.data.id),
+  });
+  if (!resolved) return c.json({ error: 'not found' }, 404);
+  if (!(await canEditPageImpl(c.get('db'), user.userId, resolved.databaseId))) {
     return c.json({ error: 'forbidden' }, 403);
   }
   if (parsed.data.sourceDatabaseId) {
@@ -637,7 +746,7 @@ v1Router.post('/db/view/update', async (c) => {
       return c.json({ error: 'forbidden' }, 403);
     }
   }
-  const ok = await dbDataSource(c).updateView({
+  const ok = await resolved.ds.updateView({
     id: parsed.data.id,
     name: parsed.data.name,
     config: parsed.data.config,
@@ -649,16 +758,20 @@ v1Router.post('/db/view/update', async (c) => {
 
 v1Router.post('/db/view/delete', async (c) => {
   const user = c.get('user');
-  const parsed = idSchema.safeParse(c.get('body'));
+  const parsed = leafIdSchema.safeParse(c.get('body'));
   if (!parsed.success) {
     return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
   }
-  const dbId = await viewDatabaseImpl(c.get('db'), parsed.data.id);
-  if (!dbId) return c.json({ error: 'not found' }, 404);
-  if (!(await canEditPageImpl(c.get('db'), user.userId, dbId))) {
+  const resolved = await dataSourceForLeaf(c, {
+    pgLeafLookup: () => viewDatabaseImpl(c.get('db'), parsed.data.id),
+    databaseHint: parsed.data.databaseId ?? null,
+    confirmNative: (ds) => ds.viewDatabase(parsed.data.id),
+  });
+  if (!resolved) return c.json({ error: 'not found' }, 404);
+  if (!(await canEditPageImpl(c.get('db'), user.userId, resolved.databaseId))) {
     return c.json({ error: 'forbidden' }, 403);
   }
-  const ok = await dbDataSource(c).deleteView(parsed.data.id);
+  const ok = await resolved.ds.deleteView(parsed.data.id);
   if (!ok) return c.json({ error: 'not found' }, 404);
   return c.json({ ok: true }, 200);
 });
@@ -678,10 +791,16 @@ v1Router.post('/db/rows', async (c) => {
   }
   const can = await canAccessPageImpl(c.get('db'), user.userId, parsed.data.databaseId);
   if (!can) return c.json({ error: 'not found' }, 404);
+  const ds = await dataSourceForDatabase(c, parsed.data.databaseId);
+  if (!ds) return c.json({ error: 'not found' }, 404);
   // Resolve the source DB: explicit param, else the view's stored source.
+  // For a native DB the view's stored source lives in the DO, not Postgres.
   let sourceDatabaseId = parsed.data.sourceDatabaseId ?? null;
   if (!sourceDatabaseId && parsed.data.viewId) {
-    sourceDatabaseId = await viewSourceDatabaseImpl(c.get('db'), parsed.data.viewId);
+    sourceDatabaseId =
+      ds instanceof NativeDataSource
+        ? await ds.viewSourceDatabase(parsed.data.viewId)
+        : await viewSourceDatabaseImpl(c.get('db'), parsed.data.viewId);
   }
   // Reading another DB's rows requires read access to that source DB.
   if (sourceDatabaseId) {
@@ -689,7 +808,7 @@ v1Router.post('/db/rows', async (c) => {
       return c.json({ error: 'forbidden' }, 403);
     }
   }
-  const rows = await dbDataSource(c).listRows({
+  const rows = await ds.listRows({
     databaseId: parsed.data.databaseId,
     viewId: parsed.data.viewId,
     sourceDatabaseId,
@@ -713,7 +832,9 @@ v1Router.post('/db/row/add', async (c) => {
   if (!(await canEditPageImpl(c.get('db'), user.userId, parsed.data.databaseId))) {
     return c.json({ error: 'forbidden' }, 403);
   }
-  const row = await dbDataSource(c).createRow({
+  const ds = await dataSourceForDatabase(c, parsed.data.databaseId);
+  if (!ds) return c.json({ error: 'not found' }, 404);
+  const row = await ds.createRow({
     databaseId: parsed.data.databaseId,
     ownerId: user.userId,
     title: parsed.data.title,
@@ -721,16 +842,21 @@ v1Router.post('/db/row/add', async (c) => {
     subItemParentId: parsed.data.subItemParentId ?? null,
   });
   // Phase 17: fire page_added automations. Best-effort — never block the add.
-  try {
-    await runDatabaseTriggerImpl(c.get('db'), defaultActionDeps(), {
-      databaseId: parsed.data.databaseId,
-      event: 'page_added',
-      rowId: row.id,
-      actorEmail: user.email,
-      actorId: user.userId,
-    });
-  } catch (e) {
-    console.error('[automations] page_added trigger failed', e);
+  // Automations live in editor.db_automations (Postgres) and inspect the row in
+  // PG, so they only apply to PG-backed databases. Native-DO automations are a
+  // Step-3 follow-up; skip them here so the add never fails for native DBs.
+  if (!(ds instanceof NativeDataSource)) {
+    try {
+      await runDatabaseTriggerImpl(c.get('db'), defaultActionDeps(), {
+        databaseId: parsed.data.databaseId,
+        event: 'page_added',
+        rowId: row.id,
+        actorEmail: user.email,
+        actorId: user.userId,
+      });
+    } catch (e) {
+      console.error('[automations] page_added trigger failed', e);
+    }
   }
   return c.json(row, 200);
 });
@@ -832,6 +958,9 @@ const rowUpdateSchema = z.object({
   id: z.string().uuid(),
   title: z.string().max(255).optional(),
   props: z.record(z.string(), z.unknown()).optional(),
+  // Step 2: optional native-DB hint (ignored on the PG path; required to route
+  // a native-DO row whose id isn't in Postgres).
+  databaseId: z.string().uuid().optional(),
 });
 v1Router.post('/db/row/update', async (c) => {
   const user = c.get('user');
@@ -839,38 +968,41 @@ v1Router.post('/db/row/update', async (c) => {
   if (!parsed.success) {
     return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
   }
-  // Rows are pages; canEditPageImpl resolves the row's workspace directly.
-  if (!(await canEditPageImpl(c.get('db'), user.userId, parsed.data.id))) {
+  const resolved = await dataSourceForLeaf(c, {
+    pgLeafLookup: () => rowDatabaseImpl(c.get('db'), parsed.data.id),
+    databaseHint: parsed.data.databaseId ?? null,
+    confirmNative: (ds) => ds.rowDatabase(parsed.data.id),
+  });
+  if (!resolved) return c.json({ error: 'not found' }, 404);
+  const isNative = resolved.ds instanceof NativeDataSource;
+  // PG rows are pages, so gate on the row id (preserves per-row share edges).
+  // Native rows aren't PG pages, so gate on the database container page.
+  const gateId = isNative ? resolved.databaseId : parsed.data.id;
+  if (!(await canEditPageImpl(c.get('db'), user.userId, gateId))) {
     return c.json({ error: 'forbidden' }, 403);
   }
-  if ((await rowDatabaseImpl(c.get('db'), parsed.data.id)) === null) {
-    return c.json({ error: 'not found' }, 404);
-  }
-  const ok = await dbDataSource(c).updateRow({
+  const ok = await resolved.ds.updateRow({
     rowId: parsed.data.id,
     title: parsed.data.title,
     props: parsed.data.props,
   });
   if (!ok) return c.json({ error: 'not found' }, 404);
-  // Phase 17: fire property_edited automations for each changed prop.
-  // Best-effort — never block the update.
-  if (parsed.data.props) {
-    const dbId = await rowDatabaseImpl(c.get('db'), parsed.data.id);
-    if (dbId) {
-      for (const [propId, value] of Object.entries(parsed.data.props)) {
-        try {
-          await runDatabaseTriggerImpl(c.get('db'), defaultActionDeps(), {
-            databaseId: dbId,
-            event: 'property_edited',
-            rowId: parsed.data.id,
-            changedPropertyId: propId,
-            newValue: value,
-            actorEmail: user.email,
-            actorId: user.userId,
-          });
-        } catch (e) {
-          console.error('[automations] property_edited trigger failed', e);
-        }
+  // Phase 17: fire property_edited automations for each changed prop (PG-backed
+  // databases only — see /db/row/add). Best-effort — never block the update.
+  if (parsed.data.props && !isNative) {
+    for (const [propId, value] of Object.entries(parsed.data.props)) {
+      try {
+        await runDatabaseTriggerImpl(c.get('db'), defaultActionDeps(), {
+          databaseId: resolved.databaseId,
+          event: 'property_edited',
+          rowId: parsed.data.id,
+          changedPropertyId: propId,
+          newValue: value,
+          actorEmail: user.email,
+          actorId: user.userId,
+        });
+      } catch (e) {
+        console.error('[automations] property_edited trigger failed', e);
       }
     }
   }
@@ -879,17 +1011,22 @@ v1Router.post('/db/row/update', async (c) => {
 
 v1Router.post('/db/row/delete', async (c) => {
   const user = c.get('user');
-  const parsed = idSchema.safeParse(c.get('body'));
+  const parsed = leafIdSchema.safeParse(c.get('body'));
   if (!parsed.success) {
     return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
   }
-  if (!(await canEditPageImpl(c.get('db'), user.userId, parsed.data.id))) {
+  const resolved = await dataSourceForLeaf(c, {
+    pgLeafLookup: () => rowDatabaseImpl(c.get('db'), parsed.data.id),
+    databaseHint: parsed.data.databaseId ?? null,
+    confirmNative: (ds) => ds.rowDatabase(parsed.data.id),
+  });
+  if (!resolved) return c.json({ error: 'not found' }, 404);
+  const gateId =
+    resolved.ds instanceof NativeDataSource ? resolved.databaseId : parsed.data.id;
+  if (!(await canEditPageImpl(c.get('db'), user.userId, gateId))) {
     return c.json({ error: 'forbidden' }, 403);
   }
-  if ((await rowDatabaseImpl(c.get('db'), parsed.data.id)) === null) {
-    return c.json({ error: 'not found' }, 404);
-  }
-  const ok = await dbDataSource(c).deleteRow(parsed.data.id);
+  const ok = await resolved.ds.deleteRow(parsed.data.id);
   if (!ok) return c.json({ error: 'not found' }, 404);
   return c.json({ ok: true }, 200);
 });

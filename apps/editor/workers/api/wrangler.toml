@@ -25,6 +25,19 @@ id = "0b76cf08a44443d39d12f0d51ed059f5"
 binding = "FILES"
 bucket_name = "editor-allenlabs-files"
 
+# Datasource Step 2: per-workspace SQLite Durable Object backing NATIVE
+# databases (db_backend='native_do'). One DO instance per workspace
+# (idFromName(workspaceId)) → its own ≤10GB SQLite. ADDITIVE: existing
+# Postgres-backed databases never touch this binding.
+[[durable_objects.bindings]]
+name = "WORKSPACE_DB"
+class_name = "WorkspaceDB"
+
+# SQLite-backed DO class registration (new_sqlite_classes, not new_classes).
+[[migrations]]
+tag = "v1-workspace-db"
+new_sqlite_classes = ["WorkspaceDB"]
+
 [vars]
 APP_NAME = "Editor"
 COLLAB_URL = "wss://allenlabs-collab.allenlim.workers.dev/editor"

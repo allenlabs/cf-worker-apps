@@ -181,6 +181,37 @@ export async function viewDatabaseImpl(sql: Sql, viewId: string): Promise<string
   return row?.databaseId ?? null;
 }
 
+/**
+ * The storage backend a database is recorded on (Datasource Step 2). 'postgres'
+ * is the default for every existing database; 'native_do' marks a database
+ * whose rows/properties/views live in the per-workspace WorkspaceDB DO.
+ */
+export type DbBackend = 'postgres' | 'native_do';
+
+/** A database's backend + workspace (null when the id isn't a database page). */
+export interface DbBackendInfo {
+  backend: DbBackend;
+  workspaceId: string;
+}
+
+/**
+ * Resolve a database's backend + workspace from its container page. Returns
+ * null when the id isn't a (non-archived) database page. Used by the router to
+ * pick PostgresDataSource vs NativeDataSource without migrating anything —
+ * unknown/legacy values fall back to 'postgres' so existing rows are safe.
+ */
+export async function dbBackendImpl(sql: Sql, databaseId: string): Promise<DbBackendInfo | null> {
+  const [row] = await sql<{ backend: string | null; workspaceId: string; kind: string }[]>`
+    SELECT db_backend AS backend, workspace_id AS "workspaceId", kind
+    FROM editor.pages
+    WHERE id = ${databaseId} AND archived = false
+    LIMIT 1
+  `;
+  if (!row || row.kind !== 'database') return null;
+  const backend: DbBackend = row.backend === 'native_do' ? 'native_do' : 'postgres';
+  return { backend, workspaceId: row.workspaceId };
+}
+
 /** Resolve the database a row (page) belongs to (null when not a row). */
 export async function rowDatabaseImpl(sql: Sql, rowId: string): Promise<string | null> {
   const [row] = await sql<{ databaseId: string | null }[]>`
@@ -247,14 +278,23 @@ export async function relatedRowsImpl(
 export async function createDatabaseImpl(
   sql: Sql,
   ownerId: string,
-  input: { workspaceId: string; parentId?: string | null; title?: string },
+  input: { workspaceId: string; parentId?: string | null; title?: string; backend?: DbBackend },
 ): Promise<{ id: string }> {
   const created = await createPageImpl(sql, ownerId, {
     workspaceId: input.workspaceId,
     parentId: input.parentId ?? null,
     title: input.title?.trim() || 'Untitled database',
   });
-  await sql`UPDATE editor.pages SET kind = 'database' WHERE id = ${created.id}`;
+  const backend: DbBackend = input.backend === 'native_do' ? 'native_do' : 'postgres';
+  await sql`UPDATE editor.pages SET kind = 'database', db_backend = ${backend} WHERE id = ${created.id}`;
+
+  // A NATIVE database stores its properties/views/rows in the workspace DO; the
+  // PG page is only a lightweight container (tree/ACL/search). The caller seeds
+  // the DO (default Table view + starter props) via NativeDataSource. So skip
+  // the PG-side property/view seeding entirely for native databases.
+  if (backend === 'native_do') {
+    return { id: created.id };
+  }
 
   // Seed a default Table view.
   await sql`
@@ -562,8 +602,10 @@ export function computeRollup(fn: string, values: unknown[]): unknown {
 /**
  * A target row's fields, as needed to resolve a rollup's source value across
  * the supported `targetPropId` kinds (a stored prop, the title, or a meta date).
+ * Exported so a backend-agnostic caller (e.g. the DO-SQLite NativeDataSource)
+ * can build the target map itself and feed the PURE shaping core below.
  */
-interface TargetRowData {
+export interface TargetRowData {
   title: string;
   icon: string | null;
   props: Record<string, unknown>;
@@ -572,38 +614,19 @@ interface TargetRowData {
 }
 
 /**
- * Resolve relation chips + compute rollups for a page of rows, using BATCHED
- * queries (one query for all referenced target ids — no N+1).
- *
- * - For each `relation` prop, `props[propId]` is a string[] of target row ids;
- *   we attach `row.relations[propId]` = resolved [{id,title,icon}] chips.
- * - For each `rollup` prop, we follow `config.relationPropId` → ids → read each
- *   target row's `config.targetPropId` value (a stored prop, 'title', or a
- *   created/last-edited meta date) and apply `config.fn`; result lands in
- *   `row.rollups[propId]`.
+ * Collect every target row id a page of rows references through its relation
+ * props (directly) and the relations its rollups depend on. Pure — used by a
+ * backend to know which target rows it must fetch before shaping.
  */
-async function resolveRelationsAndRollups(
-  sql: Sql,
-  databaseId: string,
-  rows: DbRow[],
-): Promise<void> {
-  const properties = await listPropertiesImpl(sql, databaseId);
+export function collectRelationTargetIds(properties: DbProperty[], rows: DbRow[]): string[] {
   const relationProps = properties.filter((p) => p.type === 'relation');
   const rollupProps = properties.filter((p) => p.type === 'rollup');
-  if (relationProps.length === 0 && rollupProps.length === 0) return;
-
-  // Map each relation prop id → its config (for the relationPropId lookup), so
-  // a rollup can find the relation it rolls up. Build a quick prop index too.
-  const propById = new Map(properties.map((p) => [p.id, p]));
-
-  // Collect every target row id referenced across the whole page, from both
-  // relation props directly and from the relations that rollups depend on.
+  if (relationProps.length === 0 && rollupProps.length === 0) return [];
   const relevantRelationIds = new Set<string>(relationProps.map((p) => p.id));
   for (const rp of rollupProps) {
     const relId = typeof rp.config.relationPropId === 'string' ? rp.config.relationPropId : '';
     if (relId) relevantRelationIds.add(relId);
   }
-
   const allTargetIds = new Set<string>();
   for (const row of rows) {
     for (const relPropId of relevantRelationIds) {
@@ -613,35 +636,31 @@ async function resolveRelationsAndRollups(
       }
     }
   }
+  return [...allTargetIds];
+}
 
-  // Single batched fetch of every referenced target row (title/icon/props/meta).
-  const targets = new Map<string, TargetRowData>();
-  if (allTargetIds.size > 0) {
-    const fetched = await sql<
-      {
-        id: string;
-        title: string;
-        icon: string | null;
-        props: Record<string, unknown> | null;
-        createdTime: string;
-        lastEditedTime: string;
-      }[]
-    >`
-      SELECT id, title, icon, db_props AS props,
-             created_at AS "createdTime", updated_at AS "lastEditedTime"
-      FROM editor.pages
-      WHERE id IN ${sql([...allTargetIds])} AND archived = false
-    `;
-    for (const t of fetched) {
-      targets.set(t.id, {
-        title: t.title,
-        icon: t.icon,
-        props: t.props ?? {},
-        createdTime: String(t.createdTime),
-        lastEditedTime: String(t.lastEditedTime),
-      });
-    }
-  }
+/**
+ * PURE core of relation-chip resolution + rollup computation. Mutates `rows`
+ * in place exactly as the SQL path does, but takes the already-fetched
+ * `targets` map instead of issuing queries — so the Postgres and DO-SQLite
+ * backends share identical shaping behavior.
+ *
+ * - For each `relation` prop, `props[propId]` is a string[] of target row ids;
+ *   we attach `row.relations[propId]` = resolved [{id,title,icon}] chips.
+ * - For each `rollup` prop, we follow `config.relationPropId` → ids → read each
+ *   target row's `config.targetPropId` value (a stored prop, 'title', or a
+ *   created/last-edited meta date) and apply `config.fn`; result lands in
+ *   `row.rollups[propId]`.
+ */
+export function applyRelationsAndRollups(
+  properties: DbProperty[],
+  rows: DbRow[],
+  targets: Map<string, TargetRowData>,
+): void {
+  const relationProps = properties.filter((p) => p.type === 'relation');
+  const rollupProps = properties.filter((p) => p.type === 'rollup');
+  if (relationProps.length === 0 && rollupProps.length === 0) return;
+  const propById = new Map(properties.map((p) => [p.id, p]));
 
   /** Read a target row's value for a rollup's `targetPropId`. */
   function targetValue(target: TargetRowData, targetPropId: string): unknown {
@@ -691,6 +710,52 @@ async function resolveRelationsAndRollups(
       row.rollups = rollups;
     }
   }
+}
+
+/**
+ * Resolve relation chips + compute rollups for a page of rows, using BATCHED
+ * queries (one query for all referenced target ids — no N+1). Thin Postgres
+ * wrapper: fetch the target rows, then delegate to the pure
+ * `applyRelationsAndRollups` core (shared with the DO-SQLite backend).
+ */
+async function resolveRelationsAndRollups(
+  sql: Sql,
+  databaseId: string,
+  rows: DbRow[],
+): Promise<void> {
+  const properties = await listPropertiesImpl(sql, databaseId);
+  const targetIds = collectRelationTargetIds(properties, rows);
+
+  // Single batched fetch of every referenced target row (title/icon/props/meta).
+  const targets = new Map<string, TargetRowData>();
+  if (targetIds.length > 0) {
+    const fetched = await sql<
+      {
+        id: string;
+        title: string;
+        icon: string | null;
+        props: Record<string, unknown> | null;
+        createdTime: string;
+        lastEditedTime: string;
+      }[]
+    >`
+      SELECT id, title, icon, db_props AS props,
+             created_at AS "createdTime", updated_at AS "lastEditedTime"
+      FROM editor.pages
+      WHERE id IN ${sql(targetIds)} AND archived = false
+    `;
+    for (const t of fetched) {
+      targets.set(t.id, {
+        title: t.title,
+        icon: t.icon,
+        props: t.props ?? {},
+        createdTime: String(t.createdTime),
+        lastEditedTime: String(t.lastEditedTime),
+      });
+    }
+  }
+
+  applyRelationsAndRollups(properties, rows, targets);
 }
 
 // ---------- formula support (Phase 7) ----------
@@ -783,7 +848,7 @@ function coerceRaw(value: unknown): FormulaValue {
  * Results land in `row.formulas[propId]` as either the computed value or a
  * `{ __error }` sentinel; a single bad formula never throws out of here.
  */
-function resolveFormulas(rows: DbRow[], properties: DbProperty[]): void {
+export function resolveFormulas(rows: DbRow[], properties: DbProperty[]): void {
   const formulaProps = properties.filter((p) => p.type === 'formula');
   if (formulaProps.length === 0) return;
 
