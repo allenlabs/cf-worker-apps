@@ -55,7 +55,7 @@ describe('time entry impls', () => {
     const [issue] = await db
       .insert(issues)
       .values({
-        projectId, trackerId: 1, subject: 'x', description: '',
+        projectId, number: 1, trackerId: 1, subject: 'x', description: '',
         statusId: 1, priorityId: 2, authorId: alice.id,
       })
       .returning();

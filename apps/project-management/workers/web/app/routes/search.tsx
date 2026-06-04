@@ -2,6 +2,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
 import { z } from 'zod';
 import { useT } from '@allenlabs/i18n/react';
+import { issueKey } from '~/lib/format';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { searchImpl } from '~/server/search';
 
@@ -49,7 +50,7 @@ function SearchPage() {
               <ul className="text-sm divide-y divide-gray-100">
                 {results.issues.map((i) => (
                   <li key={`i-${i.id}`} className="py-2">
-                    <span className="font-mono text-xs text-gray-500 mr-1">#{i.id}</span>
+                    <span className="font-mono text-xs text-gray-500 mr-1">{issueKey(i.projectKey, i.number)}</span>
                     {i.title}
                   </li>
                 ))}

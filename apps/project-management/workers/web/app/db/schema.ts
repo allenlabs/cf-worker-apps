@@ -72,10 +72,16 @@ export const projects = pm.table(
   {
     id: serial('id').primaryKey(),
     identifier: text('identifier').notNull(),
+    // Short uppercase project code (e.g. RED) used to compose Jira-style issue
+    // keys (`${key}-${number}`). Distinct from the URL `identifier`.
+    key: text('key').notNull(),
     name: text('name').notNull(),
     description: text('description').notNull().default(''),
     homepage: text('homepage').notNull().default(''),
     isPublic: boolean('is_public').notNull().default(false),
+    // Per-project monotonic counter; the next issue's `number` is allocated by
+    // incrementing this in a single UPDATE ... RETURNING.
+    issueSeq: integer('issue_seq').notNull().default(0),
     // Better Auth team id (inside org_allenlabs) backing this project's
     // per-project collaborators. Set on create; nullable for legacy rows.
     authTeamId: text('auth_team_id'),
@@ -92,6 +98,7 @@ export const projects = pm.table(
   },
   (t) => ({
     identifierIdx: uniqueIndex('projects_identifier_idx').on(t.identifier),
+    keyIdx: uniqueIndex('projects_key_idx').on(t.key),
     parentIdx: index('projects_parent_idx').on(t.parentId),
     authTeamIdx: index('projects_auth_team_id_idx').on(t.authTeamId),
   }),
@@ -201,6 +208,9 @@ export const issues = pm.table(
     projectId: integer('project_id')
       .notNull()
       .references(() => projects.id, { onDelete: 'cascade' }),
+    // Per-project sequential number; the human key is `${project.key}-${number}`
+    // (e.g. RED-1). The global `id` remains the stable PK/permalink.
+    number: integer('number').notNull(),
     trackerId: integer('tracker_id')
       .notNull()
       .references(() => trackers.id, { onDelete: 'restrict' }),
@@ -238,6 +248,7 @@ export const issues = pm.table(
   },
   (t) => ({
     projectIdx: index('issues_project_idx').on(t.projectId),
+    projectNumberIdx: uniqueIndex('issues_project_number_idx').on(t.projectId, t.number),
     statusIdx: index('issues_status_idx').on(t.statusId),
     assigneeIdx: index('issues_assignee_idx').on(t.assignedToId),
     parentIdx: index('issues_parent_idx').on(t.parentId),

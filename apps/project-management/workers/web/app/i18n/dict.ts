@@ -179,6 +179,8 @@ const pm: Dict = {
     "project.newTitle": "New project",
     "project.homepage": "Homepage",
     "project.identifierHint": "URL slug; lowercase letters, digits, dash, underscore.",
+    "project.key": "Key",
+    "project.keyHint": "Issue key prefix (e.g. RED → RED-1). 1–10 letters/digits, starts with a letter.",
     "project.publicLabel": "Public project (visible without login)",
     "project.createdToast": "Project created",
     "project.createError": "Could not create project: {msg}",
@@ -351,7 +353,7 @@ const pm: Dict = {
     "issueNew.title": "New issue",
     "issueNew.unassigned": "— unassigned —",
     "issueNew.descriptionMarkdown": "Description (Markdown)",
-    "issueNew.createdToast": "Issue #{id} created",
+    "issueNew.createdToast": "Issue {key} created",
     "issueNew.createError": "Could not create issue: {msg}",
 
     // Issue detail
@@ -584,6 +586,8 @@ const pm: Dict = {
     "project.newTitle": "새 프로젝트",
     "project.homepage": "홈페이지",
     "project.identifierHint": "URL 슬러그; 소문자, 숫자, 대시, 밑줄.",
+    "project.key": "키",
+    "project.keyHint": "이슈 키 접두어 (예: RED → RED-1). 1–10자 영문/숫자, 영문자로 시작.",
     "project.publicLabel": "공개 프로젝트 (로그인 없이 표시)",
     "project.createdToast": "프로젝트가 생성되었습니다",
     "project.createError": "프로젝트를 만들지 못했습니다: {msg}",
@@ -756,7 +760,7 @@ const pm: Dict = {
     "issueNew.title": "새 이슈",
     "issueNew.unassigned": "— 미지정 —",
     "issueNew.descriptionMarkdown": "설명 (Markdown)",
-    "issueNew.createdToast": "이슈 #{id}이(가) 생성되었습니다",
+    "issueNew.createdToast": "이슈 {key}이(가) 생성되었습니다",
     "issueNew.createError": "이슈를 만들지 못했습니다: {msg}",
 
     // Issue detail

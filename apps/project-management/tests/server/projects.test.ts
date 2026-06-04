@@ -113,6 +113,7 @@ describe('getProjectImpl', () => {
     const p = await insertProject(db, { isPublic: true });
     const result = await getProjectImpl(db, null, null, p.identifier);
     expect(result.id).toBe(p.id);
+    expect(result.key).toBe(p.key); // key flows through the hydration CTE
     expect(result.trackers.length).toBeGreaterThan(0); // seeded + project_trackers
     expect(result.counts.openIssues).toBe(0);
     expect(result.counts.closedIssues).toBe(0);
@@ -240,6 +241,59 @@ describe('createProjectImpl', () => {
         isPublic: false,
       }),
     ).rejects.toThrow(/already used/);
+  });
+
+  it('derives a project key from the identifier when none is given', async () => {
+    const u = await insertUser(db);
+    const created = await createProjectImpl(db, makeUser({ id: u.id, login: u.login }), {
+      identifier: 'redmine',
+      name: 'Redmine',
+      description: '',
+      homepage: '',
+      isPublic: false,
+    });
+    expect(created.key).toBe('REDMI'); // uppercase alnum, capped at 5
+    expect(created.issueSeq).toBe(0);
+  });
+
+  it('accepts an explicit key and uppercases it', async () => {
+    const u = await insertUser(db);
+    const created = await createProjectImpl(db, makeUser({ id: u.id, login: u.login }), {
+      identifier: 'redmine',
+      key: 'red',
+      name: 'Redmine',
+      description: '',
+      homepage: '',
+      isPublic: false,
+    });
+    expect(created.key).toBe('RED');
+  });
+
+  it('rejects an invalid key shape', async () => {
+    await expect(
+      createProjectImpl(db, makeUser(), {
+        identifier: 'bad-key',
+        key: '1!!',
+        name: 'X',
+        description: '',
+        homepage: '',
+        isPublic: false,
+      }),
+    ).rejects.toThrow(/Invalid project key/);
+  });
+
+  it('rejects a duplicate key', async () => {
+    await insertProject(db, { identifier: 'first', key: 'RED' });
+    await expect(
+      createProjectImpl(db, makeUser(), {
+        identifier: 'second',
+        key: 'RED',
+        name: 'X',
+        description: '',
+        homepage: '',
+        isPublic: false,
+      }),
+    ).rejects.toThrow(/key "RED" is already used/);
   });
 
   it('writes a project_created activity', async () => {

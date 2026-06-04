@@ -2,7 +2,7 @@ import { createFileRoute, getRouteApi } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
 import { z } from 'zod';
 import { useT } from '@allenlabs/i18n/react';
-import { formatDate } from '~/lib/format';
+import { formatDate, issueKey } from '~/lib/format';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { listIssuesImpl } from '~/server/issues';
 import { getProjectImpl } from '~/server/projects';
@@ -94,7 +94,7 @@ function GanttPage() {
             <div className="h-7 bg-gray-100 px-2 py-1 text-xs font-semibold uppercase">{t('gantt.colIssue')}</div>
             {dated.map((i) => (
               <div key={i.id} className="h-7 px-2 py-1 text-sm truncate border-b border-gray-100">
-                <span className="font-mono text-xs text-gray-500 mr-1">#{i.id}</span>{i.subject}
+                <span className="font-mono text-xs text-gray-500 mr-1">{issueKey(i.projectKey, i.number)}</span>{i.subject}
               </div>
             ))}
           </div>

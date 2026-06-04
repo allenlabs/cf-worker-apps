@@ -46,6 +46,7 @@ describe('version impls', () => {
     await db.insert(issues).values([
       {
         projectId,
+        number: 1,
         trackerId: 1,
         subject: 'open1',
         description: '',
@@ -56,6 +57,7 @@ describe('version impls', () => {
       },
       {
         projectId,
+        number: 2,
         trackerId: 1,
         subject: 'open2',
         description: '',
@@ -66,6 +68,7 @@ describe('version impls', () => {
       },
       {
         projectId,
+        number: 3,
         trackerId: 1,
         subject: 'closed',
         description: '',

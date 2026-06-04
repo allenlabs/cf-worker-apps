@@ -82,6 +82,35 @@ describe('createIssueImpl', () => {
     await db.delete((await import('~/db/schema')).issueStatuses);
     await expect(seedIssue()).rejects.toThrow(/Default status/);
   });
+
+  it('allocates a per-project sequential number (RED-1, RED-2 …)', async () => {
+    const first = await seedIssue({ subject: 'one' });
+    const second = await seedIssue({ subject: 'two' });
+    expect(first.number).toBe(1);
+    expect(second.number).toBe(2);
+    // A second project numbers independently from 1.
+    const other = await insertProject(db, { identifier: 'other', key: 'OTH' });
+    const otherFirst = await createIssueImpl(db, alice, {
+      projectId: other.id,
+      trackerId: 1,
+      subject: 'o1',
+      description: '',
+      doneRatio: 0,
+    });
+    expect(otherFirst.number).toBe(1);
+  });
+
+  it('throws when the project does not exist', async () => {
+    await expect(
+      createIssueImpl(db, alice, {
+        projectId: 999999,
+        trackerId: 1,
+        subject: 'ghost',
+        description: '',
+        doneRatio: 0,
+      }),
+    ).rejects.toThrow(/not found/);
+  });
 });
 
 describe('listIssuesImpl', () => {
@@ -95,6 +124,14 @@ describe('listIssuesImpl', () => {
   it('returns only open by default', async () => {
     const list = await listIssuesImpl(db, { projectId });
     expect(list.map((i) => i.subject).sort()).toEqual(['open one', 'second open']);
+  });
+
+  it('exposes the per-project number and project key on each row', async () => {
+    const list = await listIssuesImpl(db, { projectId, statusFilter: 'all', sort: 'id' });
+    for (const row of list) {
+      expect(row.projectKey).toBe('DEMO'); // insertProject('demo') → key DEMO
+      expect(row.number).toBeGreaterThan(0);
+    }
   });
 
   it('returns only closed when requested', async () => {

@@ -11,7 +11,7 @@ import {
   versions,
   wikis,
 } from '~/db/schema';
-import { slugify } from '~/lib/format';
+import { deriveProjectKey, PROJECT_KEY_RE, slugify } from '~/lib/format';
 import {
   type AuthContext,
   ForbiddenError,
@@ -39,6 +39,8 @@ export const createProjectSchema = z.object({
     .min(1)
     .max(100)
     .regex(/^[a-z0-9][a-z0-9_-]*$/, 'lowercase letters/numbers/-/_ only'),
+  // Optional Jira-style key (RED). Derived from the identifier when omitted.
+  key: z.string().max(10).optional(),
   name: z.string().min(1).max(255),
   description: z.string().optional().default(''),
   homepage: z.string().optional().default(''),
@@ -97,7 +99,7 @@ export async function getProjectImpl(
       WITH
       project_row AS (
         SELECT
-          id, identifier, name, description, homepage,
+          id, identifier, key, name, description, homepage,
           is_public AS "isPublic", parent_id AS "parentId", status,
           created_at AS "createdAt", updated_at AS "updatedAt"
         FROM pm.projects
@@ -179,6 +181,7 @@ export async function getProjectImpl(
       project: {
         id: number;
         identifier: string;
+        key: string;
         name: string;
         description: string;
         homepage: string;
@@ -252,6 +255,16 @@ export async function createProjectImpl(
   });
   if (existing) throw new Error(`Identifier "${data.identifier}" is already used.`);
 
+  // Resolve the Jira-style project key: explicit input (uppercased) or derived
+  // from the identifier. Validate the shape and enforce global uniqueness so
+  // composed issue keys (`${key}-${number}`) never collide across projects.
+  const key = data.key?.trim() ? data.key.trim().toUpperCase() : deriveProjectKey(data.identifier);
+  if (!PROJECT_KEY_RE.test(key)) {
+    throw new Error(`Invalid project key "${key}" — 1–10 letters/digits, starting with a letter.`);
+  }
+  const keyTaken = await db.query.projects.findFirst({ where: eq(projects.key, key) });
+  if (keyTaken) throw new Error(`Project key "${key}" is already used.`);
+
   // Create the backing Better Auth team (in org_allenlabs) BEFORE inserting the
   // project so we can store its id. Best-effort: if the auth-api bridge is
   // unreachable, fall back to a null team id (legacy pm.members RBAC still
@@ -275,6 +288,7 @@ export async function createProjectImpl(
     .insert(projects)
     .values({
       identifier: data.identifier,
+      key,
       name: data.name,
       description: data.description,
       homepage: data.homepage,

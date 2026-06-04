@@ -77,6 +77,29 @@ export function handle(username: string | null | undefined): string {
   return u ? `@${u}` : '';
 }
 
+/** Compose the Jira-style human key for an issue: `${projectKey}-${number}` (e.g. RED-1). */
+export function issueKey(projectKey: string, number: number): string {
+  return `${projectKey}-${number}`;
+}
+
+/**
+ * Derive a default project key from a name or identifier: uppercase alnum with
+ * any leading digits stripped, capped at 5 chars, falling back to 'PRJ' when
+ * nothing usable remains. Keys always start with a letter so they compose
+ * unambiguously into issue keys. An explicit key passed on project create takes
+ * priority over this fallback.
+ */
+export function deriveProjectKey(source: string | null | undefined): string {
+  const cleaned = (source ?? '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .replace(/^[0-9]+/, '');
+  return cleaned ? cleaned.slice(0, 5) : 'PRJ';
+}
+
+/** Project key validity: 1–10 chars, starts with a letter, uppercase alnum. */
+export const PROJECT_KEY_RE = /^[A-Z][A-Z0-9]{0,9}$/;
+
 export function slugify(s: string): string {
   return s
     .toLowerCase()

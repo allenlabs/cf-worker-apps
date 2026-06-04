@@ -3,7 +3,7 @@ import { createServerFn } from '@tanstack/react-start';
 import { getRequest } from '@tanstack/react-start/server';
 import { useT } from '@allenlabs/i18n/react';
 import { PriorityBadge, StatusBadge, TrackerBadge } from '~/components/badges';
-import { formatDate, timeAgo } from '~/lib/format';
+import { formatDate, issueKey, timeAgo } from '~/lib/format';
 import { getDb, getEnv } from '~/server/auth-runtime.server';
 import { loadMyPageImpl } from '~/server/home';
 import { readSessionToken, verifySessionToken } from '~/server/session.server';
@@ -79,6 +79,7 @@ function MyPagePage() {
                     }}
                     className="font-medium flex-1"
                   >
+                    <span className="font-mono text-xs text-gray-500 mr-1">{issueKey(i.projectKey, i.number)}</span>
                     {i.subject}
                   </Link>
                   <StatusBadge name={i.statusName} color={i.statusColor} />
@@ -110,6 +111,7 @@ function MyPagePage() {
                     }}
                     className="font-medium flex-1"
                   >
+                    <span className="font-mono text-xs text-gray-500 mr-1">{issueKey(i.projectKey, i.number)}</span>
                     {i.subject}
                   </Link>
                   <StatusBadge name={i.statusName} color={i.statusColor} />
@@ -135,6 +137,7 @@ function MyPagePage() {
                     }}
                     className="font-medium flex-1"
                   >
+                    <span className="font-mono text-xs text-gray-500 mr-1">{issueKey(i.projectKey, i.number)}</span>
                     {i.subject}
                   </Link>
                   <StatusBadge name={i.statusName} color={i.statusColor} />

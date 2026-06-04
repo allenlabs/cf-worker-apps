@@ -1,7 +1,7 @@
 import { createFileRoute, redirect } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useT } from '@allenlabs/i18n/react';
-import { slugify } from '~/lib/format';
+import { deriveProjectKey, slugify } from '~/lib/format';
 import { notifyError, notifySuccess } from '~/lib/toast';
 import { getCurrentUser } from '~/server/auth-runtime.server';
 import { createProject } from '~/server/projects';
@@ -25,6 +25,7 @@ function NewProjectPage() {
   const [form, setForm] = useState({
     name: '',
     identifier: '',
+    key: '',
     description: '',
     homepage: '',
     isPublic: false,
@@ -70,6 +71,7 @@ function NewProjectPage() {
                 ...form,
                 name: e.target.value,
                 identifier: form.identifier || slugify(e.target.value),
+                key: form.key || deriveProjectKey(e.target.value),
               })
             }
             required
@@ -86,6 +88,19 @@ function NewProjectPage() {
             pattern="^[a-z0-9][a-z0-9_-]*$"
           />
           <p className="text-xs text-gray-500 mt-1">{t('project.identifierHint')}</p>
+        </div>
+        <div>
+          <label className="label">{t('project.key')}</label>
+          <input
+            data-testid="project-key"
+            className="input font-mono uppercase"
+            value={form.key}
+            onChange={(e) => setForm({ ...form, key: e.target.value.toUpperCase() })}
+            maxLength={10}
+            pattern="^[A-Za-z][A-Za-z0-9]{0,9}$"
+            placeholder="RED"
+          />
+          <p className="text-xs text-gray-500 mt-1">{t('project.keyHint')}</p>
         </div>
         <div>
           <label className="label">{t('project.description')}</label>

@@ -28,11 +28,11 @@ beforeEach(async () => {
   privateProjectId = priv.id;
   await db.insert(issues).values([
     {
-      projectId: pub.id, trackerId: 1, subject: 'pub issue rocket',
+      projectId: pub.id, number: 1, trackerId: 1, subject: 'pub issue rocket',
       description: '', statusId: 1, priorityId: 2, authorId: u.id,
     },
     {
-      projectId: priv.id, trackerId: 1, subject: 'priv issue rocket',
+      projectId: priv.id, number: 1, trackerId: 1, subject: 'priv issue rocket',
       description: '', statusId: 1, priorityId: 2, authorId: u.id,
     },
   ]);
@@ -91,7 +91,7 @@ describe('searchImpl', () => {
     const u = await insertUser(fresh);
     await insertProject(fresh, { identifier: 'p', isPublic: false });
     await fresh.insert(issues).values({
-      projectId: 1, trackerId: 1, subject: 'hidden',
+      projectId: 1, number: 1, trackerId: 1, subject: 'hidden',
       description: '', statusId: 1, priorityId: 2, authorId: u.id,
     });
     const r = await searchImpl(fresh, null, null, { q: 'hidden' });

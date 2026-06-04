@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { useT } from '@allenlabs/i18n/react';
 import { PriorityBadge, ProgressBar, StatusBadge, TrackerBadge } from '~/components/badges';
 import { Markdown } from '~/components/Markdown';
-import { formatDate, formatDateTime, formatHours } from '~/lib/format';
+import { formatDate, formatDateTime, formatHours, issueKey } from '~/lib/format';
 import { notifyError, notifySuccess } from '~/lib/toast';
 import { getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { getIssueImpl, updateIssue, watchIssue } from '~/server/issues';
@@ -95,7 +95,8 @@ function IssuePage() {
         <TrackerBadge name={data.issue.tracker?.name ?? ''} color={data.issue.tracker?.color ?? '#888'} />
         <div className="flex-1">
           <h2 className="text-xl font-semibold">
-            #{i.id} {i.subject}
+            <span className="font-mono text-redmine-600 mr-1">{issueKey(project.key, i.number)}</span>
+            {i.subject}
           </h2>
           <p className="text-xs text-gray-500 mt-1">
             {t('issueDetail.openedBy', { author: data.issue.author?.login ?? '', date: formatDateTime(i.createdAt) })}

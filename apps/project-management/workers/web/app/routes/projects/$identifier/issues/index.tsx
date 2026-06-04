@@ -3,7 +3,7 @@ import { createServerFn } from '@tanstack/react-start';
 import { z } from 'zod';
 import { useT } from '@allenlabs/i18n/react';
 import { PriorityBadge, StatusBadge, TrackerBadge } from '~/components/badges';
-import { formatDate, timeAgo } from '~/lib/format';
+import { formatDate, issueKey, timeAgo } from '~/lib/format';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { listIssuesImpl } from '~/server/issues';
 import { getProjectImpl } from '~/server/projects';
@@ -173,7 +173,7 @@ function IssuesIndexPage() {
           <tbody>
             {issues.map((i) => (
               <tr key={i.id} data-testid={`issue-row-${i.id}`}>
-                <td className="font-mono text-xs">#{i.id}</td>
+                <td className="font-mono text-xs">{issueKey(i.projectKey, i.number)}</td>
                 <td><TrackerBadge name={i.trackerName} color={i.trackerColor} /></td>
                 <td><StatusBadge name={i.statusName} color={i.statusColor} closed={i.statusIsClosed} /></td>
                 <td><PriorityBadge name={i.priorityName} color={i.priorityColor} /></td>

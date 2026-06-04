@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  PROJECT_KEY_RE,
+  deriveProjectKey,
   displayName,
   formatDate,
   formatDateTime,
   formatHours,
   handle,
+  issueKey,
   slugify,
   timeAgo,
 } from '~/lib/format';
@@ -180,5 +183,34 @@ describe('handle', () => {
     expect(handle('   ')).toBe('');
     expect(handle(null)).toBe('');
     expect(handle(undefined)).toBe('');
+  });
+});
+
+describe('issueKey', () => {
+  it('composes the project key and number (RED-1)', () => {
+    expect(issueKey('RED', 1)).toBe('RED-1');
+    expect(issueKey('BLUE', 42)).toBe('BLUE-42');
+  });
+});
+
+describe('deriveProjectKey', () => {
+  it('uppercases alnum and caps at 5 chars', () => {
+    expect(deriveProjectKey('redmine')).toBe('REDMI');
+    expect(deriveProjectKey('my-test-project')).toBe('MYTES');
+  });
+
+  it('strips leading digits and falls back to PRJ when empty', () => {
+    expect(deriveProjectKey('123abc')).toBe('ABC');
+    expect(deriveProjectKey('123')).toBe('PRJ');
+    expect(deriveProjectKey('')).toBe('PRJ');
+    expect(deriveProjectKey(null)).toBe('PRJ');
+    expect(deriveProjectKey(undefined)).toBe('PRJ');
+  });
+
+  it('produces values that satisfy PROJECT_KEY_RE', () => {
+    expect(PROJECT_KEY_RE.test(deriveProjectKey('redmine'))).toBe(true);
+    expect(PROJECT_KEY_RE.test('RED')).toBe(true);
+    expect(PROJECT_KEY_RE.test('1AB')).toBe(false); // must start with a letter
+    expect(PROJECT_KEY_RE.test('TOOLONGKEYXX')).toBe(false); // > 10 chars
   });
 });

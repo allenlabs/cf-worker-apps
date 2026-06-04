@@ -16,6 +16,8 @@ export interface SearchResult {
   issues: Array<{
     kind: 'issue';
     id: number;
+    number: number;
+    projectKey: string;
     projectId: number;
     title: string;
     snippet: string;
@@ -74,12 +76,15 @@ export async function searchImpl(
     .select({
       kind: sql<'issue'>`'issue'`,
       id: issues.id,
+      number: issues.number,
+      projectKey: projects.key,
       projectId: issues.projectId,
       title: issues.subject,
       snippet: issues.description,
       updatedAt: issues.updatedAt,
     })
     .from(issues)
+    .innerJoin(projects, eq(projects.id, issues.projectId))
     .where(and(...issueConds))
     .limit(50);
 

@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type DB } from '~/db/client';
 import * as schema from '~/db/schema';
+import { deriveProjectKey } from '~/lib/format';
 
 // We surface `DB` as the test database type so server impls (typed
 // `PostgresJsDatabase<typeof schema>` via `~/db/client`) accept the PGlite-
@@ -31,6 +32,11 @@ const PHASE2_MIGRATION = readFileSync(
   join(ROOT, 'drizzle-pg', '0005_pm_phase2.sql'),
   'utf8',
 );
+// Phase 3a: Jira-style issue keys (projects.key/issue_seq + issues.number).
+const ISSUE_KEYS_MIGRATION = readFileSync(
+  join(ROOT, 'drizzle-pg', '0006_issue_keys.sql'),
+  'utf8',
+);
 
 export async function makeTestDb(opts?: { seed?: boolean }): Promise<TestDB> {
   const pglite = new PGlite();
@@ -38,6 +44,7 @@ export async function makeTestDb(opts?: { seed?: boolean }): Promise<TestDB> {
   await pglite.exec(NOTION_MIGRATION);
   await pglite.exec(NOTION_DROP_MIGRATION);
   await pglite.exec(PHASE2_MIGRATION);
+  await pglite.exec(ISSUE_KEYS_MIGRATION);
   if (opts?.seed !== false) await pglite.exec(SEED);
   // The migration sets search_path inline, but it scopes to the session that
   // executed the DDL. Re-pin it on the live connection so helper inserts
@@ -72,10 +79,12 @@ export async function insertProject(
   db: TestDB,
   fields: Partial<typeof schema.projects.$inferInsert> = {},
 ): Promise<typeof schema.projects.$inferSelect> {
+  const identifier = fields.identifier ?? 'demo';
   const [p] = await db
     .insert(schema.projects)
     .values({
-      identifier: fields.identifier ?? 'demo',
+      identifier,
+      key: fields.key ?? deriveProjectKey(identifier),
       name: fields.name ?? 'Demo',
       description: fields.description ?? '',
       isPublic: fields.isPublic ?? false,

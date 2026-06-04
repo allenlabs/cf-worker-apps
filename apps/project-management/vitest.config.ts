@@ -80,6 +80,13 @@ export default defineConfig({
         'workers/web/app/lib/env.ts',
         'workers/web/app/routes/**',
         'workers/web/app/db/**',
+        // Client-only interaction shells exercised by the top-level Playwright
+        // E2E suite, not the in-process node/jsdom unit tests: the ⌘K command
+        // palette (global keydown + router navigation) and the suite language
+        // picker (document.cookie write + full-page reload). Same category as
+        // routes/** and client.tsx above.
+        'workers/web/app/components/CommandPalette.tsx',
+        'workers/web/app/i18n/picker.tsx',
         // SSR-runtime-only helpers — exercised by deploy integration, not
         // by the in-process unit tests.  Earlier the file was wrapped in
         // `/* v8 ignore start/stop */` markers but vitest/v8 stopped

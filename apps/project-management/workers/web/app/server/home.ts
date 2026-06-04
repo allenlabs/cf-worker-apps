@@ -85,6 +85,8 @@ export interface MyPagePayload {
   };
   myAssigned: Array<{
     id: number;
+    number: number;
+    projectKey: string;
     subject: string;
     projectId: number;
     projectIdentifier: string;
@@ -101,6 +103,8 @@ export interface MyPagePayload {
   }>;
   myReported: Array<{
     id: number;
+    number: number;
+    projectKey: string;
     subject: string;
     projectIdentifier: string;
     statusName: string;
@@ -109,6 +113,8 @@ export interface MyPagePayload {
   }>;
   watched: Array<{
     id: number;
+    number: number;
+    projectKey: string;
     subject: string;
     projectIdentifier: string;
     statusName: string;
@@ -142,7 +148,8 @@ export async function loadMyPageImpl(db: DB, sub: string | null): Promise<MyPage
   ),
   my_assigned AS (
     SELECT
-      i.id, i.subject, i.project_id AS "projectId",
+      i.id, i.number AS "number", p.key AS "projectKey",
+      i.subject, i.project_id AS "projectId",
       p.identifier AS "projectIdentifier", p.name AS "projectName",
       t.name AS "trackerName", t.color AS "trackerColor",
       s.name AS "statusName", s.color AS "statusColor", s.is_closed AS "statusIsClosed",
@@ -158,7 +165,7 @@ export async function loadMyPageImpl(db: DB, sub: string | null): Promise<MyPage
   ),
   my_reported AS (
     SELECT
-      i.id, i.subject,
+      i.id, i.number AS "number", p.key AS "projectKey", i.subject,
       p.identifier AS "projectIdentifier",
       s.name AS "statusName", s.color AS "statusColor",
       i.updated_at AS "updatedAt"
@@ -170,7 +177,7 @@ export async function loadMyPageImpl(db: DB, sub: string | null): Promise<MyPage
   ),
   watched AS (
     SELECT
-      i.id, i.subject,
+      i.id, i.number AS "number", p.key AS "projectKey", i.subject,
       p.identifier AS "projectIdentifier",
       s.name AS "statusName", s.color AS "statusColor",
       i.updated_at AS "updatedAt"

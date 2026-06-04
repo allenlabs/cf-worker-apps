@@ -41,6 +41,8 @@ const ISSUE_FIELDS = {
 
 export interface IssueRow {
   id: number;
+  number: number;
+  projectKey: string;
   subject: string;
   trackerId: number;
   trackerName: string;
@@ -104,6 +106,8 @@ export async function listIssuesImpl(db: DB, data: ListIssuesInput): Promise<Iss
   const rows = await db
     .select({
       id: issues.id,
+      number: issues.number,
+      projectKey: projects.key,
       subject: issues.subject,
       trackerId: issues.trackerId,
       trackerName: trackers.name,
@@ -127,6 +131,7 @@ export async function listIssuesImpl(db: DB, data: ListIssuesInput): Promise<Iss
       updatedAt: issues.updatedAt,
     })
     .from(issues)
+    .innerJoin(projects, eq(projects.id, issues.projectId))
     .innerJoin(trackers, eq(trackers.id, issues.trackerId))
     .innerJoin(issueStatuses, eq(issueStatuses.id, issues.statusId))
     .innerJoin(issuePriorities, eq(issuePriorities.id, issues.priorityId))
@@ -260,10 +265,21 @@ export async function createIssueImpl(
     throw new Error('Default status or priority is missing — run db seed.');
   }
 
+  // Allocate the next per-project issue number atomically by bumping the
+  // project's counter in a single UPDATE ... RETURNING. The returned value is
+  // this issue's `number` (RED-<number>); the global serial `id` stays the PK.
+  const [seq] = await db
+    .update(projects)
+    .set({ issueSeq: sql`${projects.issueSeq} + 1` })
+    .where(eq(projects.id, data.projectId))
+    .returning({ number: projects.issueSeq });
+  if (!seq) throw new Error(`Project ${data.projectId} not found`);
+
   const [created] = await db
     .insert(issues)
     .values({
       projectId: data.projectId,
+      number: seq.number,
       trackerId: data.trackerId,
       subject: data.subject,
       description: data.description,

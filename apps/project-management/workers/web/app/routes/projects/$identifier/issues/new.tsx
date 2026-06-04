@@ -3,6 +3,7 @@ import { createServerFn } from '@tanstack/react-start';
 import { useState } from 'react';
 import { z } from 'zod';
 import { useT } from '@allenlabs/i18n/react';
+import { issueKey } from '~/lib/format';
 import { notifyError, notifySuccess } from '~/lib/toast';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { listMembersImpl } from '~/server/members';
@@ -68,7 +69,7 @@ function NewIssuePage() {
           doneRatio: Number(form.doneRatio),
         },
       });
-      notifySuccess(t('issueNew.createdToast', { id: created.id }));
+      notifySuccess(t('issueNew.createdToast', { key: issueKey(project.key, created.number) }));
       // Full-page redirect, NOT router.navigate(). Client-side router
       // transitions into a loader-backed route currently hang on this
       // TanStack Start build (same bug worked around with `reloadDocument`
