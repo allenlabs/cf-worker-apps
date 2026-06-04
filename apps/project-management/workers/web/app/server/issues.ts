@@ -18,6 +18,7 @@ import {
 import { ForbiddenError } from '~/lib/permissions';
 import { logActivityImpl } from './activities';
 import { listIssueLabelsImpl, setIssueLabelsImpl } from './labels';
+import { listRelationsImpl } from './relations';
 import { type CurrentUser } from './auth';
 import { buildAuthContext, getDb, getCurrentUser, getEnv, requirePermission, requireUser } from './auth-runtime.server';
 import * as notionGateway from './notion-gateway-client';
@@ -174,6 +175,7 @@ export async function getIssueImpl(db: DB, id: number) {
     journalRows,
     watcherRows,
     labelRows,
+    relationRows,
   ] = await Promise.all([
     db.query.projects.findFirst({ where: eq(projects.id, issue.projectId) }),
     db.query.users.findFirst({ where: eq(users.id, issue.authorId) }),
@@ -212,6 +214,7 @@ export async function getIssueImpl(db: DB, id: number) {
       .orderBy(journals.createdAt),
     db.select({ userId: watchers.userId }).from(watchers).where(eq(watchers.issueId, issue.id)),
     listIssueLabelsImpl(db, issue.id),
+    listRelationsImpl(db, issue.id),
   ]);
 
   const journalIds = journalRows.map((j) => j.id);
@@ -240,6 +243,7 @@ export async function getIssueImpl(db: DB, id: number) {
     journals: journalRows.map((j) => ({ ...j, details: detailsByJournal.get(j.id) ?? [] })),
     watchers: watcherRows.map((w) => w.userId),
     labels: labelRows,
+    relations: relationRows,
   };
 }
 

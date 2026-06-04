@@ -5,6 +5,7 @@ import { useT } from '@allenlabs/i18n/react';
 import { formatDate, issueKey } from '~/lib/format';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { listIssuesImpl } from '~/server/issues';
+import { listPrecedesEdgesImpl } from '~/server/relations';
 import { getProjectImpl } from '~/server/projects';
 
 const parentRoute = getRouteApi('/projects/$identifier');
@@ -23,7 +24,8 @@ const loadGantt = createServerFn({ method: 'GET' })
       statusFilter: 'all',
       sort: 'id',
     });
-    return { issues };
+    const edges = await listPrecedesEdgesImpl(db, project.id);
+    return { issues, edges };
   });
 
 export const Route = createFileRoute('/projects/$identifier/gantt')({
@@ -35,7 +37,7 @@ const DAY = 24 * 60 * 60 * 1000;
 
 function GanttPage() {
   const project = parentRoute.useLoaderData();
-  const { issues } = Route.useLoaderData();
+  const { issues, edges } = Route.useLoaderData();
   const { t } = useT();
 
   const dated = issues.filter((i) => i.startDate || i.dueDate);
@@ -67,6 +69,20 @@ function GanttPage() {
   const rowH = 28;
   const headerH = 28;
   const height = headerH + dated.length * rowH;
+
+  // Bar geometry per issue id, reused for both the bars and the dependency
+  // arrows (precedes edges) so the two always line up.
+  const geom = new Map<number, { x: number; y: number; w: number }>();
+  dated.forEach((i, idx) => {
+    const s = new Date(i.startDate ?? i.dueDate ?? min).getTime();
+    const e = new Date(i.dueDate ?? i.startDate ?? min).getTime();
+    const x = Math.round((s - min) / DAY) * dayW;
+    const w = Math.max(dayW / 2, Math.round((e - s) / DAY + 1) * dayW);
+    geom.set(i.id, { x, y: headerH + idx * rowH + 6, w });
+  });
+  const barH = rowH - 12;
+  // Only edges whose endpoints are both on the chart can be drawn.
+  const drawableEdges = edges.filter((e) => geom.has(e.fromIssueId) && geom.has(e.toIssueId));
 
   const months: Array<{ label: string; offset: number; width: number }> = [];
   let cursor = new Date(min);
@@ -123,23 +139,46 @@ function GanttPage() {
               return <line x1={x} y1={0} x2={x} y2={height} stroke="#dc2626" strokeWidth={1} />;
             })()}
             {/* bars */}
-            {dated.map((i, idx) => {
-              const s = new Date(i.startDate ?? i.dueDate ?? min).getTime();
-              const e = new Date(i.dueDate ?? i.startDate ?? min).getTime();
-              const x = Math.round((s - min) / DAY) * dayW;
-              const w = Math.max(dayW / 2, Math.round((e - s) / DAY + 1) * dayW);
-              const y = headerH + idx * rowH + 6;
+            {dated.map((i) => {
+              const g = geom.get(i.id)!;
               const fillFull = i.statusIsClosed ? '#94a3b8' : '#3a7fa5';
-              const doneW = (w * (i.doneRatio ?? 0)) / 100;
+              const doneW = (g.w * (i.doneRatio ?? 0)) / 100;
               return (
                 <g key={i.id}>
-                  <rect x={x} y={y} width={w} height={rowH - 12} rx={3} fill="#e5e7eb" />
-                  {doneW > 0 ? <rect x={x} y={y} width={doneW} height={rowH - 12} rx={3} fill={fillFull} /> : null}
-                  <rect x={x} y={y} width={w} height={rowH - 12} rx={3} fill="none" stroke="#9ca3af" />
-                  <text x={x + 4} y={y + 12} fontSize="10" fill="#1f2937">
+                  <rect x={g.x} y={g.y} width={g.w} height={barH} rx={3} fill="#e5e7eb" />
+                  {doneW > 0 ? <rect x={g.x} y={g.y} width={doneW} height={barH} rx={3} fill={fillFull} /> : null}
+                  <rect x={g.x} y={g.y} width={g.w} height={barH} rx={3} fill="none" stroke="#9ca3af" />
+                  <text x={g.x + 4} y={g.y + 12} fontSize="10" fill="#1f2937">
                     {i.doneRatio}% · {formatDate(i.dueDate ?? i.startDate)}
                   </text>
                 </g>
+              );
+            })}
+            {/* precedes dependency arrows: end of source bar → start of target bar */}
+            {drawableEdges.length > 0 ? (
+              <defs>
+                <marker id="gantt-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+                  <path d="M0,0 L6,3 L0,6 Z" fill="#dc2626" />
+                </marker>
+              </defs>
+            ) : null}
+            {drawableEdges.map((e, idx) => {
+              const from = geom.get(e.fromIssueId)!;
+              const to = geom.get(e.toIssueId)!;
+              const x1 = from.x + from.w;
+              const y1 = from.y + barH / 2;
+              const x2 = to.x;
+              const y2 = to.y + barH / 2;
+              const midX = Math.max(x1 + 6, (x1 + x2) / 2);
+              return (
+                <polyline
+                  key={`edge-${idx}`}
+                  points={`${x1},${y1} ${midX},${y1} ${midX},${y2} ${x2},${y2}`}
+                  fill="none"
+                  stroke="#dc2626"
+                  strokeWidth={1}
+                  markerEnd="url(#gantt-arrow)"
+                />
               );
             })}
           </svg>

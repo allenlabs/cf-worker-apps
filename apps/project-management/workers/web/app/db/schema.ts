@@ -528,6 +528,36 @@ export const issueLabels = pm.table(
   }),
 );
 
+// ---------- Issue relations ----------
+
+export const issueRelations = pm.table(
+  'issue_relations',
+  {
+    id: serial('id').primaryKey(),
+    sourceIssueId: integer('source_issue_id')
+      .notNull()
+      .references(() => issues.id, { onDelete: 'cascade' }),
+    targetIssueId: integer('target_issue_id')
+      .notNull()
+      .references(() => issues.id, { onDelete: 'cascade' }),
+    // Stored (canonical) type: relates | duplicates | blocks | precedes | copied_to.
+    // The inverse (duplicated/blocked/follows/copied_from) is derived for display.
+    relationType: text('relation_type').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => ({
+    uniq: uniqueIndex('issue_relations_unique_idx').on(
+      t.sourceIssueId,
+      t.targetIssueId,
+      t.relationType,
+    ),
+    sourceIdx: index('issue_relations_source_idx').on(t.sourceIssueId),
+    targetIdx: index('issue_relations_target_idx').on(t.targetIssueId),
+  }),
+);
+
 // ---------- Project enabled modules ----------
 
 export const enabledModules = pm.table(

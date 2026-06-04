@@ -1,4 +1,4 @@
-import { createFileRoute, getRouteApi, useRouter } from '@tanstack/react-router';
+import { Link, createFileRoute, getRouteApi, useRouter } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
 import { useState } from 'react';
 import { z } from 'zod';
@@ -10,6 +10,7 @@ import { notifyError, notifySuccess } from '~/lib/toast';
 import { getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { getIssueImpl, updateIssue, watchIssue } from '~/server/issues';
 import { listLabelsImpl, setIssueLabels } from '~/server/labels';
+import { RELATION_TYPES, addRelation, removeRelation } from '~/server/relations';
 import { listMembersImpl } from '~/server/members';
 import { renderMarkdown } from '~/server/markdown';
 import { getRefData } from '~/server/ref-data';
@@ -64,6 +65,30 @@ function IssuePage() {
   const [changes, setChanges] = useState<Record<string, unknown>>({});
 
   const currentLabelIds = new Set(data.issue.labels.map((l) => l.id));
+  const [relType, setRelType] = useState<(typeof RELATION_TYPES)[number]>('relates');
+  const [relTarget, setRelTarget] = useState('');
+
+  async function addRel(e: React.FormEvent) {
+    e.preventDefault();
+    const n = Number(relTarget);
+    if (!Number.isFinite(n) || n <= 0) return;
+    try {
+      await addRelation({ data: { sourceIssueId: i.id, targetNumber: n, type: relType } });
+      setRelTarget('');
+      router.invalidate();
+    } catch (err) {
+      notifyError(t('relation.addError', { msg: err instanceof Error ? err.message : String(err) }));
+    }
+  }
+
+  async function removeRel(id: number) {
+    try {
+      await removeRelation({ data: { id, issueId: i.id } });
+      router.invalidate();
+    } catch (err) {
+      notifyError(t('relation.addError', { msg: err instanceof Error ? err.message : String(err) }));
+    }
+  }
 
   async function toggleLabel(labelId: number) {
     const next = new Set(currentLabelIds);
@@ -215,6 +240,48 @@ function IssuePage() {
           </div>
         </section>
       ) : null}
+
+      <section className="card p-4">
+        <h3 className="font-semibold mb-2">{t('relation.title')}</h3>
+        {data.issue.relations.length === 0 ? (
+          <p className="text-sm text-gray-500">{t('relation.none')}</p>
+        ) : (
+          <ul className="text-sm space-y-1 mb-3">
+            {data.issue.relations.map((r) => (
+              <li key={r.relationId} className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wide text-gray-500 w-24">{t(`relation.${r.type}`)}</span>
+                <Link
+                  to="/projects/$identifier/issues/$issueId"
+                  params={{ identifier: project.identifier, issueId: String(r.issueId) }}
+                  className={r.statusIsClosed ? 'line-through text-gray-500' : ''}
+                >
+                  <span className="font-mono text-xs mr-1">{issueKey(r.projectKey, r.number)}</span>
+                  {r.subject}
+                </Link>
+                <button className="text-xs text-red-600 hover:underline" onClick={() => removeRel(r.relationId)}>
+                  ✕
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <form onSubmit={addRel} className="flex flex-wrap items-end gap-2">
+          <select className="select" value={relType} onChange={(e) => setRelType(e.target.value as typeof relType)}>
+            {RELATION_TYPES.map((rt) => (
+              <option key={rt} value={rt}>{t(`relation.${rt}`)}</option>
+            ))}
+          </select>
+          <input
+            className="input w-28"
+            type="number"
+            min={1}
+            value={relTarget}
+            onChange={(e) => setRelTarget(e.target.value)}
+            placeholder={t('relation.targetNumber')}
+          />
+          <button className="btn">{t('relation.add')}</button>
+        </form>
+      </section>
 
       <section className="card p-4">
         <h3 className="font-semibold mb-3">{t('issueDetail.history')}</h3>
