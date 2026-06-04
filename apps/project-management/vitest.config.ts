@@ -23,6 +23,7 @@ export default defineConfig({
             'tests/lib/**/*.test.ts',
             'tests/server/**/*.test.ts',
             'tests/cleanup/**/*.test.ts',
+            'tests/api/**/*.test.ts',
           ],
           setupFiles: ['./tests/_setup/setup-node.ts'],
         },

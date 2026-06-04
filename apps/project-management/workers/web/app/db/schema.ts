@@ -602,6 +602,29 @@ export const enabledModules = pm.table(
   }),
 );
 
+// ---------- API clients (HMAC) ----------
+
+export const apiClients = pm.table(
+  'api_clients',
+  {
+    id: serial('id').primaryKey(),
+    clientId: text('client_id').notNull().unique(),
+    name: text('name').notNull(),
+    hmacSecret: text('hmac_secret').notNull(),
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => ({
+    userIdx: index('api_clients_user_idx').on(t.userId),
+  }),
+);
+
+export type ApiClient = typeof apiClients.$inferSelect;
+
 // ---------- Notion integration ----------
 //
 // The interim PM-side `notion_connections` / `notion_issue_links` tables

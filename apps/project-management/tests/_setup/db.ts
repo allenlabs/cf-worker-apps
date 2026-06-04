@@ -54,6 +54,11 @@ const NOTIFICATIONS_MIGRATION = readFileSync(
   join(ROOT, 'drizzle-pg', '0010_notifications.sql'),
   'utf8',
 );
+// Phase 3f: HMAC API clients.
+const API_CLIENTS_MIGRATION = readFileSync(
+  join(ROOT, 'drizzle-pg', '0011_api_clients.sql'),
+  'utf8',
+);
 
 export async function makeTestDb(opts?: { seed?: boolean }): Promise<TestDB> {
   const pglite = new PGlite();
@@ -66,6 +71,7 @@ export async function makeTestDb(opts?: { seed?: boolean }): Promise<TestDB> {
   await pglite.exec(RELATIONS_MIGRATION);
   await pglite.exec(FTS_MIGRATION);
   await pglite.exec(NOTIFICATIONS_MIGRATION);
+  await pglite.exec(API_CLIENTS_MIGRATION);
   if (opts?.seed !== false) await pglite.exec(SEED);
   // The migration sets search_path inline, but it scopes to the session that
   // executed the DDL. Re-pin it on the live connection so helper inserts

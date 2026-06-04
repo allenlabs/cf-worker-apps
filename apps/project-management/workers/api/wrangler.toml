@@ -1,0 +1,26 @@
+name = "pm-api"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Smart Placement: sit near Hyperdrive → Hetzner Postgres (Helsinki).
+[placement]
+mode = "smart"
+workers_dev = true
+
+[[routes]]
+pattern = "projects-api.allenlabs.org"
+custom_domain = true
+
+# Hyperdrive → Hetzner Postgres (`allenlabs` DB, `pm` schema).
+# Same binding id as pm-web / pm-cleanup.
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "0b76cf08a44443d39d12f0d51ed059f5"
+
+[vars]
+APP_NAME = "Project Management API"
+PUBLIC_BASE_URL = "https://projects-api.allenlabs.org"
+
+# HMAC secrets live per-client in pm.api_clients (rotated via UPDATE), not as
+# wrangler secrets.
