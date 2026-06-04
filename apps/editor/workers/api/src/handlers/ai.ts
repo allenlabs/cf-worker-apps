@@ -8,13 +8,38 @@
 //
 // Kept Hono/Cloudflare-free so it's unit-testable with a fake fetcher.
 
-/** OpenAI-compatible LLM config. All three are OPTIONAL secrets on editor-api;
- * when any is unset the route returns a 503 "AI not configured" (no crash). */
+/** Structural subset of the Cloudflare Workers AI binding (`Ai`) that this
+ * handler uses. Declaring our own minimal shape (rather than importing the full
+ * `Ai` type) keeps `ai.ts` Cloudflare-runtime-free + trivially stubbable in
+ * unit tests, while the real `Env.AI: Ai` binding is structurally assignable to
+ * it (its `run(model: string & {}, …)` overload returns `Record<string, unknown>`). */
+export interface AiBinding {
+  run(
+    model: string,
+    inputs: Record<string, unknown>,
+    options?: Record<string, unknown>,
+  ): Promise<Record<string, unknown>>;
+}
+
+/** LLM config for the AI assist route. Two backends, selected in this order:
+ *   1. OpenAI-compatible `/chat/completions` — used when BOTH `LLM_BASE_URL`
+ *      and `LLM_API_KEY` are set (lets the user point at LiteLLM/OpenAI/etc.).
+ *   2. Cloudflare Workers AI (`AI` binding) — the on-edge default; no external
+ *      key needed. Model overridable via `WORKERS_AI_MODEL` (or `LLM_MODEL`).
+ *   3. Neither → the route returns 503 "AI not configured" (no crash).
+ * All fields are OPTIONAL; `AI` is the wrangler `[ai]` binding when present. */
 export interface AiEnv {
   LLM_BASE_URL?: string;
   LLM_API_KEY?: string;
   LLM_MODEL?: string;
+  /** Optional override for the Workers AI model id (defaults to a llama instruct). */
+  WORKERS_AI_MODEL?: string;
+  /** Cloudflare Workers AI binding (wrangler `[ai] binding = "AI"`). */
+  AI?: AiBinding;
 }
+
+/** Default Workers AI model — a solid general instruct model available on-edge. */
+export const DEFAULT_WORKERS_AI_MODEL = '@cf/meta/llama-3.1-8b-instruct';
 
 export type AiAction =
   | 'summarize'
@@ -111,15 +136,29 @@ export function userMessageFor(input: AiAssistInput): string {
   return truncated;
 }
 
-/** Whether the LLM is configured (all three required secrets present). */
+/** Whether the OpenAI-compatible backend is configured (both secrets present). */
 export function aiConfigured(env: AiEnv): boolean {
   return Boolean(env.LLM_BASE_URL && env.LLM_API_KEY);
+}
+
+/** Whether SOME AI backend is available (OpenAI-compat secrets OR Workers AI). */
+export function aiAvailable(env: AiEnv): boolean {
+  return aiConfigured(env) || Boolean(env.AI);
 }
 
 export interface AiAssistDeps {
   fetcher?: typeof fetch;
   /** Abort/timeout budget in ms (default 25s). */
   timeoutMs?: number;
+  /**
+   * Override for the Workers AI invocation (testing seam). When omitted, the
+   * impl calls `env.AI.run(model, inputs)` directly. A fake `env.AI` works too;
+   * this hook is for tests that want to assert the model/inputs in isolation.
+   */
+  aiRun?: (
+    model: string,
+    inputs: Record<string, unknown>,
+  ) => Promise<Record<string, unknown>>;
 }
 
 /**
@@ -134,7 +173,7 @@ export async function aiAssistImpl(
   input: AiAssistInput,
   deps: AiAssistDeps = {},
 ): Promise<AiAssistResult> {
-  if (!aiConfigured(env)) {
+  if (!aiAvailable(env)) {
     return { ok: false, status: 503, error: 'AI not configured' };
   }
   const userMessage = userMessageFor(input);
@@ -142,14 +181,79 @@ export async function aiAssistImpl(
     return { ok: false, status: 400, error: 'nothing to send' };
   }
 
+  // Shared prompt shaping — identical across both backends.
+  const systemPrompt = systemPromptFor(input);
+  const temperature = input.action === 'fix_grammar' ? 0.1 : 0.5;
+  const maxTokens = maxTokensFor(input.action);
+
+  // Backend precedence: explicit OpenAI-compat secrets override the on-edge
+  // Workers AI default. (aiAvailable already guarantees one of the two.)
+  if (aiConfigured(env)) {
+    return openaiCompatAssist(env, { systemPrompt, userMessage, temperature, maxTokens }, deps);
+  }
+  return workersAiAssist(env, { systemPrompt, userMessage, temperature, maxTokens }, deps);
+}
+
+/** Prompt pieces shared by both backends. */
+interface ShapedPrompt {
+  systemPrompt: string;
+  userMessage: string;
+  temperature: number;
+  maxTokens: number;
+}
+
+/**
+ * Cloudflare Workers AI backend (on-edge, no external key). Calls the `AI`
+ * binding with the same messages/params as the OpenAI-compat path and parses
+ * the `{ response }` shape into the handler's `{ text }` result.
+ */
+async function workersAiAssist(
+  env: AiEnv,
+  prompt: ShapedPrompt,
+  deps: AiAssistDeps,
+): Promise<AiAssistResult> {
+  const model = env.WORKERS_AI_MODEL ?? env.LLM_MODEL ?? DEFAULT_WORKERS_AI_MODEL;
+  const inputs: Record<string, unknown> = {
+    messages: [
+      { role: 'system', content: prompt.systemPrompt },
+      { role: 'user', content: prompt.userMessage },
+    ],
+    max_tokens: prompt.maxTokens,
+    temperature: prompt.temperature,
+  };
+  /* v8 ignore next — real binding is the production default; tests inject one. */
+  const run = deps.aiRun ?? ((m, i) => env.AI!.run(m, i));
+  let out: Record<string, unknown>;
+  try {
+    out = await run(model, inputs);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, status: 502, error: `Workers AI failed: ${msg.slice(0, 200)}` };
+  }
+  const text = typeof out.response === 'string' ? out.response.trim() : '';
+  if (!text) {
+    return { ok: false, status: 502, error: 'Workers AI returned no content' };
+  }
+  return { ok: true, text };
+}
+
+/**
+ * OpenAI-compatible `/chat/completions` backend. Unchanged behavior — used when
+ * `LLM_BASE_URL` + `LLM_API_KEY` are set so the user can point at LiteLLM/OpenAI.
+ */
+async function openaiCompatAssist(
+  env: AiEnv,
+  prompt: ShapedPrompt,
+  deps: AiAssistDeps,
+): Promise<AiAssistResult> {
   const model = env.LLM_MODEL ?? 'gpt-4o-mini';
   const body = JSON.stringify({
     model,
-    temperature: input.action === 'fix_grammar' ? 0.1 : 0.5,
-    max_tokens: maxTokensFor(input.action),
+    temperature: prompt.temperature,
+    max_tokens: prompt.maxTokens,
     messages: [
-      { role: 'system', content: systemPromptFor(input) },
-      { role: 'user', content: userMessage },
+      { role: 'system', content: prompt.systemPrompt },
+      { role: 'user', content: prompt.userMessage },
     ],
   });
   const url = `${env.LLM_BASE_URL!.replace(/\/$/, '')}/chat/completions`;

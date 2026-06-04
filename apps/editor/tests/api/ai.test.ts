@@ -6,10 +6,13 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   aiAssistImpl,
   aiConfigured,
+  aiAvailable,
   systemPromptFor,
   userMessageFor,
   MAX_INPUT_CHARS,
+  DEFAULT_WORKERS_AI_MODEL,
   type AiEnv,
+  type AiBinding,
   type AiAssistInput,
 } from '@api/handlers/ai';
 
@@ -36,12 +39,35 @@ function fakeFetch(content: string) {
   return { fn: fn as unknown as typeof fetch, calls };
 }
 
+/** A fake Workers AI binding returning a `{ response }` text-generation output.
+ * Records each `run(model, inputs)` call. */
+function fakeAi(response: string) {
+  const calls: { model: string; inputs: Record<string, unknown> }[] = [];
+  const binding: AiBinding = {
+    run: vi.fn(async (model: string, inputs: Record<string, unknown>) => {
+      calls.push({ model, inputs });
+      return { response };
+    }),
+  };
+  return { binding, calls };
+}
+
 describe('aiConfigured', () => {
   it('requires both base url and api key', () => {
     expect(aiConfigured(CONFIGURED)).toBe(true);
     expect(aiConfigured({ LLM_API_KEY: 'k' })).toBe(false);
     expect(aiConfigured({ LLM_BASE_URL: 'u' })).toBe(false);
     expect(aiConfigured({})).toBe(false);
+  });
+});
+
+describe('aiAvailable', () => {
+  it('is true when OpenAI-compat secrets are set OR a Workers AI binding exists', () => {
+    expect(aiAvailable(CONFIGURED)).toBe(true);
+    expect(aiAvailable({ AI: fakeAi('x').binding })).toBe(true);
+    expect(aiAvailable({})).toBe(false);
+    // A lone Workers AI binding (no LLM secrets) still counts as available.
+    expect(aiAvailable({ AI: fakeAi('x').binding, LLM_BASE_URL: 'u' })).toBe(true);
   });
 });
 
@@ -183,5 +209,103 @@ describe('aiAssistImpl', () => {
     const { fn, calls } = fakeFetch('fixed');
     await aiAssistImpl(CONFIGURED, { action: 'fix_grammar', text: 'teh cat' }, { fetcher: fn });
     expect((calls[0]!.body as { temperature: number }).temperature).toBe(0.1);
+  });
+
+  // ---- Workers AI default backend (no LLM_BASE_URL/LLM_API_KEY) ----
+
+  it('uses the Workers AI binding when no OpenAI-compat secrets are set', async () => {
+    const { binding, calls } = fakeAi('  On-edge polished.  ');
+    const res = await aiAssistImpl({ AI: binding }, { action: 'improve_writing', text: 'rough' });
+    // Parses `{ response }` into `{ text }`, trimmed.
+    expect(res).toEqual({ ok: true, text: 'On-edge polished.' });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.model).toBe(DEFAULT_WORKERS_AI_MODEL);
+    // Same prompt shaping as the OpenAI-compat path: system+user messages.
+    const inputs = calls[0]!.inputs as {
+      messages: { role: string; content: string }[];
+      max_tokens: number;
+      temperature: number;
+    };
+    expect(inputs.messages[0]!.role).toBe('system');
+    expect(inputs.messages[0]!.content).toMatch(/Improve/i);
+    expect(inputs.messages[1]!).toEqual({ role: 'user', content: 'rough' });
+    expect(inputs.temperature).toBe(0.5);
+    expect(typeof inputs.max_tokens).toBe('number');
+  });
+
+  it('shapes a per-action prompt for the Workers AI path (translate)', async () => {
+    const { binding, calls } = fakeAi('안녕하세요');
+    const res = await aiAssistImpl(
+      { AI: binding },
+      { action: 'translate', text: 'hello', targetLang: 'Korean' },
+    );
+    expect(res).toEqual({ ok: true, text: '안녕하세요' });
+    const inputs = calls[0]!.inputs as { messages: { content: string }[] };
+    expect(inputs.messages[0]!.content).toMatch(/Korean/);
+  });
+
+  it('honors WORKERS_AI_MODEL (then LLM_MODEL) override on the Workers AI path', async () => {
+    const a = fakeAi('x');
+    await aiAssistImpl(
+      { AI: a.binding, WORKERS_AI_MODEL: '@cf/custom/model' },
+      { action: 'summarize', text: 'hi' },
+    );
+    expect(a.calls[0]!.model).toBe('@cf/custom/model');
+
+    const b = fakeAi('x');
+    await aiAssistImpl(
+      { AI: b.binding, LLM_MODEL: '@cf/from/llm-model' },
+      { action: 'summarize', text: 'hi' },
+    );
+    expect(b.calls[0]!.model).toBe('@cf/from/llm-model');
+  });
+
+  it('OpenAI-compat secrets take precedence over the Workers AI binding', async () => {
+    const { fn, calls } = fakeFetch('via fetch');
+    const ai = fakeAi('via binding');
+    const res = await aiAssistImpl(
+      { ...CONFIGURED, AI: ai.binding },
+      { action: 'summarize', text: 'hi' },
+      { fetcher: fn },
+    );
+    expect(res).toEqual({ ok: true, text: 'via fetch' });
+    expect(calls).toHaveLength(1); // fetch path used
+    expect(ai.binding.run).not.toHaveBeenCalled(); // binding untouched
+  });
+
+  it('maps a thrown Workers AI run to a 502', async () => {
+    const binding: AiBinding = {
+      run: vi.fn(async () => {
+        throw new Error('inference unavailable');
+      }),
+    };
+    const res = await aiAssistImpl({ AI: binding }, { action: 'summarize', text: 'x' });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.status).toBe(502);
+      expect(res.error).toMatch(/Workers AI failed/);
+    }
+  });
+
+  it('maps an empty Workers AI response to a 502', async () => {
+    const res = await aiAssistImpl({ AI: fakeAi('').binding }, { action: 'summarize', text: 'x' });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.status).toBe(502);
+  });
+
+  it('supports the deps.aiRun testing seam', async () => {
+    const aiRun = vi.fn(async () => ({ response: 'from seam' }));
+    const res = await aiAssistImpl(
+      { AI: fakeAi('unused').binding },
+      { action: 'summarize', text: 'x' },
+      { aiRun },
+    );
+    expect(res).toEqual({ ok: true, text: 'from seam' });
+    expect(aiRun).toHaveBeenCalledOnce();
+  });
+
+  it('still returns 503 when NEITHER backend is available', async () => {
+    const res = await aiAssistImpl({}, { action: 'summarize', text: 'x' });
+    expect(res).toEqual({ ok: false, status: 503, error: 'AI not configured' });
   });
 });

@@ -38,9 +38,17 @@ class_name = "WorkspaceDB"
 tag = "v1-workspace-db"
 new_sqlite_classes = ["WorkspaceDB"]
 
+# Cloudflare Workers AI — on-edge LLM inference (no external key). Default
+# backend for the AI assist route (/v1/ai). Overridden only when the optional
+# OpenAI-compatible secrets (LLM_BASE_URL + LLM_API_KEY) are set.
+[ai]
+binding = "AI"
+
 [vars]
 APP_NAME = "Editor"
 COLLAB_URL = "wss://allenlabs-collab.allenlim.workers.dev/editor"
+# Optional Workers AI model override (defaults to @cf/meta/llama-3.1-8b-instruct).
+# WORKERS_AI_MODEL = "@cf/meta/llama-3.1-8b-instruct"
 
 # Secrets — set via `wrangler secret put` (never commit values):
 #   wrangler secret put EDITOR_HMAC_SECRET --config workers/api/wrangler.toml
@@ -49,11 +57,15 @@ COLLAB_URL = "wss://allenlabs-collab.allenlim.workers.dev/editor"
 #       (MUST equal the allenlabs-collab worker's token-signing secret)
 #   wrangler secret put OTEL_ACCESS_ID / OTEL_ACCESS_SECRET / OTEL_BEARER_TOKEN
 #
-# OPTIONAL — AI assist (/v1/ai). OpenAI-compatible /chat/completions endpoint.
-# When unset, /v1/ai returns 503 "AI not configured" (the editor's AI menu still
-# renders but each action surfaces the error). Set these to enable it:
-#   wrangler secret put LLM_BASE_URL --config workers/api/wrangler.toml
-#       (e.g. https://api.openai.com/v1  — no trailing /chat/completions)
-#   wrangler secret put LLM_API_KEY  --config workers/api/wrangler.toml
-#   wrangler secret put LLM_MODEL    --config workers/api/wrangler.toml
-#       (optional; defaults to gpt-4o-mini)
+# AI assist (/v1/ai) backends, in precedence order:
+#   1. OpenAI-compatible /chat/completions — OPTIONAL override. When BOTH
+#      LLM_BASE_URL + LLM_API_KEY are set, requests route there instead of
+#      Workers AI (e.g. point at LiteLLM/OpenAI):
+#        wrangler secret put LLM_BASE_URL --config workers/api/wrangler.toml
+#            (e.g. https://api.openai.com/v1  — no trailing /chat/completions)
+#        wrangler secret put LLM_API_KEY  --config workers/api/wrangler.toml
+#        wrangler secret put LLM_MODEL    --config workers/api/wrangler.toml
+#            (optional; defaults to gpt-4o-mini)
+#   2. Cloudflare Workers AI ([ai] binding above) — the on-edge DEFAULT. No
+#      secret needed; the editor's "✨ AI" actions work as soon as this deploys.
+#   3. If the [ai] binding were ever removed AND no secrets set → 503.
