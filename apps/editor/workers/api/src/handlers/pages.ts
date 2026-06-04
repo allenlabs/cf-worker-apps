@@ -67,6 +67,29 @@ export async function isMemberImpl(
 }
 
 /**
+ * The user's membership role in `workspaceId` ('owner' | 'admin' | 'member' …),
+ * or null when they're not a member. Used to gate workspace-admin actions such
+ * as configuring the AI backend (see handlers/ai-settings.ts).
+ */
+export async function workspaceRoleImpl(
+  sql: Sql,
+  userId: string,
+  workspaceId: string,
+): Promise<string | null> {
+  const [row] = await sql<{ role: string }[]>`
+    SELECT role FROM editor.workspace_members
+    WHERE workspace_id = ${workspaceId} AND user_id = ${userId}
+    LIMIT 1
+  `;
+  return row?.role ?? null;
+}
+
+/** True iff the role is privileged enough to manage workspace settings. */
+export function isWorkspaceAdminRole(role: string | null): boolean {
+  return role === 'owner' || role === 'admin';
+}
+
+/**
  * True iff the user belongs to AT LEAST ONE workspace. Used to gate synced-block
  * collab tokens (Phase 12): a `sync-<uuid>` room is self-describing — possession
  * of the syncId (which you only obtain by being on a page that embeds the block)

@@ -846,7 +846,9 @@ function PageView() {
               uploadFile={uploadAnyFile}
               aiT={t}
               askAI={async (input) => {
-                const { text } = await aiAssist({ data: input });
+                const { text } = await aiAssist({
+                  data: { ...input, workspaceId: workspaceId || undefined },
+                });
                 return text;
               }}
               breadcrumb={{

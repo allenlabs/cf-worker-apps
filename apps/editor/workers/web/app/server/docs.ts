@@ -553,6 +553,9 @@ export interface AiAssistArgs {
   instruction?: string;
   targetLang?: string;
   tone?: string;
+  // The page's workspace — forwarded so the API can resolve a per-workspace AI
+  // backend (a workspace owner may point AI assist at a custom provider).
+  workspaceId?: string;
 }
 
 /** Forward an editor AI request to the HMAC-gated editor-api `/v1/ai` route.
@@ -565,6 +568,48 @@ export function aiAssistImpl(
   deps?: ApiClientDeps,
 ): Promise<{ text: string }> {
   return apiPostImpl<{ text: string }>(env, '/v1/ai', userBody(user, { ...input }), deps);
+}
+
+// ---------- per-workspace AI settings (owner/admin) ----------
+
+export type AiProvider = 'workers_ai' | 'openai';
+
+/** Non-secret AI settings view — the API key is never returned, only `hasKey`. */
+export interface AiSettingsView {
+  provider: AiProvider;
+  baseUrl?: string;
+  model?: string;
+  hasKey: boolean;
+  /** UX hint: whether the requester (owner/admin) may edit these settings. The
+   * /v1/ai/settings/set route is the authoritative gate. Present on the GET. */
+  canManage?: boolean;
+}
+
+export function aiSettingsGetImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  workspaceId: string,
+  deps?: ApiClientDeps,
+): Promise<AiSettingsView> {
+  return apiPostImpl<AiSettingsView>(env, '/v1/ai/settings/get', userBody(user, { workspaceId }), deps);
+}
+
+export interface AiSettingsSetArgs {
+  workspaceId: string;
+  provider: AiProvider;
+  baseUrl?: string;
+  model?: string;
+  /** Plaintext API key; omit to keep the existing one (write-only on the API). */
+  apiKey?: string;
+}
+
+export function aiSettingsSetImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: AiSettingsSetArgs,
+  deps?: ApiClientDeps,
+): Promise<AiSettingsView> {
+  return apiPostImpl<AiSettingsView>(env, '/v1/ai/settings/set', userBody(user, { ...input }), deps);
 }
 
 export function listWorkspacesImpl(
@@ -1557,12 +1602,39 @@ export const aiAssist = createServerFn({ method: 'POST' })
         instruction: z.string().max(2_000).optional(),
         targetLang: z.string().max(40).optional(),
         tone: z.string().max(40).optional(),
+        workspaceId: z.string().uuid().optional(),
       })
       .parse(d),
   )
   .handler(async ({ data }) => {
     const user = await requireUser();
     return aiAssistImpl(getEnv(), user, data);
+  });
+
+// Per-workspace AI settings (owner/admin). The get returns a non-secret view
+// (never the API key); the set encrypts the key at rest on the API side.
+export const aiSettingsGet = createServerFn({ method: 'GET' })
+  .inputValidator((d: unknown) => z.object({ workspaceId: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return aiSettingsGetImpl(getEnv(), user, data.workspaceId);
+  });
+
+export const aiSettingsSet = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        workspaceId: z.string().uuid(),
+        provider: z.enum(['workers_ai', 'openai']),
+        baseUrl: z.string().max(2048).optional(),
+        model: z.string().max(200).optional(),
+        apiKey: z.string().max(400).optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return aiSettingsSetImpl(getEnv(), user, data);
   });
 
 // Phase 12: mint a collab token for an arbitrary synced-block room

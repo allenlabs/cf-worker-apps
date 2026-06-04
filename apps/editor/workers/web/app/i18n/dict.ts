@@ -164,6 +164,26 @@ const editor: Dict = {
     'ai.slashContinue': 'Continue writing',
     'ai.slashContinueHint': 'Let AI continue from here',
 
+    // AI backend settings (per-workspace; owner/admin)
+    'ai.settings.open': '⚙ AI settings',
+    'ai.settings.title': 'AI assist',
+    'ai.settings.desc':
+      'Choose which AI backend powers this workspace’s ✨ AI actions.',
+    'ai.settings.providerWorkers': 'Cloudflare Workers AI',
+    'ai.settings.providerWorkersHint': 'On-edge default. No setup required.',
+    'ai.settings.providerOpenai': 'Custom (OpenAI-compatible)',
+    'ai.settings.providerOpenaiHint':
+      'Point at OpenAI, your LiteLLM, or any /chat/completions endpoint.',
+    'ai.settings.baseUrl': 'Base URL',
+    'ai.settings.model': 'Model',
+    'ai.settings.apiKey': 'API key',
+    'ai.settings.keySet': 'key set ✓',
+    'ai.settings.keyKeep': 'Leave blank to keep the current key',
+    'ai.settings.keyPlaceholder': 'sk-…',
+    'ai.settings.adminOnly': 'Only a workspace owner or admin can change these settings.',
+    'ai.settings.loadError': 'Could not load AI settings.',
+    'ai.settings.saveError': 'Could not save AI settings. Check the URL and key.',
+
     // Phase 13 blocks (equations / embeds / media / TOC / breadcrumb)
     'block.equation': 'Equation',
     'block.equationHint': 'Display math (KaTeX)',
@@ -679,6 +699,25 @@ const editor: Dict = {
     'ai.promptLabel': 'AI에게 작성을 요청하세요…',
     'ai.slashContinue': '이어 쓰기',
     'ai.slashContinueHint': 'AI가 이어서 작성',
+
+    // AI backend settings (per-workspace; owner/admin)
+    'ai.settings.open': '⚙ AI 설정',
+    'ai.settings.title': 'AI 어시스트',
+    'ai.settings.desc': '이 워크스페이스의 ✨ AI 동작에 사용할 백엔드를 선택하세요.',
+    'ai.settings.providerWorkers': 'Cloudflare Workers AI',
+    'ai.settings.providerWorkersHint': '엣지 기본값. 설정이 필요 없습니다.',
+    'ai.settings.providerOpenai': '커스텀 (OpenAI 호환)',
+    'ai.settings.providerOpenaiHint':
+      'OpenAI, 직접 운영하는 LiteLLM 또는 /chat/completions 엔드포인트를 지정하세요.',
+    'ai.settings.baseUrl': '기본 URL',
+    'ai.settings.model': '모델',
+    'ai.settings.apiKey': 'API 키',
+    'ai.settings.keySet': '키 설정됨 ✓',
+    'ai.settings.keyKeep': '현재 키를 유지하려면 비워 두세요',
+    'ai.settings.keyPlaceholder': 'sk-…',
+    'ai.settings.adminOnly': '워크스페이스 소유자 또는 관리자만 이 설정을 변경할 수 있습니다.',
+    'ai.settings.loadError': 'AI 설정을 불러올 수 없습니다.',
+    'ai.settings.saveError': 'AI 설정을 저장할 수 없습니다. URL과 키를 확인하세요.',
     'synced.blockHint': '여러 페이지에 미러링되는 콘텐츠',
     'synced.badge': '동기화됨',
 

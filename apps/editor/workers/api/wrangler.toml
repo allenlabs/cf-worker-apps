@@ -66,6 +66,14 @@ COLLAB_URL = "wss://allenlabs-collab.allenlim.workers.dev/editor"
 #        wrangler secret put LLM_API_KEY  --config workers/api/wrangler.toml
 #        wrangler secret put LLM_MODEL    --config workers/api/wrangler.toml
 #            (optional; defaults to gpt-4o-mini)
+#
+# Per-workspace AI backend (editor.ai_settings): a workspace owner/admin can
+# point AI assist at their own OpenAI-compatible provider. The API key they
+# enter is encrypted at rest with this secret (AES-GCM) and decrypted per
+# request when that workspace's backend is resolved. OPTIONAL — when unset,
+# saving a custom API key returns 409 "encryption not configured":
+#   wrangler secret put AI_SETTINGS_KEY --config workers/api/wrangler.toml
+#
 #   2. Cloudflare Workers AI ([ai] binding above) — the on-edge DEFAULT. No
 #      secret needed; the editor's "✨ AI" actions work as soon as this deploys.
 #   3. If the [ai] binding were ever removed AND no secrets set → 503.

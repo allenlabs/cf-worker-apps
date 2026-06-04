@@ -44,6 +44,15 @@ export interface Env {
   LLM_MODEL?: string;
   WORKERS_AI_MODEL?: string;
 
+  // At-rest encryption key for per-workspace AI settings (editor.ai_settings).
+  // A workspace owner/admin can point /v1/ai at a custom OpenAI-compatible
+  // provider; the API key they enter is encrypted with this secret (AES-GCM)
+  // before storage and decrypted per-request when that workspace's backend is
+  // resolved. OPTIONAL — when unset, setting a custom API key returns 409
+  // "encryption not configured" (we never store the key in plaintext).
+  //   wrangler secret put AI_SETTINGS_KEY --config workers/api/wrangler.toml
+  AI_SETTINGS_KEY?: string;
+
   // Cloudflare Workers AI binding (wrangler `[ai] binding = "AI"`). Present in
   // production via the binding; on-edge inference, no secret required.
   AI: Ai;

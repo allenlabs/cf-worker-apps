@@ -308,4 +308,54 @@ describe('aiAssistImpl', () => {
     const res = await aiAssistImpl({}, { action: 'summarize', text: 'x' });
     expect(res).toEqual({ ok: false, status: 503, error: 'AI not configured' });
   });
+
+  // ---- Per-request resolved backend (per-workspace AI settings) ----
+
+  it('uses a resolved openai backend (workspace settings) over env/Workers AI', async () => {
+    const { fn, calls } = fakeFetch('via workspace provider');
+    const ai = fakeAi('via binding');
+    // env has BOTH the Workers AI binding and (legacy) LLM secrets, but the
+    // resolved backend (the workspace's choice) must win.
+    const res = await aiAssistImpl(
+      { ...CONFIGURED, AI: ai.binding },
+      { action: 'improve_writing', text: 'rough' },
+      {
+        fetcher: fn,
+        resolved: {
+          kind: 'openai',
+          baseUrl: 'https://ws.example/v1',
+          apiKey: 'sk-ws',
+          model: 'ws-model',
+        },
+      },
+    );
+    expect(res).toEqual({ ok: true, text: 'via workspace provider' });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe('https://ws.example/v1/chat/completions');
+    expect((calls[0]!.body as { model: string }).model).toBe('ws-model');
+    expect((calls[0]!.headers as Record<string, string>).authorization).toBe('Bearer sk-ws');
+    expect(ai.binding.run).not.toHaveBeenCalled();
+  });
+
+  it('uses Workers AI when the resolved backend is workers_ai (even with LLM secrets in env)', async () => {
+    const { binding, calls } = fakeAi('on-edge');
+    const fetchSpy = vi.fn();
+    const res = await aiAssistImpl(
+      { ...CONFIGURED, AI: binding },
+      { action: 'summarize', text: 'hi' },
+      { resolved: { kind: 'workers_ai' }, fetcher: fetchSpy as unknown as typeof fetch },
+    );
+    expect(res).toEqual({ ok: true, text: 'on-edge' });
+    expect(calls).toHaveLength(1);
+    expect(fetchSpy).not.toHaveBeenCalled(); // the OpenAI-compat path was NOT taken
+  });
+
+  it('returns 503 when the resolved backend is none (even if env has a binding)', async () => {
+    const res = await aiAssistImpl(
+      { AI: fakeAi('x').binding },
+      { action: 'summarize', text: 'x' },
+      { resolved: { kind: 'none' } },
+    );
+    expect(res).toEqual({ ok: false, status: 503, error: 'AI not configured' });
+  });
 });

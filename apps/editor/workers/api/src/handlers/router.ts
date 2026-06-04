@@ -125,8 +125,26 @@ import {
   unreadCountImpl,
 } from './notify';
 import { aiAssistImpl } from './ai';
+import {
+  getAiSettingsImpl,
+  resolveAiBackendImpl,
+  setAiSettingsImpl,
+  type AiSettingsCryptoDeps,
+} from './ai-settings';
+import { isWorkspaceAdminRole, workspaceRoleImpl } from './pages';
+import { encryptSecret, decryptSecret } from '../lib/crypto';
 import { mintCollabToken } from '../lib/hmac';
 import type { AppBindings } from '../context';
+
+/**
+ * Crypto deps for the AI-settings impls — the server AES-GCM key (optional env
+ * secret) + the Web Crypto encrypt/decrypt helpers. Factored so tests can inject
+ * stubs. When AI_SETTINGS_KEY is unset, `encryptionKey` is undefined and setting
+ * a custom API key is rejected (409) rather than stored in plaintext.
+ */
+function aiSettingsCryptoDeps(env: { AI_SETTINGS_KEY?: string }): AiSettingsCryptoDeps {
+  return { encryptionKey: env.AI_SETTINGS_KEY, encrypt: encryptSecret, decrypt: decryptSecret };
+}
 
 export const v1Router = new Hono<AppBindings>();
 
@@ -155,17 +173,92 @@ const aiSchema = z.object({
   instruction: z.string().max(2_000).optional(),
   targetLang: z.string().max(40).optional(),
   tone: z.string().max(40).optional(),
+  // The page's workspace, so we can resolve a per-workspace AI backend (a
+  // workspace owner may point AI assist at a custom OpenAI-compatible provider).
+  // Optional + membership-checked; an absent/foreign workspace just falls back
+  // to the env/Workers-AI default, so the feature degrades safely.
+  workspaceId: z.string().uuid().optional(),
 });
 v1Router.post('/ai', async (c) => {
+  const user = c.get('user');
   const parsed = aiSchema.safeParse(c.get('body'));
   if (!parsed.success) {
     return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
   }
-  const result = await aiAssistImpl(c.env, parsed.data);
+  // Resolve the workspace's chosen backend when a (member-checked) workspace is
+  // given; otherwise fall back to the env/Workers-AI precedence in aiAssistImpl.
+  let resolved;
+  if (parsed.data.workspaceId) {
+    const member = await isMemberImpl(c.get('db'), user.userId, parsed.data.workspaceId);
+    if (member) {
+      resolved = await resolveAiBackendImpl(
+        c.get('db'),
+        c.env,
+        aiSettingsCryptoDeps(c.env),
+        parsed.data.workspaceId,
+      );
+    }
+  }
+  const result = await aiAssistImpl(c.env, parsed.data, resolved ? { resolved } : {});
   if (!result.ok) {
     return c.json({ error: result.error }, result.status);
   }
   return c.json({ text: result.text }, 200);
+});
+
+// ---------- AI settings (per-workspace AI backend; owner/admin-gated) ----------
+//
+// GET-shaped read + a set. Both go through the POST+HMAC scheme. Reading is
+// allowed for any workspace member (the view never leaks the key); SETTING is
+// restricted to owner/admin. The API key is encrypted at rest and never
+// returned — the view only exposes a `hasKey` boolean.
+const aiSettingsGetSchema = z.object({ workspaceId: z.string().uuid() });
+v1Router.post('/ai/settings/get', async (c) => {
+  const user = c.get('user');
+  const parsed = aiSettingsGetSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const role = await workspaceRoleImpl(c.get('db'), user.userId, parsed.data.workspaceId);
+  if (!role) return c.json({ error: 'not found' }, 404);
+  const view = await getAiSettingsImpl(c.get('db'), parsed.data.workspaceId);
+  // `canManage` lets the web hide the editing UI from non-admins (the set route
+  // is the authoritative gate; this is a UX hint, not a security boundary).
+  return c.json({ ...view, canManage: isWorkspaceAdminRole(role) }, 200);
+});
+
+const aiSettingsSetSchema = z.object({
+  workspaceId: z.string().uuid(),
+  provider: z.enum(['workers_ai', 'openai']),
+  baseUrl: z.string().max(2048).optional(),
+  model: z.string().max(200).optional(),
+  apiKey: z.string().max(400).optional(),
+});
+v1Router.post('/ai/settings/set', async (c) => {
+  const user = c.get('user');
+  const parsed = aiSettingsSetSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const role = await workspaceRoleImpl(c.get('db'), user.userId, parsed.data.workspaceId);
+  if (!role) return c.json({ error: 'not found' }, 404);
+  if (!isWorkspaceAdminRole(role)) return c.json({ error: 'forbidden' }, 403);
+  const result = await setAiSettingsImpl(
+    c.get('db'),
+    aiSettingsCryptoDeps(c.env),
+    {
+      workspaceId: parsed.data.workspaceId,
+      provider: parsed.data.provider,
+      baseUrl: parsed.data.baseUrl,
+      model: parsed.data.model,
+      apiKey: parsed.data.apiKey,
+    },
+    user.email ?? user.userId,
+  );
+  if (!result.ok) {
+    return c.json({ error: result.error }, result.status);
+  }
+  return c.json(result.view, 200);
 });
 
 const idSchema = z.object({ id: z.string().uuid() });

@@ -146,6 +146,18 @@ export function aiAvailable(env: AiEnv): boolean {
   return aiConfigured(env) || Boolean(env.AI);
 }
 
+/**
+ * A pre-resolved backend choice (from resolveAiBackendImpl) that the route
+ * passes per-request, keyed on the page's workspace. When present it WINS over
+ * the env/Workers-AI precedence baked into `aiAssistImpl`, so a workspace's
+ * chosen provider takes effect. Kept structural (no import of ai-settings) so
+ * `ai.ts` stays dependency-light + testable.
+ */
+export type ResolvedBackend =
+  | { kind: 'openai'; baseUrl: string; apiKey: string; model?: string }
+  | { kind: 'workers_ai' }
+  | { kind: 'none' };
+
 export interface AiAssistDeps {
   fetcher?: typeof fetch;
   /** Abort/timeout budget in ms (default 25s). */
@@ -159,6 +171,12 @@ export interface AiAssistDeps {
     model: string,
     inputs: Record<string, unknown>,
   ) => Promise<Record<string, unknown>>;
+  /**
+   * Per-request resolved backend (per the page's workspace AI settings). When
+   * provided it overrides the env-based precedence below. Omit to keep the
+   * legacy env/Workers-AI selection (used by the existing tests + as fallback).
+   */
+  resolved?: ResolvedBackend;
 }
 
 /**
@@ -173,9 +191,17 @@ export async function aiAssistImpl(
   input: AiAssistInput,
   deps: AiAssistDeps = {},
 ): Promise<AiAssistResult> {
-  if (!aiAvailable(env)) {
+  // A per-request resolved backend (per the page's workspace) takes precedence
+  // over the env-based selection; 'none' means nothing is configured anywhere.
+  const resolved = deps.resolved;
+  if (resolved) {
+    if (resolved.kind === 'none') {
+      return { ok: false, status: 503, error: 'AI not configured' };
+    }
+  } else if (!aiAvailable(env)) {
     return { ok: false, status: 503, error: 'AI not configured' };
   }
+
   const userMessage = userMessageFor(input);
   if (!userMessage.trim()) {
     return { ok: false, status: 400, error: 'nothing to send' };
@@ -185,13 +211,27 @@ export async function aiAssistImpl(
   const systemPrompt = systemPromptFor(input);
   const temperature = input.action === 'fix_grammar' ? 0.1 : 0.5;
   const maxTokens = maxTokensFor(input.action);
+  const shaped: ShapedPrompt = { systemPrompt, userMessage, temperature, maxTokens };
 
-  // Backend precedence: explicit OpenAI-compat secrets override the on-edge
-  // Workers AI default. (aiAvailable already guarantees one of the two.)
-  if (aiConfigured(env)) {
-    return openaiCompatAssist(env, { systemPrompt, userMessage, temperature, maxTokens }, deps);
+  // 1. Resolved backend (workspace settings → env → Workers AI), when given.
+  if (resolved) {
+    if (resolved.kind === 'openai') {
+      return openaiCompatAssist(
+        { LLM_BASE_URL: resolved.baseUrl, LLM_API_KEY: resolved.apiKey, LLM_MODEL: resolved.model },
+        shaped,
+        deps,
+      );
+    }
+    // resolved.kind === 'workers_ai'
+    return workersAiAssist(env, shaped, deps);
   }
-  return workersAiAssist(env, { systemPrompt, userMessage, temperature, maxTokens }, deps);
+
+  // Legacy precedence (no resolver): explicit OpenAI-compat secrets override the
+  // on-edge Workers AI default. (aiAvailable already guarantees one of the two.)
+  if (aiConfigured(env)) {
+    return openaiCompatAssist(env, shaped, deps);
+  }
+  return workersAiAssist(env, shaped, deps);
 }
 
 /** Prompt pieces shared by both backends. */

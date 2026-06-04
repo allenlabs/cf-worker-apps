@@ -12,6 +12,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useT } from '@allenlabs/i18n/react';
+import { AiSettings } from '~/components/AiSettings';
 import type {
   FavoriteItem,
   PageNode,
@@ -293,6 +294,9 @@ export function Sidebar({
         >
           {t('sidebar.trash')}
         </a>
+        {/* Phase 19: per-workspace AI backend (owner/admin can point AI assist
+            at a custom OpenAI-compatible provider; default = Workers AI). */}
+        <AiSettings workspaceId={workspaceId} />
       </div>
     </aside>
   );
