@@ -9,6 +9,7 @@ import {
 import { issues, journals, watchers } from '~/db/schema';
 import { type CurrentUser } from '~/server/auth';
 import {
+  countIssuesImpl,
   createIssueImpl,
   deleteIssueImpl,
   getIssueImpl,
@@ -173,6 +174,42 @@ describe('listIssuesImpl', () => {
     expect(byPriority.length).toBe(3);
     const byId = await listIssuesImpl(db, { projectId, statusFilter: 'all', sort: 'id' });
     expect(byId[0]!.id).toBeGreaterThan(byId[byId.length - 1]!.id);
+  });
+
+  it('countIssuesImpl matches the same filters', async () => {
+    expect(await countIssuesImpl(db, { projectId, statusFilter: 'all' })).toBe(3);
+    expect(await countIssuesImpl(db, { projectId, statusFilter: 'open' })).toBe(2);
+    expect(await countIssuesImpl(db, { projectId, statusFilter: 'closed' })).toBe(1);
+  });
+
+  it('paginates with limit + offset', async () => {
+    const p1 = await listIssuesImpl(db, { projectId, statusFilter: 'all', sort: 'id', limit: 2, offset: 0 });
+    const p2 = await listIssuesImpl(db, { projectId, statusFilter: 'all', sort: 'id', limit: 2, offset: 2 });
+    expect(p1).toHaveLength(2);
+    expect(p2).toHaveLength(1);
+    const ids = new Set([...p1, ...p2].map((i) => i.id));
+    expect(ids.size).toBe(3); // no overlap across pages
+  });
+
+  it('filters by priority, version, and category', async () => {
+    const { versions, issueCategories } = await import('~/db/schema');
+    const [ver] = await db
+      .insert(versions)
+      .values({ projectId, name: 'v1', description: '', sharing: 'none' })
+      .returning();
+    const [cat] = await db
+      .insert(issueCategories)
+      .values({ projectId, name: 'cat' })
+      .returning();
+    const target = await seedIssue({ subject: 'targeted' });
+    await db
+      .update(issues)
+      .set({ priorityId: 4, fixedVersionId: ver!.id, categoryId: cat!.id })
+      .where(eq(issues.id, target.id));
+
+    expect((await listIssuesImpl(db, { projectId, statusFilter: 'all', priority: 4 })).map((i) => i.subject)).toEqual(['targeted']);
+    expect((await listIssuesImpl(db, { projectId, statusFilter: 'all', version: ver!.id })).map((i) => i.subject)).toEqual(['targeted']);
+    expect((await listIssuesImpl(db, { projectId, statusFilter: 'all', category: cat!.id })).map((i) => i.subject)).toEqual(['targeted']);
   });
 });
 

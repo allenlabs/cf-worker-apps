@@ -71,9 +71,14 @@ export interface ListIssuesInput {
   statusFilter?: 'open' | 'closed' | 'all';
   assignee?: number;
   tracker?: number;
+  priority?: number;
+  version?: number;
+  category?: number;
   label?: number;
   sort?: 'updated' | 'priority' | 'id';
   q?: string;
+  limit?: number;
+  offset?: number;
 }
 
 export const listIssuesSchema = z.object({
@@ -81,19 +86,27 @@ export const listIssuesSchema = z.object({
   statusFilter: z.enum(['open', 'closed', 'all']).optional().default('open'),
   assignee: z.number().optional(),
   tracker: z.number().optional(),
+  priority: z.number().optional(),
+  version: z.number().optional(),
+  category: z.number().optional(),
   label: z.number().optional(),
   sort: z.enum(['updated', 'priority', 'id']).optional().default('updated'),
   q: z.string().optional(),
+  limit: z.number().int().positive().max(200).optional(),
+  offset: z.number().int().min(0).optional(),
 });
 
-export async function listIssuesImpl(db: DB, data: ListIssuesInput): Promise<IssueRow[]> {
+// Shared WHERE builder so the row query and the count stay in lock-step.
+function issueConditions(data: ListIssuesInput) {
   const statusFilter = data.statusFilter ?? 'open';
-  const sort = data.sort ?? 'updated';
   const conditions = [eq(issues.projectId, data.projectId)];
   if (statusFilter === 'open') conditions.push(eq(issueStatuses.isClosed, false));
   else if (statusFilter === 'closed') conditions.push(eq(issueStatuses.isClosed, true));
   if (data.assignee !== undefined) conditions.push(eq(issues.assignedToId, data.assignee));
   if (data.tracker !== undefined) conditions.push(eq(issues.trackerId, data.tracker));
+  if (data.priority !== undefined) conditions.push(eq(issues.priorityId, data.priority));
+  if (data.version !== undefined) conditions.push(eq(issues.fixedVersionId, data.version));
+  if (data.category !== undefined) conditions.push(eq(issues.categoryId, data.category));
   if (data.label !== undefined) {
     conditions.push(
       sql`EXISTS (SELECT 1 FROM pm.issue_labels il WHERE il.issue_id = ${issues.id} AND il.label_id = ${data.label})`,
@@ -105,6 +118,23 @@ export async function listIssuesImpl(db: DB, data: ListIssuesInput): Promise<Iss
       sql`(${issues.subject} LIKE ${pattern} OR ${issues.description} LIKE ${pattern})`,
     );
   }
+  return conditions;
+}
+
+/** Total issues matching the same filters as listIssuesImpl (for pagination). */
+export async function countIssuesImpl(db: DB, data: ListIssuesInput): Promise<number> {
+  // count(*) always returns exactly one row, so the destructure is total.
+  const [row] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(issues)
+    .innerJoin(issueStatuses, eq(issueStatuses.id, issues.statusId))
+    .where(and(...issueConditions(data)));
+  return row!.n;
+}
+
+export async function listIssuesImpl(db: DB, data: ListIssuesInput): Promise<IssueRow[]> {
+  const sort = data.sort ?? 'updated';
+  const conditions = issueConditions(data);
   const orderClause =
     sort === 'priority'
       ? desc(issuePriorities.position)
@@ -148,7 +178,10 @@ export async function listIssuesImpl(db: DB, data: ListIssuesInput): Promise<Iss
     .leftJoin(sql`users AS u_assignee`, sql`u_assignee.id = ${issues.assignedToId}`)
     .where(and(...conditions))
     .orderBy(orderClause)
-    .limit(200);
+    // Paginated callers pass limit/offset; unpaged callers (gantt) get a high
+    // ceiling instead of the old hard 200 cap.
+    .limit(data.limit ?? 1000)
+    .offset(data.offset ?? 0);
 
   return rows as IssueRow[];
 }
