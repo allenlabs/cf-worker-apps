@@ -12,6 +12,12 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useT } from '@allenlabs/i18n/react';
 import { groupRowsForView, buildSubItemTree, flattenSubItems } from '~/lib/db-view';
 import {
+  aggOptionsForType,
+  computeAggregation,
+  AGG_LABEL_KEY,
+  type AggregationOp,
+} from '~/lib/db-aggregate';
+import {
   AUTO_PROPERTY_TYPES,
   dbList as dbListFn,
   dbRows as dbRowsFn,
@@ -32,6 +38,7 @@ import {
   templatesList as templatesListFn,
   templateCreate as templateCreateFn,
   templateDelete as templateDeleteFn,
+  updatePage as updatePageFn,
   uploadFile as uploadFileFn,
   viewAdd as viewAddFn,
   viewUpdate as viewUpdateFn,
@@ -141,6 +148,18 @@ function readPropValue(row: DbRow, property: DbProperty): JsonValue {
     default:
       return row.props[property.id] ?? null;
   }
+}
+
+/**
+ * Raw value of a row's cell for footer aggregation. Relation/rollup/formula
+ * read from their resolved side-maps; everything else from props/meta. Kept raw
+ * (not display-formatted) so the numeric/date/checkbox math sees real values.
+ */
+function calcValueFor(row: DbRow, property: DbProperty): unknown {
+  if (property.type === 'relation') return row.relations?.[property.id] ?? [];
+  if (property.type === 'rollup') return row.rollups?.[property.id] ?? null;
+  if (property.type === 'formula') return row.formulas?.[property.id] ?? null;
+  return readPropValue(row, property);
 }
 
 /** Format a rollup's computed value for display (percent/date/number aware). */
@@ -291,6 +310,8 @@ export function DatabaseView({
   const [loading, setLoading] = useState(true);
   // Phase 15: row templates for the "New ▾" split button.
   const [templates, setTemplates] = useState<DbTemplate[]>([]);
+  // Side-peek: the row currently opened in the right-side panel (or null).
+  const [peekRowId, setPeekRowId] = useState<string | null>(null);
 
   const activeView = useMemo(
     () => schema.views.find((v) => v.id === activeViewId) ?? schema.views[0],
@@ -390,6 +411,40 @@ export function DatabaseView({
   async function handleDeleteRow(id: string) {
     await rowDeleteFn({ data: { id, databaseId: writeDbId } });
     setRows((prev) => prev.filter((r) => r.id !== id));
+  }
+
+  // Bulk archive a set of rows (each via the existing rowDelete), then refresh.
+  async function handleBulkDelete(ids: string[]) {
+    for (const id of ids) {
+      await rowDeleteFn({ data: { id, databaseId: writeDbId } });
+    }
+    setRows((prev) => prev.filter((r) => !ids.includes(r.id)));
+  }
+
+  // Bulk set one property's value across a set of rows (each via rowUpdate).
+  async function handleBulkSetProp(ids: string[], propId: string, value: JsonValue) {
+    for (const id of ids) {
+      await rowUpdateFn({ data: { id, props: { [propId]: value }, databaseId: writeDbId } });
+    }
+    setRows((prev) =>
+      prev.map((r) => (ids.includes(r.id) ? { ...r, props: { ...r.props, [propId]: value } } : r)),
+    );
+  }
+
+  // Persist the per-column aggregation footer selection into the active view's
+  // config (`config.calcs[propId] = op`). The `databaseId` hint routes native
+  // views to their workspace DO; ignored on the PG path. Footer math is purely
+  // client-side, so no row re-fetch is needed.
+  async function handleSetCalc(propId: string, op: AggregationOp) {
+    if (!activeView) return;
+    const prevCalcs = activeView.config.calcs ?? {};
+    const nextCalcs: Record<string, string> = { ...prevCalcs };
+    if (op === 'none') delete nextCalcs[propId];
+    else nextCalcs[propId] = op;
+    await viewUpdateFn({
+      data: { id: activeView.id, config: { ...activeView.config, calcs: nextCalcs }, databaseId },
+    });
+    await refreshSchema();
   }
 
   async function handleAddProperty(
@@ -589,8 +644,24 @@ export function DatabaseView({
           onCreateTemplate={() => void handleCreateTemplate()}
           onDeleteTemplate={(id) => void handleDeleteTemplate(id)}
           onToggleSubItems={(enabled) => void handleSetViewConfig({ subItemsEnabled: enabled })}
+          onSetCalc={(propId, op) => void handleSetCalc(propId, op)}
+          onOpenPeek={(id) => setPeekRowId(id)}
+          onBulkDelete={(ids) => void handleBulkDelete(ids)}
+          onBulkSetProp={(ids, propId, value) => void handleBulkSetProp(ids, propId, value)}
         />
       )}
+
+      {peekRowId ? (
+        <SidePeek
+          rowId={peekRowId}
+          properties={schema.properties}
+          row={rows.find((r) => r.id === peekRowId) ?? null}
+          editable={editable}
+          onAddOption={handleAddOption}
+          onPatchRow={(id, patch) => void handleRowPatch(id, patch)}
+          onClose={() => setPeekRowId(null)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -1108,6 +1179,14 @@ interface TableViewProps {
   onCreateTemplate: () => void;
   onDeleteTemplate: (id: string) => void;
   onToggleSubItems: (enabled: boolean) => void;
+  /** Persist a column's aggregation-footer op into the active view's config. */
+  onSetCalc: (propId: string, op: AggregationOp) => void;
+  /** Open a row in the right-side peek panel. */
+  onOpenPeek: (rowId: string) => void;
+  /** Bulk archive the given rows. */
+  onBulkDelete: (ids: string[]) => void;
+  /** Bulk set one property's value across the given rows. */
+  onBulkSetProp: (ids: string[], propId: string, value: JsonValue) => void;
 }
 
 function TableView({
@@ -1128,12 +1207,73 @@ function TableView({
   onCreateTemplate,
   onDeleteTemplate,
   onToggleSubItems,
+  onSetCalc,
+  onOpenPeek,
+  onBulkDelete,
+  onBulkSetProp,
 }: TableViewProps) {
   const { t } = useT();
   const [addingProp, setAddingProp] = useState(false);
   const [newPropName, setNewPropName] = useState('');
   const [newPropType, setNewPropType] = useState<PropertyType>('text');
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  // Multi-select bulk-actions: component-local selected row ids (not persisted).
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+
+  // The view's persisted per-column aggregation ops (footer selections).
+  const calcs = view.config.calcs ?? {};
+
+  // Keep the selection scoped to rows still present (e.g. after a refresh).
+  useEffect(() => {
+    setSelected((prev) => {
+      if (prev.size === 0) return prev;
+      const present = new Set(rows.map((r) => r.id));
+      const next = new Set<string>();
+      for (const id of prev) if (present.has(id)) next.add(id);
+      return next.size === prev.size ? prev : next;
+    });
+  }, [rows]);
+
+  // Esc clears the current selection.
+  useEffect(() => {
+    if (selected.size === 0) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSelected(new Set());
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [selected.size]);
+
+  function toggleSelect(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  const allVisibleSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
+  function toggleSelectAll() {
+    setSelected(allVisibleSelected ? new Set() : new Set(rows.map((r) => r.id)));
+  }
+
+  function clearSelection() {
+    setSelected(new Set());
+  }
+
+  function handleBulkDeleteClick() {
+    const ids = rows.filter((r) => selected.has(r.id)).map((r) => r.id);
+    if (ids.length === 0) return;
+    onBulkDelete(ids);
+    setSelected(new Set());
+  }
+
+  function handleBulkSetPropApply(propId: string, value: JsonValue) {
+    const ids = rows.filter((r) => selected.has(r.id)).map((r) => r.id);
+    if (ids.length === 0) return;
+    onBulkSetProp(ids, propId, value);
+  }
 
   function submitNewProp(config?: Record<string, JsonValue>) {
     const name = newPropName.trim();
@@ -1153,7 +1293,9 @@ function TableView({
 
   const subItemsEnabled = view.config.subItemsEnabled === true;
   const groupBy = view.config.groupBy ?? '';
-  const colCount = properties.length + 2;
+  // +1 title, +1 select checkbox (editable only), +1 trailing "add property".
+  const selectColCount = editable ? 1 : 0;
+  const colCount = properties.length + 2 + selectColCount;
 
   function toggleCollapse(id: string) {
     setCollapsed((prev) => {
@@ -1167,8 +1309,26 @@ function TableView({
   // One <tr> for a row (with optional indent + sub-item chevron/add controls).
   function renderRow(row: DbRow, depth: number, hasChildren: boolean) {
     const isCollapsed = collapsed.has(row.id);
+    const isSelected = selected.has(row.id);
     return (
-      <tr key={row.id} className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 group">
+      <tr
+        key={row.id}
+        className={`border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 group ${
+          isSelected ? 'bg-blue-50 dark:bg-blue-900/20' : ''
+        }`}
+      >
+        {editable ? (
+          <td className="py-1 px-2 w-8 align-middle">
+            <input
+              type="checkbox"
+              className="opacity-0 group-hover:opacity-100 checked:opacity-100 transition-opacity"
+              checked={isSelected}
+              onChange={() => toggleSelect(row.id)}
+              aria-label={t('db.selectRow')}
+              data-testid="row-select"
+            />
+          </td>
+        ) : null}
         <td className="py-1 px-2">
           <div className="flex items-center gap-1" style={{ paddingLeft: `${depth * 1.25}rem` }}>
             {subItemsEnabled ? (
@@ -1190,6 +1350,15 @@ function TableView({
             >
               {row.title || 'Untitled'}
             </a>
+            <button
+              className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-gray-200 text-xs"
+              onClick={() => onOpenPeek(row.id)}
+              title={t('db.openPeek')}
+              aria-label={t('db.openPeek')}
+              data-testid="row-open-peek"
+            >
+              ⤢
+            </button>
             {editable && subItemsEnabled ? (
               <button
                 className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-gray-200 text-xs"
@@ -1284,9 +1453,29 @@ function TableView({
           {t('db.enableSubItems')}
         </label>
       ) : null}
+      {editable && selected.size > 0 ? (
+        <SelectionBar
+          count={selected.size}
+          properties={properties}
+          onDelete={handleBulkDeleteClick}
+          onClear={clearSelection}
+          onSetProp={handleBulkSetPropApply}
+        />
+      ) : null}
       <table className="w-full text-sm border-collapse">
         <thead>
           <tr className="border-b border-gray-200 dark:border-gray-700 text-left text-gray-500 dark:text-gray-400">
+            {editable ? (
+              <th className="py-1.5 px-2 w-8">
+                <input
+                  type="checkbox"
+                  checked={allVisibleSelected}
+                  onChange={toggleSelectAll}
+                  aria-label={t('db.selectAll')}
+                  data-testid="row-select-all"
+                />
+              </th>
+            ) : null}
             <th className="py-1.5 px-2 font-medium min-w-[12rem]">{t('db.title')}</th>
             {properties.map((p) => (
               <th key={p.id} className="py-1.5 px-2 font-medium min-w-[8rem]">
@@ -1384,6 +1573,31 @@ function TableView({
               ))
             : renderBodyRows(rows)}
         </tbody>
+        <tfoot data-testid="db-calc-footer">
+          <tr className="border-t border-gray-200 dark:border-gray-700 text-xs text-gray-500 dark:text-gray-400">
+            {editable ? <td className="px-2 w-8" /> : null}
+            <CalcFooterCell
+              propId="title"
+              type="title"
+              op={(calcs['title'] as AggregationOp) ?? 'none'}
+              values={rows.map((r) => r.title)}
+              editable={editable}
+              onSetCalc={onSetCalc}
+            />
+            {properties.map((p) => (
+              <CalcFooterCell
+                key={p.id}
+                propId={p.id}
+                type={p.type}
+                op={(calcs[p.id] as AggregationOp) ?? 'none'}
+                values={rows.map((r) => calcValueFor(r, p))}
+                editable={editable}
+                onSetCalc={onSetCalc}
+              />
+            ))}
+            <td className="px-2" />
+          </tr>
+        </tfoot>
       </table>
       {editable ? (
         <NewRowButton
@@ -1395,6 +1609,366 @@ function TableView({
         />
       ) : null}
     </div>
+  );
+}
+
+// ---------- Aggregation footer cell ----------
+
+/**
+ * One <td> in the table's aggregation footer. Shows the computed value when an
+ * op is chosen; on hover (or when no op) shows a "Calculate" affordance that
+ * opens a small op menu (Notion-style). Math runs over the already-loaded
+ * `values` — no server round-trip. The chosen op persists via onSetCalc.
+ */
+function CalcFooterCell({
+  propId,
+  type,
+  op,
+  values,
+  editable,
+  onSetCalc,
+}: {
+  propId: string;
+  type: string;
+  op: AggregationOp;
+  values: unknown[];
+  editable: boolean;
+  onSetCalc: (propId: string, op: AggregationOp) => void;
+}) {
+  const { t } = useT();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLTableCellElement>(null);
+  const options = useMemo(() => aggOptionsForType(type), [type]);
+  const result = useMemo(() => computeAggregation(op, values, type), [op, values, type]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+
+  // Read-only viewers see the computed value (no menu).
+  if (!editable) {
+    return (
+      <td className="px-2 py-1 align-middle" data-testid="calc-cell">
+        {op !== 'none' ? (
+          <span>
+            <span className="text-gray-400 dark:text-gray-500 mr-1">{t(AGG_LABEL_KEY[op])}</span>
+            <span className="text-gray-700 dark:text-gray-300 font-medium">{result.text}</span>
+          </span>
+        ) : null}
+      </td>
+    );
+  }
+
+  return (
+    <td className="px-2 py-1 align-middle relative group/calc" ref={ref} data-testid="calc-cell">
+      <button
+        type="button"
+        className={`w-full text-left ${
+          op === 'none'
+            ? 'opacity-0 group-hover/calc:opacity-100 transition-opacity text-gray-400 dark:text-gray-500'
+            : 'text-gray-600 dark:text-gray-300'
+        }`}
+        onClick={() => setOpen((v) => !v)}
+        aria-label={t('db.calcAria')}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        data-testid="calc-trigger"
+      >
+        {op === 'none' ? (
+          <span>{t('db.calc.none')} ▾</span>
+        ) : (
+          <span>
+            <span className="text-gray-400 dark:text-gray-500 mr-1">{t(AGG_LABEL_KEY[op])}</span>
+            <span className="font-medium">{result.text}</span>
+          </span>
+        )}
+      </button>
+      {open ? (
+        <div
+          role="menu"
+          className="absolute left-0 bottom-8 z-20 w-44 max-h-64 overflow-y-auto bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-lg p-1 text-xs"
+          data-testid="calc-menu"
+        >
+          {options.map((o) => (
+            <button
+              key={o}
+              type="button"
+              role="menuitem"
+              className={`w-full text-left px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 ${
+                o === op ? 'text-blue-600' : 'text-gray-700 dark:text-gray-200'
+              }`}
+              onClick={() => {
+                onSetCalc(propId, o);
+                setOpen(false);
+              }}
+            >
+              {t(AGG_LABEL_KEY[o])}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </td>
+  );
+}
+
+// ---------- Bulk-actions selection bar ----------
+
+/** Property types whose value can be bulk-set across selected rows. */
+const BULK_SETTABLE = new Set(['select', 'status', 'checkbox']);
+
+/**
+ * The selection bar shown above the table when ≥1 row is selected: count +
+ * Delete + Clear, plus an optional "set a select/status/checkbox value across
+ * the selection" control.
+ */
+function SelectionBar({
+  count,
+  properties,
+  onDelete,
+  onClear,
+  onSetProp,
+}: {
+  count: number;
+  properties: DbProperty[];
+  onDelete: () => void;
+  onClear: () => void;
+  onSetProp: (propId: string, value: JsonValue) => void;
+}) {
+  const { t } = useT();
+  const settable = properties.filter((p) => BULK_SETTABLE.has(p.type));
+  const [propId, setPropId] = useState('');
+  const prop = settable.find((p) => p.id === propId);
+  const [value, setValue] = useState<JsonValue>('');
+
+  return (
+    <div
+      className="flex items-center gap-2 mb-2 px-3 py-1.5 rounded bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 text-sm"
+      data-testid="selection-bar"
+    >
+      <span className="font-medium text-blue-800 dark:text-blue-200" data-testid="selection-count">
+        {t('db.selectedCount', { count: String(count) })}
+      </span>
+      <button
+        type="button"
+        className="text-red-600 hover:text-red-800"
+        onClick={onDelete}
+        data-testid="bulk-delete"
+      >
+        {t('db.bulkDelete')}
+      </button>
+      {settable.length > 0 ? (
+        <span className="flex items-center gap-1">
+          <select
+            className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5 text-xs bg-white dark:bg-gray-800"
+            value={propId}
+            onChange={(e) => {
+              setPropId(e.target.value);
+              const p = settable.find((x) => x.id === e.target.value);
+              setValue(p?.type === 'checkbox' ? true : '');
+            }}
+            data-testid="bulk-prop"
+            aria-label={t('db.bulkSetProp')}
+          >
+            <option value="">{t('db.bulkSetProp')}</option>
+            {settable.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          {prop && prop.type === 'checkbox' ? (
+            <label className="flex items-center gap-1 text-xs">
+              <input
+                type="checkbox"
+                checked={value === true}
+                onChange={(e) => setValue(e.target.checked)}
+              />
+              {t('db.bulkSetValue')}
+            </label>
+          ) : prop ? (
+            <select
+              className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5 text-xs bg-white dark:bg-gray-800"
+              value={typeof value === 'string' ? value : ''}
+              onChange={(e) => setValue(e.target.value || null)}
+              data-testid="bulk-value"
+              aria-label={t('db.bulkSetValue')}
+            >
+              <option value="">—</option>
+              {(prop.config.options ?? []).map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.name}
+                </option>
+              ))}
+            </select>
+          ) : null}
+          {prop ? (
+            <button
+              type="button"
+              className="text-blue-600 hover:text-blue-800 text-xs"
+              onClick={() => onSetProp(prop.id, value)}
+              data-testid="bulk-apply"
+            >
+              {t('db.bulkApply')}
+            </button>
+          ) : null}
+        </span>
+      ) : null}
+      <button
+        type="button"
+        className="ml-auto text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-100"
+        onClick={onClear}
+        data-testid="bulk-clear"
+      >
+        {t('db.bulkClear')}
+      </button>
+    </div>
+  );
+}
+
+// ---------- Side-peek (open a row in a right-side panel) ----------
+
+/**
+ * A right-side overlay that opens a database row (a page) without leaving the
+ * database. Renders the row's editable title + a compact property list reusing
+ * the table cell editors. The page body is descoped to "open as full page"
+ * (v1) — embedding the CollaborativeEditor here would require threading a
+ * collab token + room, which balloons the peek; the header link covers it.
+ * SSR-safe via a mount gate; closes on Esc / ✕ / click-outside.
+ */
+function SidePeek({
+  rowId,
+  row,
+  properties,
+  editable,
+  onAddOption,
+  onPatchRow,
+  onClose,
+}: {
+  rowId: string;
+  row: DbRow | null;
+  properties: DbProperty[];
+  editable: boolean;
+  onAddOption: (property: DbProperty, name: string) => Promise<SelectOption>;
+  onPatchRow: (id: string, patch: { title?: string; props?: Record<string, JsonValue> }) => void;
+  onClose: () => void;
+}) {
+  const { t } = useT();
+  const [mounted, setMounted] = useState(false);
+  const [title, setTitle] = useState(row?.title ?? '');
+
+  useEffect(() => setMounted(true), []);
+  useEffect(() => setTitle(row?.title ?? ''), [row?.title]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  if (!mounted) return null;
+
+  function commitTitle() {
+    const next = title.trim() || 'Untitled';
+    onPatchRow(rowId, { title: next });
+    // Persist directly too — the peek isn't always inside a fresh-fetch loop.
+    void updatePageFn({ data: { id: rowId, title: next } }).catch(() => {});
+  }
+
+  // Properties shown in the peek: skip the trailing "add property" affordance;
+  // relations/rollups/formulas/buttons render read-only text for v1 brevity.
+  return (
+    <>
+      {/* click-outside scrim */}
+      <div
+        className="fixed inset-0 z-30 bg-black/20"
+        onClick={onClose}
+        data-testid="peek-scrim"
+        aria-hidden="true"
+      />
+      <aside
+        className="fixed right-0 top-0 z-40 h-full w-full max-w-md bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-700 shadow-xl overflow-y-auto"
+        role="dialog"
+        aria-label={title || 'Untitled'}
+        data-testid="side-peek"
+      >
+        <div className="flex items-center justify-between px-4 py-2 border-b border-gray-100 dark:border-gray-800 sticky top-0 bg-white dark:bg-gray-900">
+          <a
+            href={`/p/${rowId}`}
+            className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-100 no-underline"
+            data-testid="peek-open-full"
+          >
+            ⤢ {t('db.peekOpenFull')}
+          </a>
+          <button
+            type="button"
+            className="text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200"
+            onClick={onClose}
+            aria-label={t('db.peekClose')}
+            data-testid="peek-close"
+          >
+            ✕
+          </button>
+        </div>
+        <div className="px-4 py-3">
+          <input
+            className="w-full text-2xl font-bold outline-none border-0 bg-transparent text-gray-900 dark:text-gray-100 mb-3"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            onBlur={commitTitle}
+            placeholder={t('page.untitled')}
+            readOnly={!editable}
+            aria-label="Row title"
+            data-testid="peek-title"
+          />
+          <div className="text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-2">
+            {t('db.peekProperties')}
+          </div>
+          {row ? (
+            <div className="space-y-2" data-testid="peek-props">
+              {properties.map((p) => (
+                <div key={p.id} className="flex items-start gap-2 text-sm">
+                  <span className="w-28 shrink-0 text-gray-500 dark:text-gray-400 truncate pt-0.5">
+                    {p.name}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    {!editable ||
+                    AUTO_PROPERTY_TYPES.has(p.type) ||
+                    p.type === 'rollup' ||
+                    p.type === 'formula' ||
+                    p.type === 'button' ||
+                    p.type === 'relation' ? (
+                      <span className="text-gray-700 dark:text-gray-300">
+                        {renderValueText(row, p) || '—'}
+                      </span>
+                    ) : (
+                      <CellEditor
+                        property={p}
+                        value={row.props[p.id] ?? null}
+                        onChange={(value) => onPatchRow(rowId, { props: { [p.id]: value } })}
+                        onAddOption={(name) => onAddOption(p, name)}
+                      />
+                    )}
+                  </div>
+                </div>
+              ))}
+              {properties.length === 0 ? (
+                <p className="text-sm text-gray-400 dark:text-gray-500">—</p>
+              ) : null}
+            </div>
+          ) : (
+            <p className="text-sm text-gray-400 dark:text-gray-500">—</p>
+          )}
+          <p className="mt-4 text-xs text-gray-400 dark:text-gray-500">{t('db.peekBodyHint')}</p>
+        </div>
+      </aside>
+    </>
   );
 }
 

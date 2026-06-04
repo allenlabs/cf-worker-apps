@@ -308,6 +308,12 @@ export interface DbViewConfig {
   cardPropId?: string; // gallery: prop shown as the card preview
   visible?: string[];
   subItemsEnabled?: boolean; // Phase 15: nest sub-item rows in table view
+  /**
+   * Table-view aggregation footer: per-property chosen aggregation op
+   * (propId → AggregationOp string, plus the implicit 'title' column). Omitted
+   * or 'none' means no footer calc for that column.
+   */
+  calcs?: Record<string, string>;
 }
 
 export interface DbView {

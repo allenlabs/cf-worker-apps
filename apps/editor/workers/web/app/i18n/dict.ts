@@ -292,6 +292,45 @@ const editor: Dict = {
     'db.pickDateTimeline': 'Pick a date property to plot rows on the timeline.',
     'db.groupNoValue': 'No {prop}',
 
+    // Table-view aggregation footer (calculation per column)
+    'db.calc.none': 'Calculate',
+    'db.calc.countAll': 'Count all',
+    'db.calc.countEmpty': 'Count empty',
+    'db.calc.countNotEmpty': 'Count not empty',
+    'db.calc.countUnique': 'Count unique',
+    'db.calc.percentEmpty': 'Percent empty',
+    'db.calc.percentNotEmpty': 'Percent not empty',
+    'db.calc.sum': 'Sum',
+    'db.calc.average': 'Average',
+    'db.calc.median': 'Median',
+    'db.calc.min': 'Min',
+    'db.calc.max': 'Max',
+    'db.calc.range': 'Range',
+    'db.calc.checked': 'Checked',
+    'db.calc.unchecked': 'Unchecked',
+    'db.calc.percentChecked': 'Percent checked',
+    'db.calc.earliest': 'Earliest',
+    'db.calc.latest': 'Latest',
+    'db.calc.dateRange': 'Date range',
+    'db.calcAria': 'Choose calculation',
+
+    // Multi-select bulk row actions
+    'db.selectRow': 'Select row',
+    'db.selectAll': 'Select all',
+    'db.selectedCount': '{count} selected',
+    'db.bulkDelete': 'Delete',
+    'db.bulkClear': 'Clear',
+    'db.bulkSetProp': 'Set property…',
+    'db.bulkSetValue': 'Set value',
+    'db.bulkApply': 'Apply',
+
+    // Side-peek (open a row in a right-side panel)
+    'db.openPeek': 'Open in side peek',
+    'db.peekOpenFull': 'Open as full page',
+    'db.peekClose': 'Close',
+    'db.peekProperties': 'Properties',
+    'db.peekBodyHint': 'Open as a full page to edit the body.',
+
     // Wiki + verified pages (Phase 15)
     'pageMenu.turnIntoWiki': 'Turn into wiki',
     'pageMenu.turnOffWiki': 'Turn off wiki',
@@ -679,6 +718,45 @@ const editor: Dict = {
     'db.pickDateCalendar': '캘린더에 행을 배치할 날짜 속성을 선택하세요.',
     'db.pickDateTimeline': '타임라인에 행을 표시할 날짜 속성을 선택하세요.',
     'db.groupNoValue': '{prop} 없음',
+
+    // Table-view aggregation footer (calculation per column)
+    'db.calc.none': '계산',
+    'db.calc.countAll': '전체 개수',
+    'db.calc.countEmpty': '빈 값 개수',
+    'db.calc.countNotEmpty': '값 있는 개수',
+    'db.calc.countUnique': '고유 값 개수',
+    'db.calc.percentEmpty': '빈 값 비율',
+    'db.calc.percentNotEmpty': '값 있는 비율',
+    'db.calc.sum': '합계',
+    'db.calc.average': '평균',
+    'db.calc.median': '중앙값',
+    'db.calc.min': '최소',
+    'db.calc.max': '최대',
+    'db.calc.range': '범위',
+    'db.calc.checked': '체크됨',
+    'db.calc.unchecked': '체크 안 됨',
+    'db.calc.percentChecked': '체크 비율',
+    'db.calc.earliest': '가장 이른 날짜',
+    'db.calc.latest': '가장 늦은 날짜',
+    'db.calc.dateRange': '날짜 범위',
+    'db.calcAria': '계산 선택',
+
+    // Multi-select bulk row actions
+    'db.selectRow': '행 선택',
+    'db.selectAll': '모두 선택',
+    'db.selectedCount': '{count}개 선택됨',
+    'db.bulkDelete': '삭제',
+    'db.bulkClear': '선택 해제',
+    'db.bulkSetProp': '속성 설정…',
+    'db.bulkSetValue': '값 설정',
+    'db.bulkApply': '적용',
+
+    // Side-peek (open a row in a right-side panel)
+    'db.openPeek': '사이드 패널에서 열기',
+    'db.peekOpenFull': '전체 페이지로 열기',
+    'db.peekClose': '닫기',
+    'db.peekProperties': '속성',
+    'db.peekBodyHint': '본문을 편집하려면 전체 페이지로 여세요.',
 
     // Wiki + verified pages (Phase 15)
     'pageMenu.turnIntoWiki': '위키로 전환',
