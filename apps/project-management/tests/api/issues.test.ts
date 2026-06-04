@@ -72,6 +72,41 @@ describe('PM REST API (HMAC)', () => {
     expect(upd.status).toBe(200);
   });
 
+  it('manages the subtask hierarchy (parent / children endpoints + create parentNumber)', async () => {
+    // RED-1 parent, RED-2 child via create parentNumber
+    await call('/v1/projects/RED/issues', 'POST', JSON.stringify({ subject: 'parent' }));
+    const childRes = await call(
+      '/v1/projects/RED/issues',
+      'POST',
+      JSON.stringify({ subject: 'child', parentNumber: 1, doneRatio: 50 }),
+    );
+    expect(childRes.status).toBe(201);
+
+    // parent rolled up to the child's done ratio; GET exposes parent/children
+    const parent = (await (await call('/v1/projects/RED/issues/1')).json()) as {
+      doneRatio: number;
+      children: string[];
+    };
+    expect(parent.children).toEqual(['RED-2']);
+    expect(parent.doneRatio).toBe(50);
+    const child = (await (await call('/v1/projects/RED/issues/2')).json()) as { parent: string | null };
+    expect(child.parent).toBe('RED-1');
+
+    // detach via parent endpoint
+    const detach = await call('/v1/projects/RED/issues/2/parent', 'POST', JSON.stringify({ parentNumber: null }));
+    expect(detach.status).toBe(200);
+    expect(((await (await call('/v1/projects/RED/issues/2')).json()) as { parent: string | null }).parent).toBeNull();
+
+    // re-attach via children endpoint (make RED-1 the parent of RED-2)
+    const attach = await call('/v1/projects/RED/issues/1/children', 'POST', JSON.stringify({ childNumber: 2 }));
+    expect(attach.status).toBe(200);
+    expect((await attach.json())).toEqual({ parent: 'RED-1', child: 'RED-2' });
+
+    // cycle rejected with 422 (make RED-1 a child of RED-2)
+    const cycle = await call('/v1/projects/RED/issues/1/parent', 'POST', JSON.stringify({ parentNumber: 2 }));
+    expect(cycle.status).toBe(422);
+  });
+
   it('lower-cases the project key on resolve', async () => {
     const got = await call('/v1/projects/red/issues?status=all');
     expect(got.status).toBe(200);

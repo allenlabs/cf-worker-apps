@@ -58,6 +58,16 @@ function resolveProject(db: DB, key: string) {
   return db.query.projects.findFirst({ where: eq(projects.key, key.toUpperCase()) });
 }
 
+function findByNumber(db: DB, projectId: number, number: number) {
+  return db.query.issues.findFirst({
+    where: and(eq(issues.projectId, projectId), eq(issues.number, number)),
+  });
+}
+
+function errMsg(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
 function serializeIssue(row: { number: number }, projectKey: string, rest: Record<string, unknown>) {
   return { key: issueKey(projectKey, row.number), ...rest };
 }
@@ -142,6 +152,8 @@ issuesRouter.get('/projects/:key/issues/:number', async (c) => {
     doneRatio: full.issue.doneRatio,
     startDate: full.issue.startDate,
     dueDate: full.issue.dueDate,
+    parent: full.parent ? issueKey(project.key, full.parent.number) : null,
+    children: full.children.map((k) => issueKey(project.key, k.number)),
     labels: full.labels.map((l) => l.name),
     relations: full.relations.map((r) => ({ type: r.type, key: issueKey(r.projectKey, r.number) })),
   });
@@ -158,6 +170,8 @@ const createBody = z.object({
   estimatedHours: z.number().nullable().optional(),
   doneRatio: z.number().int().min(0).max(100).optional(),
   labelIds: z.array(z.number()).optional(),
+  // Parent issue's per-project number (e.g. 3 for RED-3); creates a subtask.
+  parentNumber: z.number().optional(),
 });
 
 // POST /v1/projects/:key/issues
@@ -183,19 +197,31 @@ issuesRouter.post('/projects/:key/issues', async (c) => {
   const refData = await getRefData(db);
   const trackerId = result.data.trackerId ?? refData.trackers[0]?.id;
   if (!trackerId) return c.json({ error: 'no tracker available' }, 422);
-  const created = await createIssueImpl(db, principal.me, {
-    projectId: project.id,
-    trackerId,
-    subject: result.data.subject,
-    description: result.data.description ?? '',
-    priorityId: result.data.priorityId,
-    assignedToId: result.data.assignedToId ?? null,
-    startDate: result.data.startDate ?? null,
-    dueDate: result.data.dueDate ?? null,
-    estimatedHours: result.data.estimatedHours ?? null,
-    doneRatio: result.data.doneRatio ?? 0,
-    labelIds: result.data.labelIds,
-  });
+  let parentId: number | null = null;
+  if (result.data.parentNumber != null) {
+    const parent = await findByNumber(db, project.id, result.data.parentNumber);
+    if (!parent) return c.json({ error: `parent #${result.data.parentNumber} not found` }, 422);
+    parentId = parent.id;
+  }
+  let created;
+  try {
+    created = await createIssueImpl(db, principal.me, {
+      projectId: project.id,
+      trackerId,
+      subject: result.data.subject,
+      description: result.data.description ?? '',
+      priorityId: result.data.priorityId,
+      assignedToId: result.data.assignedToId ?? null,
+      startDate: result.data.startDate ?? null,
+      dueDate: result.data.dueDate ?? null,
+      estimatedHours: result.data.estimatedHours ?? null,
+      doneRatio: result.data.doneRatio ?? 0,
+      labelIds: result.data.labelIds,
+      parentId,
+    });
+  } catch (e) {
+    return c.json({ error: errMsg(e) }, 422);
+  }
   return c.json({ key: issueKey(project.key, created.number), id: created.id, number: created.number }, 201);
 });
 
@@ -234,6 +260,89 @@ issuesRouter.post('/projects/:key/issues/:number', async (c) => {
   if (!can(principal.me, principal.ctx, project, perm)) {
     return c.json({ error: 'forbidden' }, 403);
   }
-  const updated = await updateIssueImpl(db, principal.me, { id: row.id, notes, changes });
+  let updated;
+  try {
+    updated = await updateIssueImpl(db, principal.me, { id: row.id, notes, changes });
+  } catch (e) {
+    return c.json({ error: errMsg(e) }, 422);
+  }
   return c.json({ key: issueKey(project.key, updated.number), id: updated.id, number: updated.number });
+});
+
+// POST /v1/projects/:key/issues/:number/parent — re-parent THIS issue.
+// Body: { parentNumber: number | null }  (null detaches it)
+issuesRouter.post('/projects/:key/issues/:number/parent', async (c) => {
+  const db = c.get('db');
+  const principal = await loadPrincipal(db, c.get('apiClient').userId);
+  if (!principal) return c.json({ error: 'client user missing' }, 401);
+  const project = await resolveProject(db, c.req.param('key'));
+  if (!project) return c.json({ error: 'project not found' }, 404);
+  if (!can(principal.me, principal.ctx, project, 'edit_issues')) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+  const row = await findByNumber(db, project.id, Number(c.req.param('number')));
+  if (!row) return c.json({ error: 'issue not found' }, 404);
+
+  let parsed: unknown;
+  try {
+    parsed = c.get('rawBody') ? JSON.parse(c.get('rawBody')) : {};
+  } catch {
+    return c.json({ error: 'invalid JSON' }, 400);
+  }
+  const body = z.object({ parentNumber: z.number().nullable() }).safeParse(parsed);
+  if (!body.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(body.error) }, 422);
+  }
+  let parentId: number | null = null;
+  if (body.data.parentNumber != null) {
+    const parent = await findByNumber(db, project.id, body.data.parentNumber);
+    if (!parent) return c.json({ error: `parent #${body.data.parentNumber} not found` }, 422);
+    parentId = parent.id;
+  }
+  try {
+    await updateIssueImpl(db, principal.me, { id: row.id, notes: '', changes: { parentId } });
+  } catch (e) {
+    return c.json({ error: errMsg(e) }, 422);
+  }
+  return c.json({
+    key: issueKey(project.key, row.number),
+    parent: parentId == null ? null : issueKey(project.key, body.data.parentNumber!),
+  });
+});
+
+// POST /v1/projects/:key/issues/:number/children — attach a subtask:
+// make childNumber a child of THIS issue. Body: { childNumber: number }
+issuesRouter.post('/projects/:key/issues/:number/children', async (c) => {
+  const db = c.get('db');
+  const principal = await loadPrincipal(db, c.get('apiClient').userId);
+  if (!principal) return c.json({ error: 'client user missing' }, 401);
+  const project = await resolveProject(db, c.req.param('key'));
+  if (!project) return c.json({ error: 'project not found' }, 404);
+  if (!can(principal.me, principal.ctx, project, 'edit_issues')) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+  const parent = await findByNumber(db, project.id, Number(c.req.param('number')));
+  if (!parent) return c.json({ error: 'issue not found' }, 404);
+
+  let parsed: unknown;
+  try {
+    parsed = c.get('rawBody') ? JSON.parse(c.get('rawBody')) : {};
+  } catch {
+    return c.json({ error: 'invalid JSON' }, 400);
+  }
+  const body = z.object({ childNumber: z.number() }).safeParse(parsed);
+  if (!body.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(body.error) }, 422);
+  }
+  const child = await findByNumber(db, project.id, body.data.childNumber);
+  if (!child) return c.json({ error: `child #${body.data.childNumber} not found` }, 422);
+  try {
+    await updateIssueImpl(db, principal.me, { id: child.id, notes: '', changes: { parentId: parent.id } });
+  } catch (e) {
+    return c.json({ error: errMsg(e) }, 422);
+  }
+  return c.json({
+    parent: issueKey(project.key, parent.number),
+    child: issueKey(project.key, child.number),
+  });
 });
