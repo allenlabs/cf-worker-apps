@@ -85,6 +85,8 @@ const pm: Dict = {
     "sidebar.versions": "Versions",
     "sidebar.categories": "Categories",
     "sidebar.labels": "Labels",
+    "sidebar.board": "Board",
+    "board.title": "Board",
     "sidebar.settings": "Settings",
 
     "filter.title": "Filters",
@@ -521,6 +523,8 @@ const pm: Dict = {
     "sidebar.versions": "버전",
     "sidebar.categories": "카테고리",
     "sidebar.labels": "라벨",
+    "sidebar.board": "보드",
+    "board.title": "보드",
     "sidebar.settings": "설정",
 
     "filter.title": "필터",

@@ -27,6 +27,7 @@ function renderAt(path: string, modules: string[]) {
     '/projects/$identifier',
     '/projects/$identifier/activity',
     '/projects/$identifier/issues',
+    '/projects/$identifier/board',
     '/projects/$identifier/gantt',
     '/projects/$identifier/roadmap',
     '/projects/$identifier/wiki',

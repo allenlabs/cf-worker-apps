@@ -31,6 +31,7 @@ export function ProjectSidebar({ identifier, projectName, modules }: Props) {
       {item(`${base}`, t('sidebar.overview'))}
       {item(`${base}/activity`, t('sidebar.activity'))}
       {item(`${base}/issues`, t('sidebar.issues'), modules.includes('issue_tracking'))}
+      {item(`${base}/board`, t('sidebar.board'), modules.includes('issue_tracking'))}
       {item(`${base}/gantt`, t('sidebar.gantt'), modules.includes('gantt'))}
       {item(`${base}/roadmap`, t('sidebar.roadmap'), modules.includes('roadmap'))}
       {item(`${base}/wiki`, t('sidebar.wiki'), modules.includes('wiki'))}
