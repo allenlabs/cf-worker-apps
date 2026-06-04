@@ -47,6 +47,8 @@ const RELATIONS_MIGRATION = readFileSync(
   join(ROOT, 'drizzle-pg', '0008_issue_relations.sql'),
   'utf8',
 );
+// Phase 3d: full-text search (tsvector + GIN).
+const FTS_MIGRATION = readFileSync(join(ROOT, 'drizzle-pg', '0009_fts.sql'), 'utf8');
 
 export async function makeTestDb(opts?: { seed?: boolean }): Promise<TestDB> {
   const pglite = new PGlite();
@@ -57,6 +59,7 @@ export async function makeTestDb(opts?: { seed?: boolean }): Promise<TestDB> {
   await pglite.exec(ISSUE_KEYS_MIGRATION);
   await pglite.exec(LABELS_MIGRATION);
   await pglite.exec(RELATIONS_MIGRATION);
+  await pglite.exec(FTS_MIGRATION);
   if (opts?.seed !== false) await pglite.exec(SEED);
   // The migration sets search_path inline, but it scopes to the session that
   // executed the DDL. Re-pin it on the live connection so helper inserts

@@ -98,4 +98,13 @@ describe('searchImpl', () => {
     expect(r.issues).toEqual([]);
     expect(r.wikis).toEqual([]);
   });
+
+  it('matches via stemming (rockets → rocket) — full-text, not substring', async () => {
+    const result = await searchImpl(db, { ...alice, isAdmin: true }, null, { q: 'rockets' });
+    expect(result.issues.map((i) => i.title).sort()).toEqual([
+      'priv issue rocket',
+      'pub issue rocket',
+    ]);
+    expect(result.wikis.map((w) => w.title)).toEqual(['pub page']);
+  });
 });

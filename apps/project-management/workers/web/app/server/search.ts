@@ -1,5 +1,5 @@
 import { createServerFn } from '@tanstack/react-start';
-import { and, eq, like, or, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { type DB } from '~/db/client';
 import { issues, projects, wikiPages, wikiRevisions, wikis } from '~/db/schema';
@@ -64,12 +64,18 @@ export async function searchImpl(
   const visible = await visibleProjectIdsImpl(db, me, ctx);
   if (!visible.length) return { issues: [], wikis: [] };
 
-  const pattern = `%${input.q}%`;
+  // GIN-indexed tsvector matching with ts_rank ordering (replaces the old
+  // LIKE '%q%' scans). websearch_to_tsquery understands quoted phrases and
+  // OR/-, so user-typed queries behave like a search box.
+  const query = sql`websearch_to_tsquery('english', ${input.q})`;
   const projectFilter = sql`${issues.projectId} IN (${sql.join(
     visible.map((id) => sql`${id}`),
     sql`, `,
   )})`;
-  const issueConds = [or(like(issues.subject, pattern), like(issues.description, pattern)), projectFilter];
+  // search_tsv is a generated column not modeled in the drizzle schema; refer
+  // to it by qualified name. The table alias drizzle emits matches the table
+  // name, so `issues.search_tsv` resolves cleanly.
+  const issueConds = [sql`issues.search_tsv @@ ${query}`, projectFilter];
   if (input.projectId !== undefined) issueConds.push(eq(issues.projectId, input.projectId));
 
   const issueRows = await db
@@ -86,6 +92,7 @@ export async function searchImpl(
     .from(issues)
     .innerJoin(projects, eq(projects.id, issues.projectId))
     .where(and(...issueConds))
+    .orderBy(sql`ts_rank(issues.search_tsv, ${query}) DESC`)
     .limit(50);
 
   const wikiProjectFilter = sql`${wikis.projectId} IN (${sql.join(
@@ -93,7 +100,7 @@ export async function searchImpl(
     sql`, `,
   )})`;
   const wikiConds = [
-    or(like(wikiPages.title, pattern), like(wikiRevisions.text, pattern)),
+    sql`(wiki_pages.search_tsv @@ ${query} OR wiki_revisions.search_tsv @@ ${query})`,
     wikiProjectFilter,
   ];
   if (input.projectId !== undefined) wikiConds.push(eq(wikis.projectId, input.projectId));
@@ -111,6 +118,7 @@ export async function searchImpl(
     .innerJoin(wikis, eq(wikis.id, wikiPages.wikiId))
     .leftJoin(wikiRevisions, eq(wikiRevisions.id, wikiPages.currentRevisionId))
     .where(and(...wikiConds))
+    .orderBy(sql`ts_rank(wiki_pages.search_tsv, ${query}) DESC`)
     .limit(50);
 
   return { issues: issueRows as SearchResult['issues'], wikis: wikiRows as SearchResult['wikis'] };
