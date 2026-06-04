@@ -235,7 +235,7 @@ export const AUTO_PROPERTY_TYPES = new Set<string>([
   'last_edited_by',
 ]);
 
-export type ViewType = 'table' | 'board' | 'list' | 'gallery' | 'calendar' | 'timeline';
+export type ViewType = 'table' | 'board' | 'list' | 'gallery' | 'calendar' | 'timeline' | 'chart';
 
 /** A {url,name} entry for a `files` property value. */
 export interface FileRef {
@@ -314,6 +314,17 @@ export interface DbViewConfig {
    * or 'none' means no footer calc for that column.
    */
   calcs?: Record<string, string>;
+  /**
+   * Chart-view config (Phase 18): `{ chartType, groupBy?, measure, kpiLabel? }`.
+   * Stored loosely (jsonb) and normalized by `~/lib/db-chart.normalizeChartConfig`
+   * at render time so a malformed stored value never throws.
+   */
+  chart?: {
+    chartType?: string;
+    groupBy?: string;
+    measure?: { kind?: string; propId?: string };
+    kpiLabel?: string;
+  };
 }
 
 export interface DbView {
@@ -1538,7 +1549,7 @@ const propertyTypeSchema = z.enum([
   'last_edited_by',
 ]);
 
-const viewTypeSchema = z.enum(['table', 'board', 'list', 'gallery', 'calendar', 'timeline']);
+const viewTypeSchema = z.enum(['table', 'board', 'list', 'gallery', 'calendar', 'timeline', 'chart']);
 
 export const dbCreate = createServerFn({ method: 'POST' })
   .inputValidator((d: unknown) =>

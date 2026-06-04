@@ -18,6 +18,21 @@ import {
   type AggregationOp,
 } from '~/lib/db-aggregate';
 import {
+  buildChartSeries,
+  normalizeChartConfig,
+  formatChartValue,
+  chartColor,
+  isMeasurableProp,
+  isGroupableProp,
+  CHART_TYPES,
+  MEASURE_KINDS,
+  type ChartConfig,
+  type ChartType,
+  type ChartMeasure,
+  type ChartSeries,
+  type BuildSeriesLabels,
+} from '~/lib/db-chart';
+import {
   AUTO_PROPERTY_TYPES,
   dbList as dbListFn,
   dbRows as dbRowsFn,
@@ -90,7 +105,7 @@ const SELECT_TYPES = new Set(['select', 'status']);
 const DATE_TYPES = new Set(['date']);
 const FILE_TYPES = new Set(['files']);
 
-const ADDABLE_VIEW_TYPES: ViewType[] = ['table', 'board', 'list', 'gallery', 'calendar', 'timeline'];
+const ADDABLE_VIEW_TYPES: ViewType[] = ['table', 'board', 'list', 'gallery', 'calendar', 'timeline', 'chart'];
 
 // ---------- filter operator metadata (Phase 15) ----------
 
@@ -290,6 +305,7 @@ const VIEW_TYPE_LABEL_KEYS: Record<ViewType, string> = {
   gallery: 'db.viewGallery',
   calendar: 'db.viewCalendar',
   timeline: 'db.viewTimeline',
+  chart: 'db.viewChart',
 };
 
 export function DatabaseView({
@@ -483,6 +499,17 @@ export function DatabaseView({
         await viewUpdateFn({ data: { id: created.id, config: { cardPropId: cardProp.id }, databaseId } });
         await refreshSchema();
       }
+    } else if (type === 'chart') {
+      // Seed a sensible default: bar chart, count measure, grouped by the first
+      // groupable (select/status/checkbox/person/…) property if one exists.
+      const groupProp = next.properties.find((p) => isGroupableProp(p));
+      const chart: ChartConfig = {
+        chartType: 'bar',
+        measure: { kind: 'count' },
+        ...(groupProp ? { groupBy: groupProp.id } : {}),
+      };
+      await viewUpdateFn({ data: { id: created.id, config: { chart }, databaseId } });
+      await refreshSchema();
     }
     setActiveViewId(created.id);
   }
@@ -511,6 +538,18 @@ export function DatabaseView({
   async function handleSetGroupBy(propId: string) {
     if (!activeView) return;
     await viewUpdateFn({ data: { id: activeView.id, config: { ...activeView.config, groupBy: propId }, databaseId } });
+    await refreshSchema();
+  }
+
+  // Persist the chart-view config (chartType / groupBy / measure / kpiLabel)
+  // under `config.chart`. The `databaseId` hint routes native views to their
+  // workspace DO; ignored on the PG path. Chart math is purely client-side over
+  // the already-loaded rows, so no row re-fetch is needed.
+  async function handleSetChartConfig(chart: ChartConfig) {
+    if (!activeView) return;
+    await viewUpdateFn({
+      data: { id: activeView.id, config: { ...activeView.config, chart }, databaseId },
+    });
     await refreshSchema();
   }
 
@@ -610,6 +649,14 @@ export function DatabaseView({
           properties={schema.properties}
           rows={rows}
           onSetCardProp={(p) => void handleSetViewConfig({ cardPropId: p })}
+        />
+      ) : activeView.type === 'chart' ? (
+        <ChartView
+          view={activeView}
+          properties={schema.properties}
+          rows={rows}
+          editable={editable}
+          onSetChartConfig={(c) => void handleSetChartConfig(c)}
         />
       ) : activeView.type === 'calendar' ? (
         <CalendarView
@@ -2912,6 +2959,435 @@ function GalleryView({ view, properties, rows, onSetCardProp }: GalleryViewProps
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------- Chart view (Phase 18) ----------
+
+interface ChartViewProps {
+  view: DbView;
+  properties: DbProperty[];
+  rows: DbRow[];
+  editable: boolean;
+  onSetChartConfig: (config: ChartConfig) => void;
+}
+
+/**
+ * Read-only chart view over the loaded (filter/sort-shaped) rows. Aggregation
+ * is purely client-side via `~/lib/db-chart`. A config bar lets the user pick
+ * the chart type, group-by property, and measure; KPI shows a single number.
+ */
+function ChartView({ view, properties, rows, editable, onSetChartConfig }: ChartViewProps) {
+  const { t } = useT();
+  const config = normalizeChartConfig(view.config.chart);
+
+  const labels = useMemo<BuildSeriesLabels>(
+    () => ({
+      empty: t('db.chartEmptyBucket'),
+      title: t('db.title'),
+      count: t('db.chartMeasureCount'),
+      sum: t('db.chartMeasureSum'),
+      average: t('db.chartMeasureAverage'),
+      min: t('db.chartMeasureMin'),
+      max: t('db.chartMeasureMax'),
+    }),
+    [t],
+  );
+
+  const series = useMemo(
+    () => buildChartSeries(rows, properties, config, labels),
+    [rows, properties, config, labels],
+  );
+
+  const groupable = properties.filter((p) => isGroupableProp(p));
+  const measurable = properties.filter((p) => isMeasurableProp(p));
+  const isKpi = config.chartType === 'kpi';
+
+  function patch(next: Partial<ChartConfig>) {
+    onSetChartConfig({ ...config, ...next });
+  }
+
+  function setChartType(chartType: ChartType) {
+    patch({ chartType });
+  }
+
+  function setGroupBy(groupBy: string) {
+    patch({ groupBy: groupBy || undefined });
+  }
+
+  function setMeasureKind(kind: ChartMeasure['kind']) {
+    if (kind === 'count') {
+      patch({ measure: { kind: 'count' } });
+    } else {
+      // Keep the chosen measure prop if still valid, else first measurable.
+      const current = config.measure.kind !== 'count' ? config.measure.propId : undefined;
+      const propId =
+        current && measurable.some((p) => p.id === current) ? current : measurable[0]?.id;
+      if (propId) patch({ measure: { kind, propId } });
+    }
+  }
+
+  function setMeasureProp(propId: string) {
+    if (config.measure.kind === 'count') return;
+    patch({ measure: { kind: config.measure.kind, propId } });
+  }
+
+  const hasData = series.values.some((v) => v !== 0) || (isKpi && series.total !== 0);
+  const noRows = rows.length === 0;
+
+  return (
+    <div data-testid="chart-view">
+      {/* Config bar */}
+      {editable ? (
+        <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+          <label className="flex items-center gap-1">
+            {t('db.chartType')}
+            <select
+              className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5 bg-white dark:bg-gray-800"
+              value={config.chartType}
+              onChange={(e) => setChartType(e.target.value as ChartType)}
+              data-testid="chart-type"
+              aria-label={t('db.chartType')}
+            >
+              {CHART_TYPES.map((ct) => (
+                <option key={ct} value={ct}>
+                  {t(`db.chart.${ct}`)}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {!isKpi ? (
+            <label className="flex items-center gap-1">
+              {t('db.chartGroupBy')}
+              <select
+                className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5 bg-white dark:bg-gray-800"
+                value={config.groupBy ?? ''}
+                onChange={(e) => setGroupBy(e.target.value)}
+                data-testid="chart-groupby"
+                aria-label={t('db.chartGroupBy')}
+              >
+                <option value="">{t('db.chartGroupNone')}</option>
+                <option value="title">{t('db.title')}</option>
+                {groupable.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+
+          <label className="flex items-center gap-1">
+            {t('db.chartMeasure')}
+            <select
+              className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5 bg-white dark:bg-gray-800"
+              value={config.measure.kind}
+              onChange={(e) => setMeasureKind(e.target.value as ChartMeasure['kind'])}
+              data-testid="chart-measure"
+              aria-label={t('db.chartMeasure')}
+            >
+              {MEASURE_KINDS.map((k) => (
+                <option key={k} value={k} disabled={k !== 'count' && measurable.length === 0}>
+                  {t(`db.chartMeasure.${k}`)}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {config.measure.kind !== 'count' ? (
+            <label className="flex items-center gap-1">
+              {t('db.chartMeasureProp')}
+              <select
+                className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5 bg-white dark:bg-gray-800"
+                value={config.measure.propId}
+                onChange={(e) => setMeasureProp(e.target.value)}
+                data-testid="chart-measure-prop"
+                aria-label={t('db.chartMeasureProp')}
+              >
+                {measurable.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+
+          {isKpi ? (
+            <label className="flex items-center gap-1">
+              {t('db.chartKpiLabel')}
+              <input
+                className="border border-gray-300 dark:border-gray-600 rounded px-1 py-0.5 bg-white dark:bg-gray-800 w-32"
+                value={config.kpiLabel ?? ''}
+                placeholder={series.measureLabel}
+                onChange={(e) => patch({ kpiLabel: e.target.value })}
+                data-testid="chart-kpi-label"
+                aria-label={t('db.chartKpiLabel')}
+              />
+            </label>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* Chart canvas */}
+      {noRows ? (
+        <div className="text-sm text-gray-400 dark:text-gray-500 py-8 text-center" data-testid="chart-empty">
+          {t('db.noRows')}
+        </div>
+      ) : !isKpi && !config.groupBy ? (
+        <div className="text-sm text-gray-400 dark:text-gray-500 py-8 text-center" data-testid="chart-empty">
+          {t('db.chartPickGroupBy')}
+        </div>
+      ) : !hasData ? (
+        <div className="text-sm text-gray-400 dark:text-gray-500 py-8 text-center" data-testid="chart-empty">
+          {t('db.chartNoData')}
+        </div>
+      ) : config.chartType === 'kpi' ? (
+        <KpiCard series={series} />
+      ) : config.chartType === 'bar' ? (
+        <BarChart series={series} />
+      ) : config.chartType === 'line' ? (
+        <LineChart series={series} />
+      ) : (
+        <PieChart series={series} donut={config.chartType === 'donut'} />
+      )}
+    </div>
+  );
+}
+
+/** Short accessible summary of a series (for `aria-label` on the SVG). */
+function chartAriaSummary(t: (k: string, p?: Record<string, string>) => string, series: ChartSeries): string {
+  return t('db.chartAria', {
+    measure: series.measureLabel,
+    count: String(series.labels.length),
+  });
+}
+
+/** Vertical bar chart. Responsive width via viewBox; hover tooltips via <title>. */
+function BarChart({ series }: { series: ChartSeries }) {
+  const { t } = useT();
+  const W = 640;
+  const H = 320;
+  const padL = 44;
+  const padB = 56;
+  const padT = 12;
+  const padR = 12;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+  const n = series.values.length;
+  const slot = plotW / Math.max(n, 1);
+  const barW = Math.max(4, slot * 0.6);
+  const maxVal = series.max > 0 ? series.max : 1;
+
+  return (
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      className="w-full h-auto max-w-3xl"
+      role="img"
+      aria-label={chartAriaSummary(t, series)}
+      data-testid="chart-bar"
+      preserveAspectRatio="xMidYMid meet"
+    >
+      {/* Y axis baseline */}
+      <line x1={padL} y1={padT} x2={padL} y2={padT + plotH} className="stroke-gray-300 dark:stroke-gray-600" strokeWidth={1} />
+      <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} className="stroke-gray-300 dark:stroke-gray-600" strokeWidth={1} />
+      {/* Max + mid Y ticks */}
+      <text x={padL - 6} y={padT + 4} textAnchor="end" className="fill-gray-400 dark:fill-gray-500 text-[10px]">
+        {formatChartValue(maxVal)}
+      </text>
+      <text x={padL - 6} y={padT + plotH + 4} textAnchor="end" className="fill-gray-400 dark:fill-gray-500 text-[10px]">
+        0
+      </text>
+      {series.values.map((v, i) => {
+        const h = (v / maxVal) * plotH;
+        const x = padL + i * slot + (slot - barW) / 2;
+        const y = padT + plotH - h;
+        const label = series.labels[i] ?? '';
+        return (
+          <g key={i}>
+            <rect x={x} y={y} width={barW} height={Math.max(0, h)} rx={2} fill={chartColor(i)}>
+              <title>{`${label}: ${formatChartValue(v)}`}</title>
+            </rect>
+            <text
+              x={x + barW / 2}
+              y={padT + plotH + 14}
+              textAnchor="middle"
+              className="fill-gray-600 dark:fill-gray-300 text-[10px]"
+            >
+              {label.length > 10 ? `${label.slice(0, 9)}…` : label}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+/** Line chart (polyline over evenly-spaced points). */
+function LineChart({ series }: { series: ChartSeries }) {
+  const { t } = useT();
+  const W = 640;
+  const H = 320;
+  const padL = 44;
+  const padB = 56;
+  const padT = 12;
+  const padR = 12;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+  const n = series.values.length;
+  const maxVal = series.max > 0 ? series.max : 1;
+  const stepX = n > 1 ? plotW / (n - 1) : 0;
+  const pointX = (i: number) => (n > 1 ? padL + i * stepX : padL + plotW / 2);
+  const pointY = (v: number) => padT + plotH - (v / maxVal) * plotH;
+  const points = series.values.map((v, i) => `${pointX(i)},${pointY(v)}`).join(' ');
+
+  return (
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      className="w-full h-auto max-w-3xl"
+      role="img"
+      aria-label={chartAriaSummary(t, series)}
+      data-testid="chart-line"
+      preserveAspectRatio="xMidYMid meet"
+    >
+      <line x1={padL} y1={padT} x2={padL} y2={padT + plotH} className="stroke-gray-300 dark:stroke-gray-600" strokeWidth={1} />
+      <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} className="stroke-gray-300 dark:stroke-gray-600" strokeWidth={1} />
+      <text x={padL - 6} y={padT + 4} textAnchor="end" className="fill-gray-400 dark:fill-gray-500 text-[10px]">
+        {formatChartValue(maxVal)}
+      </text>
+      <text x={padL - 6} y={padT + plotH + 4} textAnchor="end" className="fill-gray-400 dark:fill-gray-500 text-[10px]">
+        0
+      </text>
+      {n > 1 ? (
+        <polyline points={points} fill="none" stroke={chartColor(0)} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+      ) : null}
+      {series.values.map((v, i) => {
+        const label = series.labels[i] ?? '';
+        return (
+          <g key={i}>
+            <circle cx={pointX(i)} cy={pointY(v)} r={3.5} fill={chartColor(0)}>
+              <title>{`${label}: ${formatChartValue(v)}`}</title>
+            </circle>
+            <text
+              x={pointX(i)}
+              y={padT + plotH + 14}
+              textAnchor="middle"
+              className="fill-gray-600 dark:fill-gray-300 text-[10px]"
+            >
+              {label.length > 10 ? `${label.slice(0, 9)}…` : label}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+/** Build an SVG arc path for a pie/donut slice between two angles (radians). */
+function arcPath(cx: number, cy: number, rOuter: number, rInner: number, a0: number, a1: number): string {
+  const large = a1 - a0 > Math.PI ? 1 : 0;
+  const x0 = cx + rOuter * Math.cos(a0);
+  const y0 = cy + rOuter * Math.sin(a0);
+  const x1 = cx + rOuter * Math.cos(a1);
+  const y1 = cy + rOuter * Math.sin(a1);
+  if (rInner <= 0) {
+    // Full pie wedge (center → arc → center).
+    return `M ${cx} ${cy} L ${x0} ${y0} A ${rOuter} ${rOuter} 0 ${large} 1 ${x1} ${y1} Z`;
+  }
+  // Donut ring segment (outer arc forward, inner arc backward).
+  const ix1 = cx + rInner * Math.cos(a1);
+  const iy1 = cy + rInner * Math.sin(a1);
+  const ix0 = cx + rInner * Math.cos(a0);
+  const iy0 = cy + rInner * Math.sin(a0);
+  return [
+    `M ${x0} ${y0}`,
+    `A ${rOuter} ${rOuter} 0 ${large} 1 ${x1} ${y1}`,
+    `L ${ix1} ${iy1}`,
+    `A ${rInner} ${rInner} 0 ${large} 0 ${ix0} ${iy0}`,
+    'Z',
+  ].join(' ');
+}
+
+/** Pie / donut chart with a side legend. Slices sized by value fraction. */
+function PieChart({ series, donut }: { series: ChartSeries; donut: boolean }) {
+  const { t } = useT();
+  const size = 240;
+  const cx = size / 2;
+  const cy = size / 2;
+  const rOuter = size / 2 - 8;
+  const rInner = donut ? rOuter * 0.55 : 0;
+
+  // Only non-zero slices get a wedge; a single full-circle slice is drawn as a
+  // ring/disc rather than a degenerate arc.
+  const drawn = series.slices.map((s, i) => ({ ...s, color: chartColor(i) })).filter((s) => s.value > 0);
+  let angle = -Math.PI / 2; // start at 12 o'clock
+
+  return (
+    <div className="flex flex-wrap items-center gap-6" data-testid="chart-pie">
+      <svg
+        viewBox={`0 0 ${size} ${size}`}
+        className="w-48 h-48 shrink-0"
+        role="img"
+        aria-label={chartAriaSummary(t, series)}
+        preserveAspectRatio="xMidYMid meet"
+      >
+        {drawn.length === 1 ? (
+          rInner > 0 ? (
+            <>
+              <circle cx={cx} cy={cy} r={rOuter} fill={drawn[0]!.color} />
+              <circle cx={cx} cy={cy} r={rInner} className="fill-white dark:fill-gray-900" />
+              <title>{`${drawn[0]!.label}: ${formatChartValue(drawn[0]!.value)} (100%)`}</title>
+            </>
+          ) : (
+            <circle cx={cx} cy={cy} r={rOuter} fill={drawn[0]!.color}>
+              <title>{`${drawn[0]!.label}: ${formatChartValue(drawn[0]!.value)} (100%)`}</title>
+            </circle>
+          )
+        ) : (
+          drawn.map((s, i) => {
+            const a0 = angle;
+            const a1 = angle + s.fraction * Math.PI * 2;
+            angle = a1;
+            return (
+              <path key={i} d={arcPath(cx, cy, rOuter, rInner, a0, a1)} fill={s.color}>
+                <title>{`${s.label}: ${formatChartValue(s.value)} (${Math.round(s.fraction * 100)}%)`}</title>
+              </path>
+            );
+          })
+        )}
+      </svg>
+      <ul className="text-xs text-gray-600 dark:text-gray-300 space-y-1" data-testid="chart-legend">
+        {series.slices.map((s, i) => (
+          <li key={i} className="flex items-center gap-2">
+            <span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: chartColor(i) }} />
+            <span className="truncate max-w-[12rem]">{s.label}</span>
+            <span className="text-gray-400 dark:text-gray-500">
+              {formatChartValue(s.value)} ({Math.round(s.fraction * 100)}%)
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** Single big-number KPI card with an optional caption. */
+function KpiCard({ series }: { series: ChartSeries }) {
+  const value = series.values[0] ?? 0;
+  const label = series.labels[0] ?? series.measureLabel;
+  return (
+    <div
+      className="inline-flex flex-col items-start rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-6 py-5"
+      role="img"
+      aria-label={`${label}: ${formatChartValue(value)}`}
+      data-testid="chart-kpi"
+    >
+      <span className="text-4xl font-semibold text-gray-900 dark:text-gray-100 tabular-nums">
+        {formatChartValue(value)}
+      </span>
+      <span className="mt-1 text-xs uppercase tracking-wide text-gray-400 dark:text-gray-500">{label}</span>
     </div>
   );
 }
