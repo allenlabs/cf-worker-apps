@@ -491,7 +491,18 @@ export async function addViewImpl(
     SELECT MAX(position) AS "maxPos" FROM editor.db_views WHERE database_id = ${input.databaseId}
   `;
   const position = Number(maxRow?.maxPos ?? -1) + 1;
-  const KNOWN_VIEW_TYPES = new Set(['table', 'board', 'list', 'gallery', 'calendar', 'timeline']);
+  const KNOWN_VIEW_TYPES = new Set([
+    'table',
+    'board',
+    'list',
+    'gallery',
+    'calendar',
+    'timeline',
+    // Forms: a view that renders a database as a fillable form (authoring) +
+    // backs a public submit page. Stored like any other view; its `config`
+    // holds the form definition.
+    'form',
+  ]);
   const type = KNOWN_VIEW_TYPES.has(input.type) ? input.type : 'table';
   const DEFAULT_NAMES: Record<string, string> = {
     table: 'Table',
@@ -500,6 +511,7 @@ export async function addViewImpl(
     gallery: 'Gallery',
     calendar: 'Calendar',
     timeline: 'Timeline',
+    form: 'Form',
   };
   const name = input.name?.trim() || DEFAULT_NAMES[type] || 'View';
   const [row] = await sql<

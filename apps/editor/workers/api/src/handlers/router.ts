@@ -86,6 +86,7 @@ import {
   type ActionDeps,
 } from './automations';
 import { prepareUpload, publicUrlFor } from './files';
+import { setFormShareImpl, formShareForViewImpl } from './forms';
 import {
   commentAddImpl,
   commentAuthorImpl,
@@ -758,7 +759,7 @@ v1Router.post('/db/property/delete', async (c) => {
   return c.json({ ok: true }, 200);
 });
 
-const viewType = z.enum(['table', 'board', 'list', 'gallery', 'calendar', 'timeline']);
+const viewType = z.enum(['table', 'board', 'list', 'gallery', 'calendar', 'timeline', 'form']);
 
 const viewAddSchema = z.object({
   databaseId: z.string().uuid(),
@@ -851,6 +852,57 @@ v1Router.post('/db/view/delete', async (c) => {
   const ok = await resolved.ds.deleteView(parsed.data.id);
   if (!ok) return c.json({ error: 'not found' }, 404);
   return c.json({ ok: true }, 200);
+});
+
+// Forms: toggle a kind='form' view's PUBLIC share ("Share form"). Creating /
+// enabling mints (or re-enables) an `editor.form_shares` row; disabling flips
+// `enabled=false`. Returns the token (+ enabled) so the web can compose the
+// public URL. Gated on canEdit of the database.
+//
+// SCOPE: the share row's `view_id` FKs `editor.db_views`, so this is
+// POSTGRES-backed forms only — a native_do view isn't in Postgres. Native form
+// sharing is a documented follow-up; the route 404s for a view it can't resolve
+// in PG.
+const formShareSchema = z.object({
+  viewId: z.string().uuid(),
+  enabled: z.boolean(),
+});
+v1Router.post('/db/form/share', async (c) => {
+  const user = c.get('user');
+  const parsed = formShareSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const databaseId = await viewDatabaseImpl(c.get('db'), parsed.data.viewId);
+  if (!databaseId) return c.json({ error: 'not found' }, 404);
+  if (!(await canEditPageImpl(c.get('db'), user.userId, databaseId))) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+  const share = await setFormShareImpl(c.get('db'), {
+    databaseId,
+    viewId: parsed.data.viewId,
+    enabled: parsed.data.enabled,
+    createdBy: user.email ?? user.userId,
+  });
+  return c.json({ token: share.token, enabled: share.enabled }, 200);
+});
+
+// Forms: read the current public-share state for a form view (token + enabled),
+// so the authoring UI can show the existing public URL + toggle state.
+const formShareGetSchema = z.object({ viewId: z.string().uuid() });
+v1Router.post('/db/form/share/get', async (c) => {
+  const user = c.get('user');
+  const parsed = formShareGetSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const databaseId = await viewDatabaseImpl(c.get('db'), parsed.data.viewId);
+  if (!databaseId) return c.json({ error: 'not found' }, 404);
+  if (!(await canEditPageImpl(c.get('db'), user.userId, databaseId))) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+  const share = await formShareForViewImpl(c.get('db'), parsed.data.viewId);
+  return c.json(share ? { token: share.token, enabled: share.enabled } : { token: null, enabled: false }, 200);
 });
 
 const dbRowsSchema = z.object({

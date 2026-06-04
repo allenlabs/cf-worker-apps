@@ -133,6 +133,39 @@ export interface PublicPage {
   snapshotHtml: string;
 }
 
+// ---------- database Forms ----------
+
+/** A select/status/multi option surfaced to the public form. */
+export interface FormFieldOption {
+  id: string;
+  name: string;
+  color?: string;
+}
+
+/** One resolved field returned to the public form renderer. */
+export interface PublicFormField {
+  propId: string;
+  label: string;
+  type: string;
+  required: boolean;
+  options: FormFieldOption[];
+}
+
+/** Schema-only definition for rendering a public form (no row data). */
+export interface PublicFormDefinition {
+  title: string;
+  description: string;
+  submitText: string;
+  confirmationMessage: string;
+  fields: PublicFormField[];
+}
+
+/** Current public-share state for a form view. */
+export interface FormShareState {
+  token: string | null;
+  enabled: boolean;
+}
+
 export interface CommentItem {
   id: string;
   /** null = page-level comment; non-null = inline (text-anchored) thread. */
@@ -235,7 +268,15 @@ export const AUTO_PROPERTY_TYPES = new Set<string>([
   'last_edited_by',
 ]);
 
-export type ViewType = 'table' | 'board' | 'list' | 'gallery' | 'calendar' | 'timeline' | 'chart';
+export type ViewType =
+  | 'table'
+  | 'board'
+  | 'list'
+  | 'gallery'
+  | 'calendar'
+  | 'timeline'
+  | 'chart'
+  | 'form';
 
 /** A {url,name} entry for a `files` property value. */
 export interface FileRef {
@@ -932,6 +973,85 @@ export async function publicPageImpl(
   return (await res.json()) as PublicPage;
 }
 
+// ---------- database Forms impls ----------
+
+/** Authenticated: create/enable/disable a form view's public share. */
+export function formShareImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: { viewId: string; enabled: boolean },
+  deps?: ApiClientDeps,
+): Promise<FormShareState> {
+  return apiPostImpl<FormShareState>(env, '/v1/db/form/share', userBody(user, input), deps);
+}
+
+/** Authenticated: read a form view's current public-share state. */
+export function formShareGetImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  viewId: string,
+  deps?: ApiClientDeps,
+): Promise<FormShareState> {
+  return apiPostImpl<FormShareState>(env, '/v1/db/form/share/get', userBody(user, { viewId }), deps);
+}
+
+/**
+ * NO-AUTH: fetch a public form's schema for rendering. Hits editor-api's public
+ * route directly (GET, no HMAC, no user body), gated by the share token.
+ * Returns null on a missing/disabled token (404).
+ */
+export async function publicFormImpl(
+  env: Pick<ApiClientEnv, 'EDITOR_API_URL'>,
+  token: string,
+  deps?: ApiClientDeps,
+): Promise<PublicFormDefinition | null> {
+  const base = env.EDITOR_API_URL.replace(/\/$/, '');
+  /* v8 ignore next — real fetch is the production default; tests inject one. */
+  const fetcher = deps?.fetcher ?? fetch;
+  const res = await fetcher(`${base}/public/form/${encodeURIComponent(token)}`, { method: 'GET' });
+  if (res.status === 404) return null;
+  /* v8 ignore next 3 — only on unexpected upstream failure. */
+  if (!res.ok) {
+    throw new Error(`editor-api /public/form ${res.status}`);
+  }
+  return (await res.json()) as PublicFormDefinition;
+}
+
+export type PublicFormSubmitResult =
+  | { ok: true }
+  | { ok: false; status: number; errors: Record<string, string> };
+
+/**
+ * NO-AUTH: submit a public form. POSTs to editor-api's public submit route (no
+ * HMAC, no user body) gated by the share token. Returns a discriminated result
+ * so the form can show field errors (400) without throwing.
+ */
+export async function submitPublicFormImpl(
+  env: Pick<ApiClientEnv, 'EDITOR_API_URL'>,
+  token: string,
+  answers: Record<string, unknown>,
+  deps?: ApiClientDeps,
+): Promise<PublicFormSubmitResult> {
+  const base = env.EDITOR_API_URL.replace(/\/$/, '');
+  /* v8 ignore next — real fetch is the production default; tests inject one. */
+  const fetcher = deps?.fetcher ?? fetch;
+  const res = await fetcher(`${base}/public/form/${encodeURIComponent(token)}/submit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ answers }),
+  });
+  if (res.ok) return { ok: true };
+  let errors: Record<string, string> = {};
+  /* v8 ignore next 4 — body parsing only fails on malformed upstream JSON. */
+  try {
+    const body = (await res.json()) as { errors?: Record<string, string> };
+    if (body && typeof body.errors === 'object' && body.errors) errors = body.errors;
+  } catch {
+    // ignore — leave errors empty.
+  }
+  return { ok: false, status: res.status, errors };
+}
+
 export function commentsListImpl(
   env: ApiClientEnv,
   user: CurrentUser,
@@ -1549,7 +1669,16 @@ const propertyTypeSchema = z.enum([
   'last_edited_by',
 ]);
 
-const viewTypeSchema = z.enum(['table', 'board', 'list', 'gallery', 'calendar', 'timeline', 'chart']);
+const viewTypeSchema = z.enum([
+  'table',
+  'board',
+  'list',
+  'gallery',
+  'calendar',
+  'timeline',
+  'chart',
+  'form',
+]);
 
 export const dbCreate = createServerFn({ method: 'POST' })
   .inputValidator((d: unknown) =>
@@ -1859,6 +1988,45 @@ export const publicPage = createServerFn({ method: 'GET' })
   .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
   .handler(async ({ data }) => {
     return publicPageImpl(getEnv(), data.id);
+  });
+
+// ---------- database Forms wrappers ----------
+
+export const formShare = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z.object({ viewId: z.string().uuid(), enabled: z.boolean() }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return formShareImpl(getEnv(), user, data);
+  });
+
+export const formShareGet = createServerFn({ method: 'GET' })
+  .inputValidator((d: unknown) => z.object({ viewId: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return formShareGetImpl(getEnv(), user, data.viewId);
+  });
+
+// NO-AUTH: backs the public /form/$token route. No requireUser — works for
+// signed-out visitors; the api enforces the enabled share token.
+export const publicForm = createServerFn({ method: 'GET' })
+  .inputValidator((d: unknown) => z.object({ token: z.string().min(1).max(128) }).parse(d))
+  .handler(async ({ data }) => {
+    return publicFormImpl(getEnv(), data.token);
+  });
+
+export const submitPublicForm = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        token: z.string().min(1).max(128),
+        answers: z.record(z.string(), z.unknown()).default({}),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    return submitPublicFormImpl(getEnv(), data.token, data.answers);
   });
 
 export const commentsList = createServerFn({ method: 'GET' })

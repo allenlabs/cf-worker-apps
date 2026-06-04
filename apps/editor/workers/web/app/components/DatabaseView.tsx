@@ -57,6 +57,8 @@ import {
   uploadFile as uploadFileFn,
   viewAdd as viewAddFn,
   viewUpdate as viewUpdateFn,
+  formShare as formShareFn,
+  formShareGet as formShareGetFn,
   type DatabaseListItem,
   type DbProperty,
   type DbRow,
@@ -105,7 +107,21 @@ const SELECT_TYPES = new Set(['select', 'status']);
 const DATE_TYPES = new Set(['date']);
 const FILE_TYPES = new Set(['files']);
 
-const ADDABLE_VIEW_TYPES: ViewType[] = ['table', 'board', 'list', 'gallery', 'calendar', 'timeline', 'chart'];
+const ADDABLE_VIEW_TYPES: ViewType[] = ['table', 'board', 'list', 'gallery', 'calendar', 'timeline', 'chart', 'form'];
+
+/** Property types a form field can collect (mirrors api FORM_SUPPORTED_TYPES). */
+const FORM_SUPPORTED_TYPES = new Set<string>([
+  'text',
+  'number',
+  'select',
+  'status',
+  'multi_select',
+  'date',
+  'checkbox',
+  'url',
+  'email',
+  'phone',
+]);
 
 // ---------- filter operator metadata (Phase 15) ----------
 
@@ -295,6 +311,11 @@ interface DatabaseViewProps {
   sourceDatabaseId?: string | null;
   /** Phase 15 — compact embed mode (linked view): tighter chrome. */
   embed?: boolean;
+  /**
+   * Forms — public base URL (PUBLIC_BASE_URL, e.g. https://editor.allenlabs.org)
+   * for composing a shared form's public link in the FormView authoring UI.
+   */
+  publicBaseUrl?: string;
 }
 
 /** View-type → i18n key for its display label (chrome, not user data). */
@@ -306,6 +327,7 @@ const VIEW_TYPE_LABEL_KEYS: Record<ViewType, string> = {
   calendar: 'db.viewCalendar',
   timeline: 'db.viewTimeline',
   chart: 'db.viewChart',
+  form: 'db.viewForm',
 };
 
 export function DatabaseView({
@@ -315,6 +337,7 @@ export function DatabaseView({
   editable = true,
   sourceDatabaseId = null,
   embed = false,
+  publicBaseUrl = '',
 }: DatabaseViewProps) {
   const { t } = useT();
   const [schema, setSchema] = useState<DbSchema>(initialSchema);
@@ -510,6 +533,16 @@ export function DatabaseView({
       };
       await viewUpdateFn({ data: { id: created.id, config: { chart }, databaseId } });
       await refreshSchema();
+    } else if (type === 'form') {
+      // Seed the form definition with all form-compatible properties as fields
+      // (ordered by position), none required/hidden — the authoring default.
+      const fields = next.properties
+        .filter((p) => FORM_SUPPORTED_TYPES.has(p.type))
+        .map((p) => ({ propId: p.id, required: false, hidden: false }));
+      await viewUpdateFn({
+        data: { id: created.id, config: { fields }, databaseId },
+      });
+      await refreshSchema();
     }
     setActiveViewId(created.id);
   }
@@ -620,8 +653,9 @@ export function DatabaseView({
         />
       ) : null}
 
-      {/* Phase 15: filter / sort / group builder toolbar. */}
-      {editable ? (
+      {/* Phase 15: filter / sort / group builder toolbar. Forms don't query
+          rows, so the filter/sort/group bar is hidden for the form view. */}
+      {editable && activeView.type !== 'form' ? (
         <FilterSortGroupBar
           view={activeView}
           properties={schema.properties}
@@ -657,6 +691,14 @@ export function DatabaseView({
           rows={rows}
           editable={editable}
           onSetChartConfig={(c) => void handleSetChartConfig(c)}
+        />
+      ) : activeView.type === 'form' ? (
+        <FormView
+          view={activeView}
+          properties={schema.properties}
+          editable={editable}
+          publicBaseUrl={publicBaseUrl}
+          onSetConfig={(patch) => void handleSetViewConfig(patch)}
         />
       ) : activeView.type === 'calendar' ? (
         <CalendarView
@@ -708,6 +750,271 @@ export function DatabaseView({
           onPatchRow={(id, patch) => void handleRowPatch(id, patch)}
           onClose={() => setPeekRowId(null)}
         />
+      ) : null}
+    </div>
+  );
+}
+
+// ---------- Form view (authoring) ----------
+
+interface FormFieldDef {
+  propId: string;
+  label?: string;
+  required?: boolean;
+  hidden?: boolean;
+}
+
+interface FormViewProps {
+  view: DbView;
+  properties: DbProperty[];
+  editable: boolean;
+  publicBaseUrl: string;
+  onSetConfig: (patch: Record<string, unknown>) => void;
+}
+
+/** Read the form definition from a form view's config (with field defaults). */
+function readFormFields(view: DbView, properties: DbProperty[]): FormFieldDef[] {
+  const byId = new Map(properties.map((p) => [p.id, p]));
+  const raw = (view.config as { fields?: unknown }).fields;
+  const list = Array.isArray(raw) ? (raw as FormFieldDef[]) : null;
+  if (list) {
+    return list
+      .filter((f) => f && typeof f.propId === 'string')
+      .filter((f) => {
+        const p = byId.get(f.propId);
+        return !!p && FORM_SUPPORTED_TYPES.has(p.type);
+      });
+  }
+  return properties
+    .filter((p) => FORM_SUPPORTED_TYPES.has(p.type))
+    .map((p) => ({ propId: p.id, required: false, hidden: false }));
+}
+
+/**
+ * Form view authoring UI: edit the form title/description/submit text +
+ * confirmation message, reorder / toggle-visible / require fields, and a
+ * "Share form" toggle that creates/enables (or disables) the public share and
+ * surfaces the public URL. Persists via the existing `viewUpdate` server fn
+ * (config patch) WITH the databaseId hint; the share toggle uses `formShare`.
+ *
+ * Unsupported property types (person/relation/files/rollup/formula/button) are
+ * excluded from the field set by readFormFields — documented in the UI note.
+ */
+function FormView({ view, properties, editable, publicBaseUrl, onSetConfig }: FormViewProps) {
+  const { t } = useT();
+  const byId = useMemo(() => new Map(properties.map((p) => [p.id, p])), [properties]);
+  const config = view.config as {
+    title?: string;
+    description?: string;
+    submitText?: string;
+    confirmationMessage?: string;
+  };
+  const fields = readFormFields(view, properties);
+
+  const [shareToken, setShareToken] = useState<string | null>(null);
+  const [shareEnabled, setShareEnabled] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!editable) return;
+    let cancelled = false;
+    void formShareGetFn({ data: { viewId: view.id } }).then((s) => {
+      if (!cancelled) {
+        setShareToken(s.token);
+        setShareEnabled(s.enabled);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [view.id, editable]);
+
+  function patchFields(next: FormFieldDef[]) {
+    onSetConfig({ fields: next as unknown as JsonValue });
+  }
+
+  function toggleField(propId: string, key: 'required' | 'hidden') {
+    patchFields(
+      fields.map((f) => (f.propId === propId ? { ...f, [key]: !f[key] } : f)),
+    );
+  }
+
+  function moveField(index: number, dir: -1 | 1) {
+    const next = [...fields];
+    const target = index + dir;
+    if (target < 0 || target >= next.length) return;
+    [next[index], next[target]] = [next[target]!, next[index]!];
+    patchFields(next);
+  }
+
+  async function toggleShare(enabled: boolean) {
+    const res = await formShareFn({ data: { viewId: view.id, enabled } });
+    setShareToken(res.token);
+    setShareEnabled(res.enabled);
+  }
+
+  const publicUrl =
+    shareToken && publicBaseUrl
+      ? `${publicBaseUrl.replace(/\/$/, '')}/form/${shareToken}`
+      : '';
+
+  async function copyUrl() {
+    if (!publicUrl) return;
+    try {
+      await navigator.clipboard.writeText(publicUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard unavailable — no-op */
+    }
+  }
+
+  const supported = properties.filter((p) => FORM_SUPPORTED_TYPES.has(p.type));
+
+  return (
+    <div className="max-w-2xl space-y-5" data-testid="form-view">
+      {/* Title + description + submit/confirmation copy */}
+      <div className="space-y-3">
+        <label className="block">
+          <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
+            {t('form.titleLabel')}
+          </span>
+          <input
+            type="text"
+            disabled={!editable}
+            defaultValue={config.title ?? ''}
+            placeholder={t('form.titlePlaceholder')}
+            onBlur={(e) => onSetConfig({ title: e.target.value })}
+            className="mt-1 w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-3 py-2 text-sm"
+          />
+        </label>
+        <label className="block">
+          <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
+            {t('form.descriptionLabel')}
+          </span>
+          <textarea
+            disabled={!editable}
+            rows={2}
+            defaultValue={config.description ?? ''}
+            placeholder={t('form.descriptionPlaceholder')}
+            onBlur={(e) => onSetConfig({ description: e.target.value })}
+            className="mt-1 w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-3 py-2 text-sm"
+          />
+        </label>
+      </div>
+
+      {/* Fields */}
+      <div>
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-2">
+          {t('form.fieldsLabel')}
+        </h3>
+        {supported.length === 0 ? (
+          <p className="text-sm text-gray-400 dark:text-gray-500">{t('form.noFields')}</p>
+        ) : (
+          <ul className="space-y-1.5">
+            {fields.map((f, i) => {
+              const prop = byId.get(f.propId);
+              if (!prop) return null;
+              return (
+                <li
+                  key={f.propId}
+                  className="flex items-center gap-2 rounded-md border border-gray-200 dark:border-gray-700 px-3 py-2 text-sm"
+                >
+                  <span className="flex-1 text-gray-800 dark:text-gray-200">
+                    {f.label?.trim() || prop.name}
+                    <span className="ml-2 text-[10px] uppercase text-gray-400">{prop.type}</span>
+                  </span>
+                  {editable ? (
+                    <>
+                      <label className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+                        <input
+                          type="checkbox"
+                          checked={f.required === true}
+                          onChange={() => toggleField(f.propId, 'required')}
+                        />
+                        {t('form.fieldRequired')}
+                      </label>
+                      <label className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+                        <input
+                          type="checkbox"
+                          checked={f.hidden === true}
+                          onChange={() => toggleField(f.propId, 'hidden')}
+                        />
+                        {t('form.fieldHidden')}
+                      </label>
+                      <button
+                        type="button"
+                        className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                        aria-label={t('form.fieldMoveUp')}
+                        onClick={() => moveField(i, -1)}
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                        aria-label={t('form.fieldMoveDown')}
+                        onClick={() => moveField(i, 1)}
+                      >
+                        ↓
+                      </button>
+                    </>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        <p className="mt-2 text-xs text-gray-400 dark:text-gray-500">{t('form.unsupportedNote')}</p>
+      </div>
+
+      {/* Confirmation message */}
+      <label className="block">
+        <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
+          {t('form.confirmationLabel')}
+        </span>
+        <input
+          type="text"
+          disabled={!editable}
+          defaultValue={config.confirmationMessage ?? ''}
+          placeholder={t('form.confirmationPlaceholder')}
+          onBlur={(e) => onSetConfig({ confirmationMessage: e.target.value })}
+          className="mt-1 w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-3 py-2 text-sm"
+        />
+      </label>
+
+      {/* Share form toggle + public URL */}
+      {editable ? (
+        <div className="rounded-md border border-gray-200 dark:border-gray-700 p-3 space-y-2">
+          <label className="flex items-center gap-2 text-sm font-medium text-gray-800 dark:text-gray-200">
+            <input
+              type="checkbox"
+              checked={shareEnabled}
+              onChange={(e) => void toggleShare(e.target.checked)}
+              data-testid="form-share-toggle"
+            />
+            {t('form.shareToggle')}
+          </label>
+          {shareEnabled && publicUrl ? (
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                readOnly
+                value={publicUrl}
+                className="flex-1 rounded-md border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 px-2 py-1.5 text-xs text-gray-600 dark:text-gray-300"
+              />
+              <button
+                type="button"
+                onClick={() => void copyUrl()}
+                className="text-xs px-2 py-1.5 rounded-md border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800"
+              >
+                {copied ? t('form.copied') : t('form.copyUrl')}
+              </button>
+            </div>
+          ) : (
+            <p className="text-xs text-gray-400 dark:text-gray-500">{t('form.shareOff')}</p>
+          )}
+        </div>
       ) : null}
     </div>
   );

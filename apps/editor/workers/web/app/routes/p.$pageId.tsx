@@ -116,10 +116,12 @@ export const Route = createFileRoute('/p/$pageId')({
         shares: [] as SharedUser[],
         wikiEntries: [] as WikiEntry[],
         userName: '',
+        publicBaseUrl: '',
       };
     }
-    const { getCurrentUser } = await import('~/server/auth-runtime.server');
+    const { getCurrentUser, getEnv } = await import('~/server/auth-runtime.server');
     const user = await getCurrentUser();
+    const publicBaseUrl = getEnv().PUBLIC_BASE_URL ?? '';
     const page = await getPage({ data: { id: params.pageId } });
     const isDatabase = page.kind === 'database';
     // Database pages have no editor → skip the collab token; fetch the schema
@@ -154,6 +156,7 @@ export const Route = createFileRoute('/p/$pageId')({
       shares,
       wikiEntries: wiki,
       userName: user?.name ?? 'user',
+      publicBaseUrl,
     };
   },
   component: PageView,
@@ -187,6 +190,7 @@ function PageView() {
     shares: initialShares,
     wikiEntries: initialWikiEntries,
     userName,
+    publicBaseUrl,
   } = Route.useLoaderData();
   const { t } = useT();
   const { pageId } = Route.useParams();
@@ -810,6 +814,7 @@ function PageView() {
               workspaceId={workspaceId}
               initialSchema={schema}
               editable={!readOnly}
+              publicBaseUrl={publicBaseUrl}
             />
           ) : mounted && token ? (
             <div data-testid="editor">

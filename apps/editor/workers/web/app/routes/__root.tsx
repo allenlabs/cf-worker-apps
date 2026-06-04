@@ -46,7 +46,7 @@ const PUBLIC_PATHS = new Set(['/auth/login', '/auth/callback', '/auth/logout']);
  * read-only share links, so it (like the auth.* routes) bypasses the SSO
  * redirect entirely.
  */
-const PUBLIC_PATH_PREFIXES = ['/share/'];
+const PUBLIC_PATH_PREFIXES = ['/share/', '/form/'];
 
 function isPublicPath(pathname: string): boolean {
   if (PUBLIC_PATHS.has(pathname)) return true;
