@@ -2,10 +2,11 @@ import { Link, createFileRoute, getRouteApi } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
 import { z } from 'zod';
 import { useT } from '@allenlabs/i18n/react';
-import { PriorityBadge, StatusBadge, TrackerBadge } from '~/components/badges';
+import { LabelChip, PriorityBadge, StatusBadge, TrackerBadge } from '~/components/badges';
 import { formatDate, issueKey, timeAgo } from '~/lib/format';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { listIssuesImpl } from '~/server/issues';
+import { type LabelRow, labelsByIssueImpl, listLabelsImpl } from '~/server/labels';
 import { getProjectImpl } from '~/server/projects';
 
 const parentRoute = getRouteApi('/projects/$identifier');
@@ -25,6 +26,7 @@ const loadIssues = createServerFn({ method: 'GET' })
         // 'any' = no assignee filter; 'me' resolves to the current user's
         // local id server-side (the client never learns the numeric id).
         assignee: z.enum(['any', 'me']),
+        label: z.number().optional(),
         q: z.string().optional(),
         sort: z.enum(['updated', 'priority', 'id']),
       })
@@ -40,10 +42,18 @@ const loadIssues = createServerFn({ method: 'GET' })
       projectId: project.id,
       statusFilter: data.statusFilter,
       assignee: data.assignee === 'me' && me ? me.id : undefined,
+      label: data.label,
       q: data.q,
       sort: data.sort,
     });
-    return { issues };
+    const [projectLabels, labelMap] = await Promise.all([
+      listLabelsImpl(db, project.id),
+      labelsByIssueImpl(db, issues.map((i) => i.id)),
+    ]);
+    // Map isn't serializable across the server-fn boundary — flatten to a record.
+    const labelsByIssue: Record<number, LabelRow[]> = {};
+    for (const [issueId, ls] of labelMap) labelsByIssue[issueId] = ls;
+    return { issues, projectLabels, labelsByIssue };
   });
 
 export const Route = createFileRoute('/projects/$identifier/issues/')({
@@ -54,6 +64,7 @@ export const Route = createFileRoute('/projects/$identifier/issues/')({
     assignee: (SEARCH.assignee as readonly string[]).includes(String(s.assignee))
       ? (s.assignee as 'any' | 'me')
       : 'any',
+    label: s.label ? Number(s.label) : undefined,
     q: s.q ? String(s.q) : undefined,
     sort: s.sort ? (String(s.sort) as 'updated' | 'priority' | 'id') : 'updated',
   }),
@@ -64,6 +75,7 @@ export const Route = createFileRoute('/projects/$identifier/issues/')({
         identifier: params.identifier,
         statusFilter: deps.status,
         assignee: deps.assignee,
+        label: deps.label,
         q: deps.q,
         sort: deps.sort,
       },
@@ -73,7 +85,7 @@ export const Route = createFileRoute('/projects/$identifier/issues/')({
 
 function IssuesIndexPage() {
   const project = parentRoute.useLoaderData();
-  const { issues } = Route.useLoaderData();
+  const { issues, projectLabels, labelsByIssue } = Route.useLoaderData();
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
   const { t } = useT();
@@ -115,6 +127,23 @@ function IssuesIndexPage() {
             <option value="me">{t('issue.assigneeMe')}</option>
           </select>
         </div>
+        {projectLabels.length > 0 ? (
+          <div>
+            <label className="label">{t('labels.section')}</label>
+            <select
+              className="select"
+              value={search.label ?? ''}
+              onChange={(e) =>
+                navigate({ search: (s) => ({ ...s, label: e.target.value ? Number(e.target.value) : undefined }) })
+              }
+            >
+              <option value="">{t('issuesList.statusAll')}</option>
+              {projectLabels.map((l) => (
+                <option key={l.id} value={l.id}>{l.name}</option>
+              ))}
+            </select>
+          </div>
+        ) : null}
         <div>
           <label className="label">{t('issuesList.sortBy')}</label>
           <select
@@ -184,6 +213,13 @@ function IssuesIndexPage() {
                   >
                     {i.subject}
                   </Link>
+                  {labelsByIssue[i.id]?.length ? (
+                    <span className="ml-2 inline-flex flex-wrap gap-1 align-middle">
+                      {labelsByIssue[i.id]!.map((l) => (
+                        <LabelChip key={l.id} name={l.name} color={l.color} />
+                      ))}
+                    </span>
+                  ) : null}
                 </td>
                 <td>{i.assigneeLogin ?? '—'}</td>
                 <td>{i.dueDate ? formatDate(i.dueDate) : '—'}</td>

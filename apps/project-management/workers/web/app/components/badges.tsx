@@ -22,6 +22,19 @@ export function TrackerBadge({ name, color }: { name: string; color: string }) {
   );
 }
 
+export function LabelChip({ name, color }: { name: string; color: string }) {
+  return (
+    <span
+      className="badge inline-flex items-center gap-1"
+      style={{ backgroundColor: `${color}22`, color: '#1f2937' }}
+      title={name}
+    >
+      <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: color }} />
+      {name}
+    </span>
+  );
+}
+
 export function ProgressBar({ value }: { value: number }) {
   const v = Math.max(0, Math.min(100, value));
   return (

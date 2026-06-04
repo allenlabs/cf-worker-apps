@@ -84,6 +84,7 @@ const pm: Dict = {
     "sidebar.members": "Members",
     "sidebar.versions": "Versions",
     "sidebar.categories": "Categories",
+    "sidebar.labels": "Labels",
     "sidebar.settings": "Settings",
 
     "filter.title": "Filters",
@@ -220,6 +221,16 @@ const pm: Dict = {
     "categories.create": "+ Create",
     "categories.empty": "No categories defined.",
     "categories.deleteConfirm": "Delete this category?",
+    "labels.title": "Labels",
+    "labels.name": "Name",
+    "labels.color": "Color",
+    "labels.create": "+ Create",
+    "labels.empty": "No labels defined.",
+    "labels.deleteConfirm": "Delete this label?",
+    "labels.section": "Labels",
+    "labels.none": "No labels",
+    "labels.edit": "Edit labels",
+    "labels.save": "Save labels",
 
     // Files
     "files.title": "Files",
@@ -491,6 +502,7 @@ const pm: Dict = {
     "sidebar.members": "멤버",
     "sidebar.versions": "버전",
     "sidebar.categories": "카테고리",
+    "sidebar.labels": "라벨",
     "sidebar.settings": "설정",
 
     "filter.title": "필터",
@@ -627,6 +639,16 @@ const pm: Dict = {
     "categories.create": "+ 만들기",
     "categories.empty": "정의된 카테고리가 없습니다.",
     "categories.deleteConfirm": "이 카테고리를 삭제하시겠어요?",
+    "labels.title": "라벨",
+    "labels.name": "이름",
+    "labels.color": "색상",
+    "labels.create": "+ 만들기",
+    "labels.empty": "정의된 라벨이 없습니다.",
+    "labels.deleteConfirm": "이 라벨을 삭제하시겠어요?",
+    "labels.section": "라벨",
+    "labels.none": "라벨 없음",
+    "labels.edit": "라벨 편집",
+    "labels.save": "라벨 저장",
 
     // Files
     "files.title": "파일",

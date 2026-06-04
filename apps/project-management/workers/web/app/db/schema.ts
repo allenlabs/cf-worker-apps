@@ -494,6 +494,40 @@ export const projectTrackers = pm.table(
   }),
 );
 
+// ---------- Labels (free-form tags) ----------
+
+export const labels = pm.table(
+  'labels',
+  {
+    id: serial('id').primaryKey(),
+    projectId: integer('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    color: text('color').notNull().default('#6b7280'),
+  },
+  (t) => ({
+    projectNameIdx: uniqueIndex('labels_project_name_idx').on(t.projectId, t.name),
+    projectIdx: index('labels_project_idx').on(t.projectId),
+  }),
+);
+
+export const issueLabels = pm.table(
+  'issue_labels',
+  {
+    issueId: integer('issue_id')
+      .notNull()
+      .references(() => issues.id, { onDelete: 'cascade' }),
+    labelId: integer('label_id')
+      .notNull()
+      .references(() => labels.id, { onDelete: 'cascade' }),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.issueId, t.labelId] }),
+    labelIdx: index('issue_labels_label_idx').on(t.labelId),
+  }),
+);
+
 // ---------- Project enabled modules ----------
 
 export const enabledModules = pm.table(
@@ -532,3 +566,4 @@ export type TimeEntry = typeof timeEntries.$inferSelect;
 export type Activity = typeof activities.$inferSelect;
 export type WikiPage = typeof wikiPages.$inferSelect;
 export type Attachment = typeof attachments.$inferSelect;
+export type Label = typeof labels.$inferSelect;

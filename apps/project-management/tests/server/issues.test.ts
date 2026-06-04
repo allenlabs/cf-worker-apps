@@ -16,6 +16,7 @@ import {
   updateIssueImpl,
   watchIssueImpl,
 } from '~/server/issues';
+import { createLabelImpl, setIssueLabelsImpl } from '~/server/labels';
 
 let db: TestDB;
 let alice: CurrentUser;
@@ -147,6 +148,14 @@ describe('listIssuesImpl', () => {
   it('full-text matches subject and description', async () => {
     const list = await listIssuesImpl(db, { projectId, statusFilter: 'all', q: 'close' });
     expect(list.map((i) => i.subject)).toEqual(['will close']);
+  });
+
+  it('filters by label', async () => {
+    const tagged = await seedIssue({ subject: 'tagged' });
+    const label = await createLabelImpl(db, { projectId, name: 'urgent' });
+    await setIssueLabelsImpl(db, tagged.id, [label.id]);
+    const list = await listIssuesImpl(db, { projectId, statusFilter: 'all', label: label.id });
+    expect(list.map((i) => i.subject)).toEqual(['tagged']);
   });
 
   it('respects assignee + tracker filters', async () => {

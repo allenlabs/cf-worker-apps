@@ -17,6 +17,7 @@ import {
 } from '~/db/schema';
 import { ForbiddenError } from '~/lib/permissions';
 import { logActivityImpl } from './activities';
+import { listIssueLabelsImpl, setIssueLabelsImpl } from './labels';
 import { type CurrentUser } from './auth';
 import { buildAuthContext, getDb, getCurrentUser, getEnv, requirePermission, requireUser } from './auth-runtime.server';
 import * as notionGateway from './notion-gateway-client';
@@ -69,6 +70,7 @@ export interface ListIssuesInput {
   statusFilter?: 'open' | 'closed' | 'all';
   assignee?: number;
   tracker?: number;
+  label?: number;
   sort?: 'updated' | 'priority' | 'id';
   q?: string;
 }
@@ -78,6 +80,7 @@ export const listIssuesSchema = z.object({
   statusFilter: z.enum(['open', 'closed', 'all']).optional().default('open'),
   assignee: z.number().optional(),
   tracker: z.number().optional(),
+  label: z.number().optional(),
   sort: z.enum(['updated', 'priority', 'id']).optional().default('updated'),
   q: z.string().optional(),
 });
@@ -90,6 +93,11 @@ export async function listIssuesImpl(db: DB, data: ListIssuesInput): Promise<Iss
   else if (statusFilter === 'closed') conditions.push(eq(issueStatuses.isClosed, true));
   if (data.assignee !== undefined) conditions.push(eq(issues.assignedToId, data.assignee));
   if (data.tracker !== undefined) conditions.push(eq(issues.trackerId, data.tracker));
+  if (data.label !== undefined) {
+    conditions.push(
+      sql`EXISTS (SELECT 1 FROM pm.issue_labels il WHERE il.issue_id = ${issues.id} AND il.label_id = ${data.label})`,
+    );
+  }
   if (data.q) {
     const pattern = `%${data.q}%`;
     conditions.push(
@@ -165,6 +173,7 @@ export async function getIssueImpl(db: DB, id: number) {
     children,
     journalRows,
     watcherRows,
+    labelRows,
   ] = await Promise.all([
     db.query.projects.findFirst({ where: eq(projects.id, issue.projectId) }),
     db.query.users.findFirst({ where: eq(users.id, issue.authorId) }),
@@ -202,6 +211,7 @@ export async function getIssueImpl(db: DB, id: number) {
       .where(eq(journals.issueId, issue.id))
       .orderBy(journals.createdAt),
     db.select({ userId: watchers.userId }).from(watchers).where(eq(watchers.issueId, issue.id)),
+    listIssueLabelsImpl(db, issue.id),
   ]);
 
   const journalIds = journalRows.map((j) => j.id);
@@ -229,6 +239,7 @@ export async function getIssueImpl(db: DB, id: number) {
     children,
     journals: journalRows.map((j) => ({ ...j, details: detailsByJournal.get(j.id) ?? [] })),
     watchers: watcherRows.map((w) => w.userId),
+    labels: labelRows,
   };
 }
 
@@ -247,6 +258,7 @@ export const createIssueSchema = z.object({
   dueDate: z.string().nullable().optional(),
   estimatedHours: z.number().nullable().optional(),
   doneRatio: z.number().int().min(0).max(100).optional().default(0),
+  labelIds: z.array(z.number()).optional(),
 });
 export type CreateIssueInput = z.infer<typeof createIssueSchema>;
 
@@ -298,6 +310,10 @@ export async function createIssueImpl(
     .returning();
   /* v8 ignore next */
   if (!created) throw new Error('failed to create issue');
+
+  if (data.labelIds && data.labelIds.length > 0) {
+    await setIssueLabelsImpl(db, created.id, data.labelIds);
+  }
 
   await logActivityImpl(db, {
     projectId: data.projectId,

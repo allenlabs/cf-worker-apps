@@ -35,6 +35,7 @@ function renderAt(path: string, modules: string[]) {
     '/projects/$identifier/members',
     '/projects/$identifier/versions',
     '/projects/$identifier/categories',
+    '/projects/$identifier/labels',
     '/projects/$identifier/settings',
   ];
   const stubs = paths.map((p) =>

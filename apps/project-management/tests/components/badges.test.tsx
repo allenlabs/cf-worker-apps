@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import {
+  LabelChip,
   PriorityBadge,
   ProgressBar,
   StatusBadge,
@@ -34,6 +35,15 @@ describe('TrackerBadge', () => {
     const el = screen.getByText('Bug');
     expect(el).toHaveStyle({ 'background-color': 'rgb(153, 0, 0)' });
     expect(el).toHaveStyle({ color: 'rgb(255, 255, 255)' });
+  });
+});
+
+describe('LabelChip', () => {
+  it('renders the label name with a colored dot', () => {
+    const { container } = render(<LabelChip name="backend" color="#3366ff" />);
+    expect(screen.getByText('backend')).toBeInTheDocument();
+    const dot = container.querySelector('span.rounded-full') as HTMLElement;
+    expect(dot).toHaveStyle({ 'background-color': 'rgb(51, 102, 255)' });
   });
 });
 

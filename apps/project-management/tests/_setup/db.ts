@@ -37,6 +37,11 @@ const ISSUE_KEYS_MIGRATION = readFileSync(
   join(ROOT, 'drizzle-pg', '0006_issue_keys.sql'),
   'utf8',
 );
+// Phase 3b: free-form issue labels (labels + issue_labels).
+const LABELS_MIGRATION = readFileSync(
+  join(ROOT, 'drizzle-pg', '0007_issue_labels.sql'),
+  'utf8',
+);
 
 export async function makeTestDb(opts?: { seed?: boolean }): Promise<TestDB> {
   const pglite = new PGlite();
@@ -45,6 +50,7 @@ export async function makeTestDb(opts?: { seed?: boolean }): Promise<TestDB> {
   await pglite.exec(NOTION_DROP_MIGRATION);
   await pglite.exec(PHASE2_MIGRATION);
   await pglite.exec(ISSUE_KEYS_MIGRATION);
+  await pglite.exec(LABELS_MIGRATION);
   if (opts?.seed !== false) await pglite.exec(SEED);
   // The migration sets search_path inline, but it scopes to the session that
   // executed the DDL. Re-pin it on the live connection so helper inserts

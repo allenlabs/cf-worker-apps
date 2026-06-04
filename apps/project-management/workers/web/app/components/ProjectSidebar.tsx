@@ -42,6 +42,7 @@ export function ProjectSidebar({ identifier, projectName, modules }: Props) {
       {item(`${base}/members`, t('sidebar.members'))}
       {item(`${base}/versions`, t('sidebar.versions'))}
       {item(`${base}/categories`, t('sidebar.categories'))}
+      {item(`${base}/labels`, t('sidebar.labels'))}
       {item(`${base}/settings`, t('sidebar.settings'))}
     </aside>
   );

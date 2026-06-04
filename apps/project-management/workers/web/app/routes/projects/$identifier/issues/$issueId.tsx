@@ -3,12 +3,13 @@ import { createServerFn } from '@tanstack/react-start';
 import { useState } from 'react';
 import { z } from 'zod';
 import { useT } from '@allenlabs/i18n/react';
-import { PriorityBadge, ProgressBar, StatusBadge, TrackerBadge } from '~/components/badges';
+import { LabelChip, PriorityBadge, ProgressBar, StatusBadge, TrackerBadge } from '~/components/badges';
 import { Markdown } from '~/components/Markdown';
 import { formatDate, formatDateTime, formatHours, issueKey } from '~/lib/format';
 import { notifyError, notifySuccess } from '~/lib/toast';
 import { getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { getIssueImpl, updateIssue, watchIssue } from '~/server/issues';
+import { listLabelsImpl, setIssueLabels } from '~/server/labels';
 import { listMembersImpl } from '~/server/members';
 import { renderMarkdown } from '~/server/markdown';
 import { getRefData } from '~/server/ref-data';
@@ -23,10 +24,12 @@ const loadIssue = createServerFn({ method: 'GET' })
     const me = await getCurrentUser();
     const result = await getIssueImpl(db, data.id);
     const members = await listMembersImpl(db, result.issue.projectId);
+    const projectLabels = await listLabelsImpl(db, result.issue.projectId);
     const refData = await getRefData(db);
     return {
       issue: { ...result, isWatching: me ? result.watchers.includes(me.id) : false },
       members,
+      projectLabels,
       statuses: refData.statuses.map((s) => ({ id: s.id, name: s.name })),
       priorities: refData.priorities.map((p) => ({ id: p.id, name: p.name })),
     };
@@ -34,12 +37,13 @@ const loadIssue = createServerFn({ method: 'GET' })
 
 export const Route = createFileRoute('/projects/$identifier/issues/$issueId')({
   loader: async ({ params }) => {
-    const { issue, members, statuses, priorities } = await loadIssue({
+    const { issue, members, projectLabels, statuses, priorities } = await loadIssue({
       data: { id: Number(params.issueId) },
     });
     return {
       issue,
       members,
+      projectLabels,
       statuses,
       priorities,
       descriptionHtml: renderMarkdown(issue.issue.description),
@@ -56,7 +60,25 @@ function IssuePage() {
   const i = data.issue.issue;
   const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
+  const [savingLabels, setSavingLabels] = useState(false);
   const [changes, setChanges] = useState<Record<string, unknown>>({});
+
+  const currentLabelIds = new Set(data.issue.labels.map((l) => l.id));
+
+  async function toggleLabel(labelId: number) {
+    const next = new Set(currentLabelIds);
+    if (next.has(labelId)) next.delete(labelId);
+    else next.add(labelId);
+    setSavingLabels(true);
+    try {
+      await setIssueLabels({ data: { issueId: i.id, projectId: i.projectId, labelIds: [...next] } });
+      router.invalidate();
+    } catch (err) {
+      notifyError(t('issueDetail.updateError', { msg: err instanceof Error ? err.message : String(err) }));
+    } finally {
+      setSavingLabels(false);
+    }
+  }
 
   function updateField<K extends string>(k: K, v: unknown) {
     setChanges((c) => ({ ...c, [k]: v }));
@@ -144,6 +166,17 @@ function IssuePage() {
           </Row>
           <Row label={t('issue.assignee')}>{data.issue.assignee?.login ?? '—'}</Row>
           <Row label={t('issue.category')}>{data.issue.category?.name ?? '—'}</Row>
+          <Row label={t('labels.section')}>
+            {data.issue.labels.length > 0 ? (
+              <div className="flex flex-wrap gap-1">
+                {data.issue.labels.map((l) => (
+                  <LabelChip key={l.id} name={l.name} color={l.color} />
+                ))}
+              </div>
+            ) : (
+              <span className="text-gray-400">{t('labels.none')}</span>
+            )}
+          </Row>
           <Row label={t('issueDetail.version')}>{data.issue.version?.name ?? '—'}</Row>
           <Row label={t('issueDetail.parent')}>{data.issue.parent ? `#${data.issue.parent.id}` : '—'}</Row>
           <Row label={t('issue.startDate')}>{i.startDate ? formatDate(i.startDate) : '—'}</Row>
@@ -157,6 +190,31 @@ function IssuePage() {
           </Row>
         </aside>
       </div>
+
+      {data.projectLabels.length > 0 ? (
+        <section className="card p-4">
+          <h3 className="font-semibold mb-2">{t('labels.edit')}</h3>
+          <div className="flex flex-wrap gap-2">
+            {data.projectLabels.map((l) => {
+              const on = currentLabelIds.has(l.id);
+              return (
+                <button
+                  key={l.id}
+                  type="button"
+                  disabled={savingLabels}
+                  onClick={() => toggleLabel(l.id)}
+                  aria-pressed={on}
+                  className={`badge inline-flex items-center gap-1 ${on ? '' : 'opacity-40'}`}
+                  style={{ backgroundColor: `${l.color}22`, color: '#1f2937' }}
+                >
+                  <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: l.color }} />
+                  {l.name}
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
 
       <section className="card p-4">
         <h3 className="font-semibold mb-3">{t('issueDetail.history')}</h3>

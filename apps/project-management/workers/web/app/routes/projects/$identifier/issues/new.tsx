@@ -8,6 +8,7 @@ import { notifyError, notifySuccess } from '~/lib/toast';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { listMembersImpl } from '~/server/members';
 import { createIssue } from '~/server/issues';
+import { listLabelsImpl } from '~/server/labels';
 import { getProjectImpl } from '~/server/projects';
 
 const parentRoute = getRouteApi('/projects/$identifier');
@@ -22,7 +23,8 @@ const loadNewIssueData = createServerFn({ method: 'GET' })
     const db = getDb();
     const project = await getProjectImpl(db, me, ctx, data.identifier);
     const members = await listMembersImpl(db, project.id);
-    return { members };
+    const labels = await listLabelsImpl(db, project.id);
+    return { members, labels };
   });
 
 export const Route = createFileRoute('/projects/$identifier/issues/new')({
@@ -32,7 +34,7 @@ export const Route = createFileRoute('/projects/$identifier/issues/new')({
 
 function NewIssuePage() {
   const project = parentRoute.useLoaderData();
-  const { members } = Route.useLoaderData();
+  const { members, labels } = Route.useLoaderData();
   const { t } = useT();
   const [form, setForm] = useState({
     trackerId: project.trackers[0]?.id ?? 1,
@@ -46,8 +48,13 @@ function NewIssuePage() {
     estimatedHours: '',
     doneRatio: 0,
   });
+  const [labelIds, setLabelIds] = useState<number[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  function toggleLabel(id: number) {
+    setLabelIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
+  }
 
   async function handle(e: React.FormEvent) {
     e.preventDefault();
@@ -67,6 +74,7 @@ function NewIssuePage() {
           dueDate: form.dueDate || null,
           estimatedHours: form.estimatedHours ? Number(form.estimatedHours) : null,
           doneRatio: Number(form.doneRatio),
+          labelIds,
         },
       });
       notifySuccess(t('issueNew.createdToast', { key: issueKey(project.key, created.number) }));
@@ -206,6 +214,29 @@ function NewIssuePage() {
             />
           </div>
         </div>
+        {labels.length > 0 ? (
+          <div>
+            <label className="label">{t('labels.section')}</label>
+            <div className="flex flex-wrap gap-2">
+              {labels.map((l) => {
+                const on = labelIds.includes(l.id);
+                return (
+                  <button
+                    key={l.id}
+                    type="button"
+                    onClick={() => toggleLabel(l.id)}
+                    aria-pressed={on}
+                    className={`badge inline-flex items-center gap-1 ${on ? '' : 'opacity-40'}`}
+                    style={{ backgroundColor: `${l.color}22`, color: '#1f2937' }}
+                  >
+                    <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: l.color }} />
+                    {l.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
         {error ? <p className="text-sm text-red-700">{error}</p> : null}
         <div className="pt-2">
           <button data-testid="issue-submit" className="btn-primary" disabled={busy}>
