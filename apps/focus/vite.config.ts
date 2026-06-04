@@ -12,6 +12,9 @@ const APP_DIR = 'workers/web/app';
 // only thing we still need from cf-vite-plugin is the `__name` esbuild helper
 // polyfill, injected as a tiny banner so workerd boots clean.
 export default defineConfig({
+  // Static files copied verbatim into dist/client (favicon, etc.). Vite
+  // defaults publicDir to <cwd>/public which doesn't exist here.
+  publicDir: path.resolve(`./${APP_DIR}/../public`),
   plugins: [
     tailwindcss(),
     tanstackStart({

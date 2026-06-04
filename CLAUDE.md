@@ -18,8 +18,22 @@ Current apps:
 | App | Workers |
 |---|---|
 | `apps/project-management/` | `web` (TanStack Start SSR) + `cleanup` (cron) |
-| `apps/url-shortener/` | one worker (Hono + KV) |
-| `apps/webhook-relay/` | `ingest` + `relay` (Queue consumer + Workflow) |
+| `apps/inbox/` | `api`, `web` |
+| `apps/focus/` | `api`, `web`, `cron` |
+| `apps/today/` | `web` |
+| `apps/context/` | `api`, `web` |
+| `apps/concierge/` | `api`, `web`, `cron` |
+| `apps/read-later/` | `api`, `web` |
+| `apps/stash/` | `api`, `web` |
+| `apps/nudge/` | `api`, `web`, `cron` |
+| `apps/journal/` | `api`, `web` |
+| `apps/notion-gateway/` | `api`, `web` |
+| `apps/intent/` | `api`, `web` |
+| `apps/dopamine/` | `api`, `web` |
+| `apps/transition/` | `api`, `web` |
+| `apps/solved/` | `api`, `web` |
+| `apps/gentle/` | `api`, `web` |
+| `apps/hub/` | `web` |
 
 ## Workflow rules (strictly enforced)
 
@@ -74,9 +88,7 @@ npm run typecheck          # tsc --noEmit per app
 
 # Per-app shortcuts (defined in root package.json)
 npm run dev:pm             # project-management web worker (vite dev)
-npm run dev:url            # url-shortener
-npm run dev:relay:ingest   # webhook-relay ingest worker
-npm run dev:relay:relay    # webhook-relay relay worker (queue consumer)
+npm run dev:hub            # suite shell
 
 # Drop into an app for finer control
 cd apps/project-management
@@ -98,6 +110,27 @@ wrangler deploy --config workers/cleanup/wrangler.toml
    needs real D1/KV/R2 in tests.
 4. Each app's `package.json` declares its own `dev` / `deploy` / `test`
    scripts; the root `package.json` fans them out via `npm run -w`.
+5. **For a UI worker, copy `templates/web-worker/`** (canonical `wrangler.toml`
+   + `vite.config.ts` + `public/favicon.svg`) rather than hand-writing config.
+
+### Web-worker config — non-negotiable rules (see `templates/web-worker/README.md`)
+
+These two have silently broken static-asset serving across the whole suite
+before; the linter won't catch them, so they're load-bearing:
+
+- **`assets` and `workers_dev` are TOP-LEVEL keys in `wrangler.toml` and MUST sit
+  ABOVE the first `[section]` header.** TOML assigns every key after a header to
+  that table — an `assets = {...}` placed under `[placement]` becomes
+  `placement.assets`, wrangler drops it, and NO assets are served (CSS/JS +
+  favicon 307→login or 404 → unstyled pages). After deploy, confirm wrangler
+  printed "Read N files from the assets directory" and `env.ASSETS` is in the
+  bindings list.
+- **`vite.config.ts` must set `publicDir: path.resolve(\`./${APP_DIR}/../public\`)`.**
+  Vite defaults `publicDir` to `<cwd>/public` (nonexistent here), so
+  `workers/web/public/favicon.svg` never ships and `/favicon.svg` 404s.
+- Recommended: exempt static-asset paths from the `__root.tsx` auth gate via
+  `lib/public-paths.ts` (`isStaticAssetPath`) so a lapsed JWT can't redirect a
+  stylesheet to `/auth/login`.
 
 ---
 
@@ -108,9 +141,8 @@ wrangler deploy --config workers/cleanup/wrangler.toml
 3. Add a `deploy:<worker>` script and chain it into the app's `deploy`.
 4. Trigger-specific patterns:
    - **Cron** → `[triggers] crons = [...]` (see `project-management/workers/cleanup`).
-   - **Queue consumer** → `[[queues.consumers]]` (see `webhook-relay/workers/relay`).
-   - **Workflow** → `[[workflows]]` + class extending `WorkflowEntrypoint`
-     (see `webhook-relay/workers/relay/index.ts`).
+   - **Queue consumer** → `[[queues.consumers]]` (pattern used in private apps).
+   - **Workflow** → `[[workflows]]` + class extending `WorkflowEntrypoint`.
 
 ---
 
@@ -140,9 +172,7 @@ These come from `project-management/` and are the model for new apps.
 
 Configured per-app in `apps/<app>/vitest.config.ts` under
 `test.coverage.thresholds`.  Defaults: **lines / statements / functions /
-branches = 100%** for `project-management` and `url-shortener`; relaxed
-slightly for `webhook-relay` (where Queue/Workflow execution paths are
-covered manually).
+branches = 100%** for core suite apps.
 
 The `createServerFn` wrappers and `auth-runtime.server.ts` are wrapped in
 `/* v8 ignore start/stop */` because they need the TanStack Start SSR
