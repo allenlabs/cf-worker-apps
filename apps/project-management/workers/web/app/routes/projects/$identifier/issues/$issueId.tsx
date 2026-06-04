@@ -8,7 +8,7 @@ import { Markdown } from '~/components/Markdown';
 import { formatDate, formatDateTime, formatHours, issueKey } from '~/lib/format';
 import { notifyError, notifySuccess } from '~/lib/toast';
 import { getCurrentUser, getDb } from '~/server/auth-runtime.server';
-import { getIssueImpl, updateIssue, watchIssue } from '~/server/issues';
+import { addChildIssue, getIssueImpl, setIssueParent, updateIssue, watchIssue } from '~/server/issues';
 import { listLabelsImpl, setIssueLabels } from '~/server/labels';
 import { RELATION_TYPES, addRelation, removeRelation } from '~/server/relations';
 import { listMembersImpl } from '~/server/members';
@@ -109,6 +109,22 @@ function IssuePage() {
     setChanges((c) => ({ ...c, [k]: v }));
   }
 
+  const [parentInput, setParentInput] = useState('');
+  const [childInput, setChildInput] = useState('');
+
+  async function hier(fn: () => Promise<unknown>) {
+    try {
+      await fn();
+      setParentInput('');
+      setChildInput('');
+      router.invalidate();
+    } catch (err) {
+      notifyError(t('issueDetail.updateError', { msg: err instanceof Error ? err.message : String(err) }));
+    }
+  }
+  const setParent = (n: number | null) => hier(() => setIssueParent({ data: { issueId: i.id, parentNumber: n } }));
+  const addChild = (n: number) => hier(() => addChildIssue({ data: { issueId: i.id, childNumber: n } }));
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
@@ -166,20 +182,50 @@ function IssuePage() {
             <p className="text-sm text-gray-500">{t('issueDetail.noDescription')}</p>
           )}
 
-          {data.issue.children.length > 0 ? (
-            <div className="mt-4">
-              <h4 className="font-semibold text-sm mb-1">{t('issueDetail.subtasks')}</h4>
-              <ul className="text-sm">
+          <div className="mt-4">
+            <h4 className="font-semibold text-sm mb-1">{t('issueDetail.subtasks')}</h4>
+            {data.issue.children.length > 0 ? (
+              <ul className="text-sm mb-2">
                 {data.issue.children.map((c) => (
                   <li key={c.id} className="flex items-center gap-2">
-                    <span className="text-gray-500 font-mono text-xs">#{c.id}</span>
+                    <Link
+                      to="/projects/$identifier/issues/$issueId"
+                      params={{ identifier: project.identifier, issueId: String(c.id) }}
+                      className="font-mono text-xs text-redmine-600"
+                    >
+                      {issueKey(project.key, c.number)}
+                    </Link>
                     <span className={c.statusIsClosed ? 'line-through text-gray-500' : ''}>{c.subject}</span>
                     <span className="text-xs text-gray-500">({c.statusName} · {c.doneRatio}%)</span>
+                    <button
+                      className="text-xs text-red-600 hover:underline ml-auto"
+                      onClick={() => hier(() => setIssueParent({ data: { issueId: c.id, parentNumber: null } }))}
+                    >
+                      {t('issueDetail.detach')}
+                    </button>
                   </li>
                 ))}
               </ul>
+            ) : (
+              <p className="text-sm text-gray-500 mb-2">{t('issueDetail.noSubtasks')}</p>
+            )}
+            <div className="flex items-center gap-2">
+              <input
+                className="input w-28"
+                type="number"
+                min={1}
+                value={childInput}
+                onChange={(e) => setChildInput(e.target.value)}
+                placeholder={t('relation.targetNumber')}
+              />
+              <button
+                className="btn"
+                onClick={() => { const n = Number(childInput); if (Number.isFinite(n) && n > 0) addChild(n); }}
+              >
+                {t('issueDetail.addSubtask')}
+              </button>
             </div>
-          ) : null}
+          </div>
         </div>
 
         <aside className="card p-4 text-sm space-y-2">
@@ -203,7 +249,41 @@ function IssuePage() {
             )}
           </Row>
           <Row label={t('issueDetail.version')}>{data.issue.version?.name ?? '—'}</Row>
-          <Row label={t('issueDetail.parent')}>{data.issue.parent ? `#${data.issue.parent.id}` : '—'}</Row>
+          <Row label={t('issueDetail.parent')}>
+            <div className="flex flex-col gap-1">
+              {data.issue.parent ? (
+                <div className="flex items-center gap-2">
+                  <Link
+                    to="/projects/$identifier/issues/$issueId"
+                    params={{ identifier: project.identifier, issueId: String(data.issue.parent.id) }}
+                    className="font-mono text-xs text-redmine-600"
+                  >
+                    {issueKey(project.key, data.issue.parent.number)}
+                  </Link>
+                  <button className="text-xs text-red-600 hover:underline" onClick={() => setParent(null)}>
+                    {t('issueDetail.detach')}
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1">
+                  <input
+                    className="input w-24"
+                    type="number"
+                    min={1}
+                    value={parentInput}
+                    onChange={(e) => setParentInput(e.target.value)}
+                    placeholder={t('relation.targetNumber')}
+                  />
+                  <button
+                    className="btn"
+                    onClick={() => { const n = Number(parentInput); if (Number.isFinite(n) && n > 0) setParent(n); }}
+                  >
+                    {t('issueDetail.setParent')}
+                  </button>
+                </div>
+              )}
+            </div>
+          </Row>
           <Row label={t('issue.startDate')}>{i.startDate ? formatDate(i.startDate) : '—'}</Row>
           <Row label={t('issue.dueDate')}>{i.dueDate ? formatDate(i.dueDate) : '—'}</Row>
           <Row label={t('issueDetail.estimated')}>{formatHours(i.estimatedHours)}</Row>

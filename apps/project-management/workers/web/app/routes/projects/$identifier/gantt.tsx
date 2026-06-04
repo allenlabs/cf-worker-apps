@@ -108,11 +108,20 @@ function GanttPage() {
         <div className="flex">
           <div className="w-72 shrink-0 border-r border-gray-200">
             <div className="h-7 bg-gray-100 px-2 py-1 text-xs font-semibold uppercase">{t('gantt.colIssue')}</div>
-            {dated.map((i) => (
-              <div key={i.id} className="h-7 px-2 py-1 text-sm truncate border-b border-gray-100">
-                <span className="font-mono text-xs text-gray-500 mr-1">{issueKey(i.projectKey, i.number)}</span>{i.subject}
-              </div>
-            ))}
+            {dated.map((i) => {
+              // Indent issues whose parent is also on the chart (one level).
+              const indented = i.parentId != null && geom.has(i.parentId);
+              return (
+                <div
+                  key={i.id}
+                  className="h-7 px-2 py-1 text-sm truncate border-b border-gray-100"
+                  style={indented ? { paddingLeft: 20 } : undefined}
+                >
+                  {indented ? <span className="text-gray-300 mr-1">↳</span> : null}
+                  <span className="font-mono text-xs text-gray-500 mr-1">{issueKey(i.projectKey, i.number)}</span>{i.subject}
+                </div>
+              );
+            })}
           </div>
           <svg width={width} height={height} className="block">
             {/* month header */}

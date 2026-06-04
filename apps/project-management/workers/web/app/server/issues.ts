@@ -64,6 +64,7 @@ export interface IssueRow {
   startDate: string | null;
   dueDate: string | null;
   fixedVersionId: number | null;
+  parentId: number | null;
   updatedAt: Date;
 }
 
@@ -168,6 +169,7 @@ export async function listIssuesImpl(db: DB, data: ListIssuesInput): Promise<Iss
       // Roadmap groups issues by fixed_version; previously it had no way
       // to filter rows since listIssues didn't return this column.
       fixedVersionId: issues.fixedVersionId,
+      parentId: issues.parentId,
       updatedAt: issues.updatedAt,
     })
     .from(issues)
@@ -226,6 +228,7 @@ export async function getIssueImpl(db: DB, id: number) {
     db
       .select({
         id: issues.id,
+        number: issues.number,
         subject: issues.subject,
         doneRatio: issues.doneRatio,
         statusName: issueStatuses.name,
@@ -315,6 +318,15 @@ export async function createIssueImpl(
     throw new Error('Default status or priority is missing — run db seed.');
   }
 
+  // A new issue can only be parented under an existing issue in the same
+  // project. (A cycle is impossible at creation — the issue has no children.)
+  if (data.parentId != null) {
+    const parent = await db.query.issues.findFirst({ where: eq(issues.id, data.parentId) });
+    if (!parent || parent.projectId !== data.projectId) {
+      throw new Error('Parent issue must be in the same project.');
+    }
+  }
+
   // Allocate the next per-project issue number atomically by bumping the
   // project's counter in a single UPDATE ... RETURNING. The returned value is
   // this issue's `number` (RED-<number>); the global serial `id` stays the PK.
@@ -370,6 +382,9 @@ export async function createIssueImpl(
     title: `${user.login} opened issue #${created.id}: ${created.subject}`,
   });
 
+  // Keep the parent's rolled-up done ratio in sync with the new child.
+  if (data.parentId != null) await rollupParentDoneRatioImpl(db, data.parentId);
+
   return created;
 }
 
@@ -399,6 +414,15 @@ export async function updateIssueImpl(
   const patch: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(data.changes)) {
     if (accepted.has(k)) patch[k] = v;
+  }
+
+  // Validate a parent re-link before touching the row: same project, not self,
+  // no circular chain. (createIssue handles the create-time check.)
+  if ('parentId' in patch) {
+    const newParent = patch.parentId == null ? null : Number(patch.parentId);
+    if (newParent !== (current.parentId ?? null)) {
+      await assertValidParentImpl(db, data.id, newParent);
+    }
   }
 
   let updated = current;
@@ -483,7 +507,61 @@ export async function updateIssueImpl(
     });
   }
 
+  // Subtask roll-up: keep parents' done ratio in sync. A re-parent touches both
+  // the old and new parent; a done-ratio change touches the issue's own parent.
+  if ('parentId' in patch) {
+    if (current.parentId) await rollupParentDoneRatioImpl(db, current.parentId);
+    if (updated.parentId) await rollupParentDoneRatioImpl(db, updated.parentId);
+  } else if (updated.parentId != null && updated.doneRatio !== current.doneRatio) {
+    await rollupParentDoneRatioImpl(db, updated.parentId);
+  }
+
   return updated;
+}
+
+/**
+ * Validate that `childId` may be parented under `parentId` (null = detach). Same
+ * project, never itself, and no circular chain. parent_id has no DB FK, so we
+ * also guard against pre-existing loops / dangling pointers while walking up.
+ */
+export async function assertValidParentImpl(
+  db: DB,
+  childId: number,
+  parentId: number | null,
+): Promise<void> {
+  if (parentId == null) return;
+  if (parentId === childId) throw new Error('An issue cannot be its own parent.');
+  const child = await db.query.issues.findFirst({ where: eq(issues.id, childId) });
+  if (!child) throw new Error('Issue not found');
+  const parent = await db.query.issues.findFirst({ where: eq(issues.id, parentId) });
+  if (!parent) throw new Error('Parent issue not found');
+  if (parent.projectId !== child.projectId) {
+    throw new Error('Parent must be in the same project.');
+  }
+  // Walk up from the proposed parent; reaching childId would form a cycle.
+  const seen = new Set<number>();
+  let cursor: number | null = parent.parentId;
+  while (cursor != null) {
+    if (cursor === childId) throw new Error('That would create a circular parent chain.');
+    if (seen.has(cursor)) break; // pre-existing loop in data — stop walking
+    seen.add(cursor);
+    const up = await db.query.issues.findFirst({ where: eq(issues.id, cursor) });
+    cursor = up ? up.parentId : null;
+  }
+}
+
+/**
+ * Recompute a parent's done ratio as the average of its children's. No-op when
+ * the parent has no children (manual done ratio is left untouched).
+ */
+export async function rollupParentDoneRatioImpl(db: DB, parentId: number): Promise<void> {
+  const kids = await db
+    .select({ doneRatio: issues.doneRatio })
+    .from(issues)
+    .where(eq(issues.parentId, parentId));
+  if (kids.length === 0) return;
+  const avg = Math.round(kids.reduce((s, k) => s + k.doneRatio, 0) / kids.length);
+  await db.update(issues).set({ doneRatio: avg, updatedAt: new Date() }).where(eq(issues.id, parentId));
 }
 
 export async function watchIssueImpl(
@@ -584,6 +662,47 @@ export const deleteIssue = createServerFn({ method: 'POST' })
     if (!issue) throw new Error('Issue not found');
     await requirePermission(issue.projectId, 'delete_issues');
     return deleteIssueImpl(db, data.id);
+  });
+
+// Re-parent THIS issue under another (parentNumber=null detaches it). The parent
+// is given by its per-project number; resolution + all validation/roll-up run
+// through updateIssueImpl.
+export const setIssueParent = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z.object({ issueId: z.number(), parentNumber: z.number().nullable() }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const db = getDb();
+    const issue = await db.query.issues.findFirst({ where: eq(issues.id, data.issueId) });
+    if (!issue) throw new Error('Issue not found');
+    const { user } = await requirePermission(issue.projectId, 'edit_issues');
+    let parentId: number | null = null;
+    if (data.parentNumber != null) {
+      const parent = await db.query.issues.findFirst({
+        where: and(eq(issues.projectId, issue.projectId), eq(issues.number, data.parentNumber)),
+      });
+      if (!parent) throw new Error(`Issue #${data.parentNumber} not found in this project.`);
+      parentId = parent.id;
+    }
+    return updateIssueImpl(db, user, { id: data.issueId, notes: '', changes: { parentId } });
+  });
+
+// Make THIS issue the parent of another (the child given by its per-project
+// number) — i.e. attach a subtask under this one.
+export const addChildIssue = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z.object({ issueId: z.number(), childNumber: z.number() }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const db = getDb();
+    const issue = await db.query.issues.findFirst({ where: eq(issues.id, data.issueId) });
+    if (!issue) throw new Error('Issue not found');
+    const { user } = await requirePermission(issue.projectId, 'edit_issues');
+    const child = await db.query.issues.findFirst({
+      where: and(eq(issues.projectId, issue.projectId), eq(issues.number, data.childNumber)),
+    });
+    if (!child) throw new Error(`Issue #${data.childNumber} not found in this project.`);
+    return updateIssueImpl(db, user, { id: child.id, notes: '', changes: { parentId: data.issueId } });
   });
 
 /* v8 ignore stop */
