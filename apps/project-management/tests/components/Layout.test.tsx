@@ -33,6 +33,7 @@ function renderAt(
     '/projects/new',
     '/activity',
     '/my/page',
+    '/notifications',
     '/admin/users',
     '/auth/login',
     '/auth/logout',

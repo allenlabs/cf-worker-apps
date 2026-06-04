@@ -29,6 +29,9 @@ export function Layout({ user, appName, children }: Props) {
             <Link to="/projects" className={navLinkClass(path.startsWith('/projects'))}>{t('projects.title')}</Link>
             <Link to="/activity" className={navLinkClass(path.startsWith('/activity'))}>{t('activity.title')}</Link>
             <Link to="/my/page" className={navLinkClass(path.startsWith('/my'))}>{t('my.page')}</Link>
+            {user && (
+              <Link to="/notifications" className={navLinkClass(path.startsWith('/notifications'))}>{t('nav.notifications')}</Link>
+            )}
             {user?.isAdmin && (
               <Link to="/admin/users" className={navLinkClass(path.startsWith('/admin'))}>{t('admin.title')}</Link>
             )}

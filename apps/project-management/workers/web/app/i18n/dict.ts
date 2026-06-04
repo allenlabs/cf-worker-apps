@@ -108,6 +108,14 @@ const pm: Dict = {
     "admin.title": "Admin",
 
     "my.page": "My page",
+    "nav.notifications": "Notifications",
+    "notifications.title": "Notifications",
+    "notifications.empty": "You're all caught up.",
+    "notifications.markAllRead": "Mark all read",
+    "notif.assigned": "Assigned to you",
+    "notif.mentioned": "Mentioned you",
+    "notif.commented": "New comment",
+    "notif.updated": "Updated",
     "my.assignedIssues": "Issues assigned to me",
     "my.reportedIssues": "Reported issues",
 
@@ -546,6 +554,14 @@ const pm: Dict = {
     "admin.title": "관리",
 
     "my.page": "내 페이지",
+    "nav.notifications": "알림",
+    "notifications.title": "알림",
+    "notifications.empty": "모두 확인했습니다.",
+    "notifications.markAllRead": "모두 읽음 처리",
+    "notif.assigned": "나에게 배정됨",
+    "notif.mentioned": "나를 멘션함",
+    "notif.commented": "새 댓글",
+    "notif.updated": "업데이트됨",
     "my.assignedIssues": "나에게 할당된 이슈",
     "my.reportedIssues": "내가 만든 이슈",
 

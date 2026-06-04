@@ -528,6 +528,33 @@ export const issueLabels = pm.table(
   }),
 );
 
+// ---------- Notifications ----------
+
+export const notifications = pm.table(
+  'notifications',
+  {
+    id: serial('id').primaryKey(),
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    issueId: integer('issue_id')
+      .notNull()
+      .references(() => issues.id, { onDelete: 'cascade' }),
+    actorId: integer('actor_id').references(() => users.id, { onDelete: 'set null' }),
+    kind: text('kind', {
+      enum: ['assigned', 'mentioned', 'commented', 'updated'],
+    }).notNull(),
+    readAt: timestamp('read_at', { withTimezone: true, mode: 'date' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => ({
+    userIdx: index('notifications_user_idx').on(t.userId, t.readAt),
+    issueIdx: index('notifications_issue_idx').on(t.issueId),
+  }),
+);
+
 // ---------- Issue relations ----------
 
 export const issueRelations = pm.table(

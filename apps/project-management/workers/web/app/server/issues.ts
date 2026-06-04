@@ -18,6 +18,7 @@ import {
 import { ForbiddenError } from '~/lib/permissions';
 import { logActivityImpl } from './activities';
 import { listIssueLabelsImpl, setIssueLabelsImpl } from './labels';
+import { dispatchIssueNotificationsImpl } from './notifications';
 import { listRelationsImpl } from './relations';
 import { type CurrentUser } from './auth';
 import { buildAuthContext, getDb, getCurrentUser, getEnv, requirePermission, requireUser } from './auth-runtime.server';
@@ -352,6 +353,15 @@ export async function createIssueImpl(
     await setIssueLabelsImpl(db, created.id, data.labelIds);
   }
 
+  // Notify the assignee (if any) and anyone @mentioned in the description.
+  await dispatchIssueNotificationsImpl(db, {
+    issueId: created.id,
+    actorId: user.id,
+    newAssigneeId: data.assignedToId ?? null,
+    note: data.description,
+    notifyWatchers: false,
+  });
+
   await logActivityImpl(db, {
     projectId: data.projectId,
     userId: user.id,
@@ -455,6 +465,21 @@ export async function updateIssueImpl(
       // Record the notion-origin flag on the activity row so consumers /
       // future fanout suppression can opt-in without touching the schema.
       body: opts.notionOrigin ? 'notionOrigin=true' : '',
+    });
+
+    // Notify the (new) assignee, @mentioned users in the comment, and watchers.
+    const assigneeChanged = detailRows.some((d) => d.prop_key === 'assigned_to');
+    await dispatchIssueNotificationsImpl(db, {
+      issueId: data.id,
+      actorId: user.id,
+      newAssigneeId: assigneeChanged
+        ? patch.assignedToId == null
+          ? null
+          : Number(patch.assignedToId)
+        : undefined,
+      note: data.notes,
+      notifyWatchers: true,
+      isComment: data.notes.length > 0,
     });
   }
 
