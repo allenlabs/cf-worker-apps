@@ -532,6 +532,41 @@ export function collabTokenImpl(
   return apiPostImpl<CollabToken>(env, '/v1/collab-token', userBody(user, { docId }), deps);
 }
 
+// ---------- AI assist (editor `askAI` hook → /v1/ai) ----------
+
+export type AiAction =
+  | 'summarize'
+  | 'improve_writing'
+  | 'fix_grammar'
+  | 'make_shorter'
+  | 'make_longer'
+  | 'continue_writing'
+  | 'translate'
+  | 'change_tone'
+  | 'explain'
+  | 'custom';
+
+export interface AiAssistArgs {
+  action: AiAction;
+  text: string;
+  context?: string;
+  instruction?: string;
+  targetLang?: string;
+  tone?: string;
+}
+
+/** Forward an editor AI request to the HMAC-gated editor-api `/v1/ai` route.
+ * The package never calls an LLM itself — this is the host implementation of
+ * the `askAI` hook (mirrors uploadFileImpl). */
+export function aiAssistImpl(
+  env: ApiClientEnv,
+  user: CurrentUser,
+  input: AiAssistArgs,
+  deps?: ApiClientDeps,
+): Promise<{ text: string }> {
+  return apiPostImpl<{ text: string }>(env, '/v1/ai', userBody(user, { ...input }), deps);
+}
+
 export function listWorkspacesImpl(
   env: ApiClientEnv,
   user: CurrentUser,
@@ -1496,6 +1531,38 @@ export const collabToken = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
       const user = await requireUser();
     return collabTokenImpl(getEnv(), user, data.docId);
+  });
+
+// AI assist: the editor's `askAI` hook calls this; it signs + forwards to the
+// HMAC-gated editor-api `/v1/ai` route (which talks to the LLM gateway). The
+// package itself never touches the network.
+export const aiAssist = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        action: z.enum([
+          'summarize',
+          'improve_writing',
+          'fix_grammar',
+          'make_shorter',
+          'make_longer',
+          'continue_writing',
+          'translate',
+          'change_tone',
+          'explain',
+          'custom',
+        ]),
+        text: z.string().max(20_000).default(''),
+        context: z.string().max(20_000).optional(),
+        instruction: z.string().max(2_000).optional(),
+        targetLang: z.string().max(40).optional(),
+        tone: z.string().max(40).optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return aiAssistImpl(getEnv(), user, data);
   });
 
 // Phase 12: mint a collab token for an arbitrary synced-block room

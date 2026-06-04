@@ -124,10 +124,49 @@ import {
   remindersListImpl,
   unreadCountImpl,
 } from './notify';
+import { aiAssistImpl } from './ai';
 import { mintCollabToken } from '../lib/hmac';
 import type { AppBindings } from '../context';
 
 export const v1Router = new Hono<AppBindings>();
+
+// ---------- AI assist (HMAC-gated; editor-web calls this server-side) ----------
+//
+// The @allenlabs/editor package's `askAI` hook routes here through editor-web.
+// The actual LLM call (OpenAI-compatible /chat/completions) is configured via
+// OPTIONAL secrets (LLM_BASE_URL / LLM_API_KEY / LLM_MODEL). When unset, this
+// returns 503 "AI not configured" so the feature degrades gracefully. Any
+// provisioned suite user (verified by HMAC) may call it.
+const aiSchema = z.object({
+  action: z.enum([
+    'summarize',
+    'improve_writing',
+    'fix_grammar',
+    'make_shorter',
+    'make_longer',
+    'continue_writing',
+    'translate',
+    'change_tone',
+    'explain',
+    'custom',
+  ]),
+  text: z.string().max(20_000).default(''),
+  context: z.string().max(20_000).optional(),
+  instruction: z.string().max(2_000).optional(),
+  targetLang: z.string().max(40).optional(),
+  tone: z.string().max(40).optional(),
+});
+v1Router.post('/ai', async (c) => {
+  const parsed = aiSchema.safeParse(c.get('body'));
+  if (!parsed.success) {
+    return c.json({ error: 'validation', issues: z.treeifyError(parsed.error) }, 400);
+  }
+  const result = await aiAssistImpl(c.env, parsed.data);
+  if (!result.ok) {
+    return c.json({ error: result.error }, result.status);
+  }
+  return c.json({ text: result.text }, 200);
+});
 
 const idSchema = z.object({ id: z.string().uuid() });
 

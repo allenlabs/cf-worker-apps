@@ -1,4 +1,4 @@
-import type { SlashItem } from './types';
+import type { AiAssistInput, SlashItem } from './types';
 
 /**
  * Default block menu — the common Notion-ish set, all from TipTap StarterKit
@@ -323,6 +323,67 @@ export function makeButtonSlashItem(opts?: { title?: string; hint?: string }): S
     keywords: ['button', 'action', 'cta', 'click', 'trigger'],
     command: ({ editor, range }) => {
       editor.chain().focus().deleteRange(range).setButton().run();
+    },
+  };
+}
+
+/** How many characters of preceding text to send as context for "Continue
+ * writing" — bounded so a long doc never ships a huge prompt from the client. */
+const CONTINUE_CONTEXT_CHARS = 2000;
+
+/**
+ * Build the "Ask AI" slash item. Prompts the user for a free-form instruction
+ * (the `custom` action), calls the host `askAI` hook, and inserts the response
+ * at the cursor. Kept pure (factory taking the hook) so it's unit-testable; the
+ * package never calls an LLM itself. `title`/`hint` are optional host-translated
+ * labels; `promptLabel` is the window.prompt label.
+ */
+export function makeAskAiSlashItem(
+  askAI: (input: AiAssistInput) => Promise<string>,
+  opts?: { title?: string; hint?: string; promptLabel?: string },
+): SlashItem {
+  return {
+    title: opts?.title ?? 'Ask AI',
+    icon: '✨',
+    hint: opts?.hint ?? 'Write or generate with AI',
+    keywords: ['ai', 'gpt', 'assist', 'generate', 'write', 'llm'],
+    command: ({ editor, range }) => {
+      const instruction =
+        typeof window !== 'undefined'
+          ? window.prompt(opts?.promptLabel ?? 'Ask AI to write…')
+          : null;
+      editor.chain().focus().deleteRange(range).run();
+      if (!instruction || !instruction.trim()) return;
+      void askAI({ action: 'custom', text: '', instruction: instruction.trim() }).then((out) => {
+        if (out) editor.chain().focus().insertContent(out).run();
+      });
+    },
+  };
+}
+
+/**
+ * Build the "Continue writing" slash item. Sends the text preceding the cursor
+ * (bounded to {@link CONTINUE_CONTEXT_CHARS}) as context for the
+ * `continue_writing` action, then inserts the continuation at the cursor. Pure
+ * factory; `title`/`hint` are optional host-translated labels.
+ */
+export function makeContinueWritingSlashItem(
+  askAI: (input: AiAssistInput) => Promise<string>,
+  opts?: { title?: string; hint?: string },
+): SlashItem {
+  return {
+    title: opts?.title ?? 'Continue writing',
+    icon: '➤',
+    hint: opts?.hint ?? 'Let AI continue from here',
+    keywords: ['continue', 'ai', 'autocomplete', 'finish', 'write'],
+    command: ({ editor, range }) => {
+      // Grab text from doc start up to the slash (so the model has context).
+      const preceding = editor.state.doc.textBetween(0, range.from, '\n', ' ').trim();
+      const context = preceding.slice(-CONTINUE_CONTEXT_CHARS);
+      editor.chain().focus().deleteRange(range).run();
+      void askAI({ action: 'continue_writing', text: context, context }).then((out) => {
+        if (out) editor.chain().focus().insertContent(out).run();
+      });
     },
   };
 }

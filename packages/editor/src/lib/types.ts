@@ -10,6 +10,42 @@ export interface MentionItem {
 /** Source of mention suggestions for a typed query. */
 export type MentionSource = (query: string) => MentionItem[] | Promise<MentionItem[]>;
 
+/**
+ * The set of AI actions the editor's AI affordances can request. The host's
+ * {@link EditorProps.askAI} hook maps each to a prompt server-side (the package
+ * never talks to an LLM). `custom` carries a free-form `instruction`;
+ * `translate` carries a `targetLang`.
+ */
+export type AiAction =
+  | 'summarize'
+  | 'improve_writing'
+  | 'fix_grammar'
+  | 'make_shorter'
+  | 'make_longer'
+  | 'continue_writing'
+  | 'translate'
+  | 'change_tone'
+  | 'explain'
+  | 'custom';
+
+/** Input passed to {@link EditorProps.askAI}. */
+export interface AiAssistInput {
+  /** Which transformation to apply. */
+  action: AiAction;
+  /** The text the action operates on (the selection, or preceding text for
+   * `continue_writing`, or '' for a pure-instruction `custom` at the cursor). */
+  text: string;
+  /** Optional surrounding context (e.g. preceding paragraph) the host may
+   * forward to the model. */
+  context?: string;
+  /** Free-form instruction for the `custom` action (the user's typed prompt). */
+  instruction?: string;
+  /** Target language for the `translate` action (e.g. 'English', 'Korean'). */
+  targetLang?: string;
+  /** Tone for the `change_tone` action (e.g. 'professional', 'casual'). */
+  tone?: string;
+}
+
 /** One entry in the "/" slash menu. */
 export interface SlashItem {
   title: string;
@@ -154,6 +190,25 @@ export interface EditorProps {
    * nodes still render + run their client-only actions when `onOpenPage` is set).
    */
   runButtonAction?: (action: ButtonAction) => Promise<void>;
+  /**
+   * AI assist hook (Notion-style "Ask AI"). When set, the editor renders an
+   * "✨ AI" button in the bubble toolbar on a non-empty selection (opening a
+   * menu of actions: summarize / improve / fix grammar / shorter / longer /
+   * translate / change tone / explain) and an "Ask AI" + "Continue writing"
+   * slash item. Each affordance calls this hook and offers Replace / Insert
+   * below / Discard on the result.
+   *
+   * The PACKAGE NEVER calls an LLM or any network itself — the HOST implements
+   * this (server fn → editor-api `/v1/ai` → LLM gateway), exactly like
+   * {@link EditorProps.uploadImage}. If omitted, no AI affordances render.
+   */
+  askAI?: (input: AiAssistInput) => Promise<string>;
+  /**
+   * Translate AI menu labels (the "✨ AI" button + action names + result
+   * actions). Receives an i18n key (e.g. `ai.summarize`), returns the localized
+   * string. Omit for English defaults.
+   */
+  aiT?: (key: string) => string;
   /**
    * Show the ⋮⋮ block drag handle + block action menu (Notion editing feel).
    * Defaults to true; set false to opt out (e.g. a minimal embed). The handle

@@ -86,6 +86,43 @@ describe('editor stability under parent re-render', () => {
   });
 });
 
+describe('editor stability when the askAI hook identity changes', () => {
+  it('does not recreate the editor when a fresh askAI identity is handed in', async () => {
+    const seen = new Set<unknown>();
+    let bump: (() => void) | null = null;
+
+    function Harness() {
+      const [, setN] = useState(0);
+      bump = () => setN((x) => x + 1);
+      return (
+        <CollaborativeEditor
+          value=""
+          placeholder="type /"
+          // A fresh askAI closure every render — the host route does this. The
+          // editor must read it through a ref (hasAskAI is the only structural
+          // dep), so this must NOT tear down + rebuild the editor.
+          askAI={async () => 'ai output'}
+        />
+      );
+    }
+
+    await act(async () => {
+      render(<Harness />);
+    });
+    seen.add(await waitForProseMirror());
+
+    for (let i = 0; i < 5; i++) {
+      await act(async () => {
+        bump!();
+        await new Promise((r) => setTimeout(r, 10));
+      });
+      seen.add(document.querySelector('.ProseMirror'));
+    }
+
+    expect(seen.size, 'editor must not be recreated when askAI identity changes').toBe(1);
+  });
+});
+
 describe('slash menu renders into its ReactRenderer portal', () => {
   it('shows .ae-slash-menu + slash-item-heading-1 when "/" is typed', async () => {
     const hold: { editor: Editor | null } = { editor: null };

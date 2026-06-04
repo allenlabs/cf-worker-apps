@@ -29,4 +29,14 @@ export interface Env {
   //                         used to sign room tokens it will verify.
   EDITOR_HMAC_SECRET: string;
   COLLAB_HMAC_SECRET: string;
+
+  // OPTIONAL LLM secrets for the AI assist route (/v1/ai). OpenAI-compatible
+  // `/chat/completions` (same shape as concierge cron). When unset, /v1/ai
+  // returns a 503 "AI not configured" — the route never crashes.
+  //   wrangler secret put LLM_BASE_URL  --config workers/api/wrangler.toml
+  //   wrangler secret put LLM_API_KEY   --config workers/api/wrangler.toml
+  //   wrangler secret put LLM_MODEL     --config workers/api/wrangler.toml  (optional; defaults gpt-4o-mini)
+  LLM_BASE_URL?: string;
+  LLM_API_KEY?: string;
+  LLM_MODEL?: string;
 }

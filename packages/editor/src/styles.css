@@ -367,6 +367,88 @@
   border-radius: 0.2rem;
   padding: 0 0.15rem;
 }
+.ae-bubble-ai {
+  font-weight: 600;
+  color: #c4b5fd;
+}
+.ae-bubble-ai:hover {
+  background: #4338ca;
+  color: #fff;
+}
+
+/* AI assist menu + result panel — plain DOM inside the (React-managed) bubble
+ * menu, so no separate ReactRenderer portal. */
+.ae-ai-menu {
+  display: flex;
+  flex-direction: column;
+  min-width: 13rem;
+}
+.ae-ai-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: none;
+  border: none;
+  color: #e5e7eb;
+  cursor: pointer;
+  border-radius: 0.3rem;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.875rem;
+  text-align: left;
+}
+.ae-ai-menu-item:hover {
+  background: #374151;
+}
+.ae-ai-menu-icon {
+  width: 1rem;
+  text-align: center;
+  opacity: 0.8;
+}
+.ae-ai-menu-cancel {
+  color: #9ca3af;
+  border-top: 1px solid #374151;
+  margin-top: 0.15rem;
+}
+.ae-ai-loading {
+  color: #c4b5fd;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.85rem;
+}
+.ae-ai-result {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-width: 22rem;
+  padding: 0.4rem 0.5rem;
+}
+.ae-ai-result-text,
+.ae-ai-error-text {
+  color: #e5e7eb;
+  font-size: 0.85rem;
+  max-height: 12rem;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
+.ae-ai-error-text {
+  color: #fca5a5;
+}
+.ae-ai-result-actions {
+  display: flex;
+  gap: 0.25rem;
+}
+.ae-ai-result-btn {
+  background: #374151;
+  border: none;
+  color: #e5e7eb;
+  cursor: pointer;
+  border-radius: 0.3rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.8rem;
+}
+.ae-ai-result-btn:hover {
+  background: #4f46e5;
+  color: #fff;
+}
 
 /* Drag handle (⋮⋮) — from tiptap-extension-global-drag-handle. It injects a
  * `.drag-handle` element positioned at the left of the hovered block. */

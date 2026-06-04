@@ -48,3 +48,12 @@ COLLAB_URL = "wss://allenlabs-collab.allenlim.workers.dev/editor"
 #   wrangler secret put COLLAB_HMAC_SECRET --config workers/api/wrangler.toml
 #       (MUST equal the allenlabs-collab worker's token-signing secret)
 #   wrangler secret put OTEL_ACCESS_ID / OTEL_ACCESS_SECRET / OTEL_BEARER_TOKEN
+#
+# OPTIONAL — AI assist (/v1/ai). OpenAI-compatible /chat/completions endpoint.
+# When unset, /v1/ai returns 503 "AI not configured" (the editor's AI menu still
+# renders but each action surfaces the error). Set these to enable it:
+#   wrangler secret put LLM_BASE_URL --config workers/api/wrangler.toml
+#       (e.g. https://api.openai.com/v1  — no trailing /chat/completions)
+#   wrangler secret put LLM_API_KEY  --config workers/api/wrangler.toml
+#   wrangler secret put LLM_MODEL    --config workers/api/wrangler.toml
+#       (optional; defaults to gpt-4o-mini)

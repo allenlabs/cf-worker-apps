@@ -34,6 +34,7 @@ import {
   sharePage as sharePageFn,
   sharedWithMe as sharedWithMeFn,
   syncRoomToken,
+  aiAssist,
   teamspacesList,
   unsharePage as unsharePageFn,
   updatePage,
@@ -843,6 +844,11 @@ function PageView() {
               }}
               uploadImage={uploadImageFile}
               uploadFile={uploadAnyFile}
+              aiT={t}
+              askAI={async (input) => {
+                const { text } = await aiAssist({ data: input });
+                return text;
+              }}
               breadcrumb={{
                 items: ancestors.map((a) => ({ id: a.id, title: a.title })),
               }}

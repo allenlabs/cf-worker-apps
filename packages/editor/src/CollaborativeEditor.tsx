@@ -46,7 +46,10 @@ import {
   makeLinkedDatabaseSlashItem,
   makeSyncedBlockSlashItem,
   makeButtonSlashItem,
+  makeAskAiSlashItem,
+  makeContinueWritingSlashItem,
 } from './lib/slash-items';
+import { aiLabel } from './lib/ai';
 import type { EditorProps, SlashItem, SyncedBlockProps } from './lib/types';
 // KaTeX stylesheet — equations render via katex.renderToString, which produces
 // markup that depends on this CSS. Imported here so any host of the package
@@ -228,6 +231,12 @@ export function CollaborativeEditor(props: EditorProps) {
   const mentionRef = useRef<EditorProps['mention'] | null>(null);
   mentionRef.current = props.mention ?? null;
 
+  // askAI is read through a ref so swapping the (typically inline) host hook
+  // between renders never rebuilds the editor — only its PRESENCE (hasAskAI,
+  // below) is a structural dep. Mirrors the uploadImage pattern.
+  const askAiRef = useRef<EditorProps['askAI'] | null>(null);
+  askAiRef.current = props.askAI ?? null;
+
   const breadcrumbItemsRef = useRef<{ id: string; title: string }[]>(
     props.breadcrumb?.items ?? [],
   );
@@ -243,7 +252,9 @@ export function CollaborativeEditor(props: EditorProps) {
   const hasPickLinkedDatabase = !!props.onPickLinkedDatabase;
   const hasRunButtonAction = !!props.runButtonAction;
   const hasMention = !!props.mention;
+  const hasAskAI = !!props.askAI;
   const hasComments = !!props.comments;
+  const aiT = props.aiT;
   const syncedBlockCfg = props.syncedBlock;
   const blockMenuT = props.blockMenuT;
   // String value (not the t() identity) so it only changes when the text does.
@@ -376,6 +387,26 @@ export function CollaborativeEditor(props: EditorProps) {
         ),
       ];
     }
+    // AI slash items: offered when the host wired `askAI`. The hook is read
+    // through a ref at click time, so swapping an inline handler never changes
+    // this list / rebuilds the editor. "Ask AI" prompts for a custom
+    // instruction; "Continue writing" sends the preceding text as context.
+    if (hasAskAI) {
+      const ask = (input: Parameters<NonNullable<EditorProps['askAI']>>[0]) =>
+        (askAiRef.current ?? (() => Promise.resolve('')))(input);
+      items = [
+        ...items,
+        makeAskAiSlashItem(ask, {
+          title: aiT ? aiLabel('ai.slashAsk', 'Ask AI', aiT) : undefined,
+          hint: aiT ? aiLabel('ai.slashAskHint', 'Write or generate with AI', aiT) : undefined,
+          promptLabel: aiT ? aiLabel('ai.promptLabel', 'Ask AI to write…', aiT) : undefined,
+        }),
+        makeContinueWritingSlashItem(ask, {
+          title: aiT ? aiLabel('ai.slashContinue', 'Continue writing', aiT) : undefined,
+          hint: aiT ? aiLabel('ai.slashContinueHint', 'Let AI continue from here', aiT) : undefined,
+        }),
+      ];
+    }
     return items;
   }, [
     hasUploadImage,
@@ -385,6 +416,8 @@ export function CollaborativeEditor(props: EditorProps) {
     !!syncedBlockCfg,
     hasRunButtonAction,
     hasOpenPage,
+    hasAskAI,
+    aiT,
     blockMenuT,
   ]);
 
@@ -665,7 +698,14 @@ export function CollaborativeEditor(props: EditorProps) {
 
   return (
     <>
-      {editor ? <BubbleToolbar editor={editor} comments={props.comments} /> : null}
+      {editor ? (
+        <BubbleToolbar
+          editor={editor}
+          comments={props.comments}
+          askAI={props.askAI}
+          aiT={props.aiT}
+        />
+      ) : null}
       <EditorContent
         editor={editor}
         className={props.className}

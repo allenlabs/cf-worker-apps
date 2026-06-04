@@ -91,7 +91,17 @@ export {
   makeChildPageSlashItem,
   makeLinkedDatabaseSlashItem,
   makeSyncedBlockSlashItem,
+  makeAskAiSlashItem,
+  makeContinueWritingSlashItem,
 } from './lib/slash-items';
+export {
+  AI_SELECTION_ACTIONS,
+  TRANSLATE_LANGS,
+  DEFAULT_TONE,
+  aiActionLabel,
+  aiLabel,
+} from './lib/ai';
+export type { AiMenuAction } from './lib/ai';
 export type {
   EditorProps,
   CollabConfig,
@@ -99,4 +109,6 @@ export type {
   MentionItem,
   MentionSource,
   SlashItem,
+  AiAction,
+  AiAssistInput,
 } from './lib/types';
