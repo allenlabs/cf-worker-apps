@@ -18,6 +18,16 @@ custom_domain = true
 binding = "HYPERDRIVE"
 id = "0b76cf08a44443d39d12f0d51ed059f5"
 
+# The handlers reuse the web app's pure *Impl functions, but those live in
+# files that also export createServerFn wrappers importing auth-runtime.server →
+# which transitively pulls TanStack Start's SSR entry/manifest virtual modules.
+# The API worker never runs those code paths, so alias them to an empty stub to
+# satisfy the bundler.
+[alias]
+"#tanstack-router-entry" = "./src/stubs/empty.ts"
+"#tanstack-start-entry" = "./src/stubs/empty.ts"
+"tanstack-start-manifest:v" = "./src/stubs/empty.ts"
+
 [vars]
 APP_NAME = "Project Management API"
 PUBLIC_BASE_URL = "https://projects-api.allenlabs.org"
