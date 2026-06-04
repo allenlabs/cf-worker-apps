@@ -6,11 +6,14 @@ compatibility_flags = ["nodejs_compat"]
 # Smart Placement: let Cloudflare relocate this worker near the data it talks
 # to (Hyperdrive → Hetzner Postgres in Helsinki), turning the many cross-
 # continent query round-trips per request into in-region hops.
+workers_dev = true
+# Static client bundle. MUST be top-level (above any [section]): TOML
+# nests keys under the preceding table, so under [placement] this became
+# placement.assets and wrangler dropped it → no assets served.
+assets = { directory = "../../dist/client", binding = "ASSETS" }
+
 [placement]
 mode = "smart"
-workers_dev = true
-
-assets = { directory = "../../dist/client", binding = "ASSETS" }
 
 [[routes]]
 pattern = "nudge.allenlabs.org"
