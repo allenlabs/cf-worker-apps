@@ -2,11 +2,11 @@ name = "pm-api"
 main = "src/index.ts"
 compatibility_date = "2026-01-01"
 compatibility_flags = ["nodejs_compat"]
+workers_dev = true
 
 # Smart Placement: sit near Hyperdrive → Hetzner Postgres (Helsinki).
 [placement]
 mode = "smart"
-workers_dev = true
 
 [[routes]]
 pattern = "projects-api.allenlabs.org"

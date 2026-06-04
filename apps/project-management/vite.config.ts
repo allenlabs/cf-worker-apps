@@ -18,6 +18,10 @@ const APP_DIR = 'workers/web/app';
 // JSX class-name preservation in our code OR transitive deps).  Inject
 // it as a tiny banner so the worker boots clean on workerd.
 export default defineConfig({
+  // Static files copied verbatim into dist/client (favicon, etc.). Vite defaults
+  // publicDir to <cwd>/public which doesn't exist here, so
+  // workers/web/public/favicon.svg never shipped → /favicon.svg 404'd.
+  publicDir: path.resolve(`./${APP_DIR}/../public`),
   plugins: [
     tailwindcss(),
     tanstackStart({

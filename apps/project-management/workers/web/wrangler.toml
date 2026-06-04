@@ -8,15 +8,20 @@ name = "pm-web"
 main = "../../dist/server/server.js"
 compatibility_date = "2026-01-01"
 compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+# Static client bundle (CSS/JS/fonts). MUST be a top-level key, ABOVE any
+# [section] header: TOML assigns every key after a header to that table, so if
+# this sits under [placement] it becomes `placement.assets` and wrangler
+# silently drops it — no ASSETS binding, nothing served, every /assets/* request
+# falls through to the worker and the page loads unstyled.
+assets = { directory = "../../dist/client", binding = "ASSETS" }
 
 # Smart Placement: let Cloudflare relocate this worker near the data it talks
 # to (Hyperdrive → Hetzner Postgres in Helsinki), turning the many cross-
 # continent query round-trips per request into in-region hops.
 [placement]
 mode = "smart"
-workers_dev = true
-
-assets = { directory = "../../dist/client", binding = "ASSETS" }
 
 # Custom domain — DNS + SSL handled by Cloudflare since allenlabs.org is on
 # the same account.  Workers will create the DNS record automatically.

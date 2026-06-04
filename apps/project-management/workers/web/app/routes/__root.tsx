@@ -9,6 +9,7 @@ import { getRequest } from '@tanstack/react-start/server';
 import type { ReactNode } from 'react';
 import { Layout } from '~/components/Layout';
 import { getCurrentUser, getEnv } from '~/server/auth-runtime.server';
+import { isStaticAssetPath } from '~/lib/public-paths';
 import { readSessionToken, verifySessionToken } from '~/server/session.server';
 import appCss from '~/styles/app.css?url';
 import { DEFAULT_LOCALE, type Locale } from '@allenlabs/i18n';
@@ -100,13 +101,19 @@ export const Route = createRootRouteWithContext<RouterContext>()({
         }
       }
     }
-    const isPublic = pathname ? PUBLIC_PATHS.has(pathname) : false;
+    // Static bundles (CSS/JS/fonts/favicon) are public: the worker runs for
+    // every path here (CF doesn't auto-serve statics for this app), so without
+    // this exemption a lapsed/absent session 307s a stylesheet to /auth/login
+    // and the page renders unstyled — the "graphics sometimes break" bug.
+    const isPublic = pathname
+      ? PUBLIC_PATHS.has(pathname) || isStaticAssetPath(pathname)
+      : false;
+    if (isPublic) return;
     if (token) {
       const env = getEnv();
       const payload = await verifySessionToken(env, token);
       if (payload?.sub) return; // valid session
     }
-    if (isPublic) return;
     throw redirect({ to: '/auth/login' });
   },
   loader: async () => {
