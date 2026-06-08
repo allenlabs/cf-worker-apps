@@ -19,7 +19,7 @@ import { ForbiddenError } from '~/lib/permissions';
 import { logActivityImpl } from './activities';
 import { listIssueLabelsImpl, setIssueLabelsImpl } from './labels';
 import { dispatchIssueNotificationsImpl } from './notifications';
-import { listRelationsImpl } from './relations';
+import { RELATION_TYPES, addRelationImpl, listRelationsImpl } from './relations';
 import { type CurrentUser } from './auth';
 import { buildAuthContext, getDb, getCurrentUser, getEnv, requirePermission, requireUser } from './auth-runtime.server';
 import * as notionGateway from './notion-gateway-client';
@@ -300,6 +300,11 @@ export const createIssueSchema = z.object({
   estimatedHours: z.number().nullable().optional(),
   doneRatio: z.number().int().min(0).max(100).optional().default(0),
   labelIds: z.array(z.number()).optional(),
+  // Relations to set up at creation. Targets are given by their per-project
+  // number (e.g. 3 → RED-3) and must already exist in the same project.
+  relations: z
+    .array(z.object({ targetNumber: z.number(), type: z.enum(RELATION_TYPES) }))
+    .optional(),
 });
 export type CreateIssueInput = z.infer<typeof createIssueSchema>;
 
@@ -324,6 +329,21 @@ export async function createIssueImpl(
     const parent = await db.query.issues.findFirst({ where: eq(issues.id, data.parentId) });
     if (!parent || parent.projectId !== data.projectId) {
       throw new Error('Parent issue must be in the same project.');
+    }
+  }
+
+  // Pre-resolve relation targets (given by per-project number) so a bad target
+  // fails BEFORE the issue row is created — no orphaned issue on error.
+  const relationTargets: Array<{ targetId: number; type: (typeof RELATION_TYPES)[number] }> = [];
+  if (data.relations) {
+    for (const rel of data.relations) {
+      const target = await db.query.issues.findFirst({
+        where: and(eq(issues.projectId, data.projectId), eq(issues.number, rel.targetNumber)),
+      });
+      if (!target) {
+        throw new Error(`Related issue #${rel.targetNumber} not found in this project.`);
+      }
+      relationTargets.push({ targetId: target.id, type: rel.type });
     }
   }
 
@@ -363,6 +383,11 @@ export async function createIssueImpl(
 
   if (data.labelIds && data.labelIds.length > 0) {
     await setIssueLabelsImpl(db, created.id, data.labelIds);
+  }
+
+  // Wire up the pre-resolved relations now that the source issue exists.
+  for (const r of relationTargets) {
+    await addRelationImpl(db, { sourceIssueId: created.id, targetIssueId: r.targetId, type: r.type });
   }
 
   // Notify the assignee (if any) and anyone @mentioned in the description.

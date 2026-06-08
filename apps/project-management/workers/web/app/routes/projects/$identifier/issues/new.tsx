@@ -9,6 +9,7 @@ import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.s
 import { listMembersImpl } from '~/server/members';
 import { createIssue } from '~/server/issues';
 import { listLabelsImpl } from '~/server/labels';
+import { RELATION_TYPES } from '~/server/relations';
 import { getProjectImpl } from '~/server/projects';
 
 const parentRoute = getRouteApi('/projects/$identifier');
@@ -49,11 +50,21 @@ function NewIssuePage() {
     doneRatio: 0,
   });
   const [labelIds, setLabelIds] = useState<number[]>([]);
+  const [relations, setRelations] = useState<Array<{ type: (typeof RELATION_TYPES)[number]; targetNumber: number }>>([]);
+  const [relType, setRelType] = useState<(typeof RELATION_TYPES)[number]>('relates');
+  const [relTarget, setRelTarget] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   function toggleLabel(id: number) {
     setLabelIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
+  }
+
+  function addRelationRow() {
+    const n = Number(relTarget);
+    if (!Number.isFinite(n) || n <= 0) return;
+    setRelations((rs) => [...rs, { type: relType, targetNumber: n }]);
+    setRelTarget('');
   }
 
   async function handle(e: React.FormEvent) {
@@ -75,6 +86,7 @@ function NewIssuePage() {
           estimatedHours: form.estimatedHours ? Number(form.estimatedHours) : null,
           doneRatio: Number(form.doneRatio),
           labelIds,
+          relations,
         },
       });
       notifySuccess(t('issueNew.createdToast', { key: issueKey(project.key, created.number) }));
@@ -237,6 +249,44 @@ function NewIssuePage() {
             </div>
           </div>
         ) : null}
+
+        <div>
+          <label className="label">{t('relation.title')}</label>
+          {relations.length > 0 ? (
+            <ul className="text-sm mb-2 space-y-1">
+              {relations.map((r, idx) => (
+                <li key={idx} className="flex items-center gap-2">
+                  <span className="text-xs uppercase tracking-wide text-gray-500 w-24">{t(`relation.${r.type}`)}</span>
+                  <span className="font-mono text-xs">{project.key}-{r.targetNumber}</span>
+                  <button
+                    type="button"
+                    className="text-xs text-red-600 hover:underline"
+                    onClick={() => setRelations((rs) => rs.filter((_, i) => i !== idx))}
+                  >
+                    ✕
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          <div className="flex flex-wrap items-end gap-2">
+            <select className="select" value={relType} onChange={(e) => setRelType(e.target.value as typeof relType)}>
+              {RELATION_TYPES.map((rt) => (
+                <option key={rt} value={rt}>{t(`relation.${rt}`)}</option>
+              ))}
+            </select>
+            <input
+              className="input w-28"
+              type="number"
+              min={1}
+              value={relTarget}
+              onChange={(e) => setRelTarget(e.target.value)}
+              placeholder={t('relation.targetNumber')}
+            />
+            <button type="button" className="btn" onClick={addRelationRow}>{t('relation.add')}</button>
+          </div>
+        </div>
+
         {error ? <p className="text-sm text-red-700">{error}</p> : null}
         <div className="pt-2">
           <button data-testid="issue-submit" className="btn-primary" disabled={busy}>

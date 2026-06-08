@@ -107,6 +107,29 @@ describe('PM REST API (HMAC)', () => {
     expect(cycle.status).toBe(422);
   });
 
+  it('creates an issue related to an existing one', async () => {
+    await call('/v1/projects/RED/issues', 'POST', JSON.stringify({ subject: 'base' })); // RED-1
+    const res = await call(
+      '/v1/projects/RED/issues',
+      'POST',
+      JSON.stringify({ subject: 'linked', relations: [{ targetNumber: 1, type: 'blocks' }] }),
+    );
+    expect(res.status).toBe(201);
+    const got = (await (await call('/v1/projects/RED/issues/2')).json()) as {
+      relations: Array<{ type: string; key: string }>;
+    };
+    expect(got.relations).toEqual([{ type: 'blocks', key: 'RED-1' }]);
+  });
+
+  it('422s when a relation target is missing at creation', async () => {
+    const res = await call(
+      '/v1/projects/RED/issues',
+      'POST',
+      JSON.stringify({ subject: 'x', relations: [{ targetNumber: 999, type: 'relates' }] }),
+    );
+    expect(res.status).toBe(422);
+  });
+
   it('lower-cases the project key on resolve', async () => {
     const got = await call('/v1/projects/red/issues?status=all');
     expect(got.status).toBe(200);

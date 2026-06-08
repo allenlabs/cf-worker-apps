@@ -140,6 +140,45 @@ describe('listRelationsImpl', () => {
   });
 });
 
+describe('createIssueImpl with relations', () => {
+  it('wires up relations to existing issues at creation', async () => {
+    const a = await makeIssue('a'); // DEMO-1
+    const b = await makeIssue('b'); // DEMO-2
+    const created = await createIssueImpl(db, alice, {
+      projectId,
+      trackerId: 1,
+      subject: 'with rels',
+      description: '',
+      doneRatio: 0,
+      relations: [
+        { targetNumber: a.number, type: 'blocks' },
+        { targetNumber: b.number, type: 'relates' },
+      ],
+    });
+    const rels = await listRelationsImpl(db, created.id);
+    expect(rels.map((r) => `${r.type}:${r.number}`).sort()).toEqual([
+      `blocks:${a.number}`,
+      `relates:${b.number}`,
+    ]);
+  });
+
+  it('rejects (and creates nothing extra) when a relation target is missing', async () => {
+    const before = await db.select().from(issueRelations);
+    await expect(
+      createIssueImpl(db, alice, {
+        projectId,
+        trackerId: 1,
+        subject: 'bad rel',
+        description: '',
+        doneRatio: 0,
+        relations: [{ targetNumber: 9999, type: 'relates' }],
+      }),
+    ).rejects.toThrow(/not found in this project/);
+    const after = await db.select().from(issueRelations);
+    expect(after.length).toBe(before.length); // no relation rows created
+  });
+});
+
 describe('listPrecedesEdgesImpl', () => {
   it('returns [] for a project with no issues', async () => {
     const empty = await insertProject(db, { identifier: 'empty', key: 'EMP' });

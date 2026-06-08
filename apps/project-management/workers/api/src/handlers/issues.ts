@@ -11,6 +11,7 @@ import {
   listIssuesImpl,
   updateIssueImpl,
 } from '../../../web/app/server/issues';
+import { RELATION_TYPES } from '../../../web/app/server/relations';
 import { listProjectsImpl } from '../../../web/app/server/projects';
 import { getRefData } from '../../../web/app/server/ref-data';
 import { type AuthContext, hasPermission, type Permission } from '../../../web/app/lib/permissions';
@@ -172,6 +173,10 @@ const createBody = z.object({
   labelIds: z.array(z.number()).optional(),
   // Parent issue's per-project number (e.g. 3 for RED-3); creates a subtask.
   parentNumber: z.number().optional(),
+  // Relations to set up at creation; targets by per-project number.
+  relations: z
+    .array(z.object({ targetNumber: z.number(), type: z.enum(RELATION_TYPES) }))
+    .optional(),
 });
 
 // POST /v1/projects/:key/issues
@@ -218,6 +223,7 @@ issuesRouter.post('/projects/:key/issues', async (c) => {
       doneRatio: result.data.doneRatio ?? 0,
       labelIds: result.data.labelIds,
       parentId,
+      relations: result.data.relations,
     });
   } catch (e) {
     return c.json({ error: errMsg(e) }, 422);
