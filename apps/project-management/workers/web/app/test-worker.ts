@@ -11,6 +11,7 @@
 import { makeDb } from '~/db/client';
 import type { Env } from '~/lib/env';
 import { findOrCreateUserBySsoImpl, userFromSessionImpl } from '~/server/auth';
+import { betterAuthAdapter } from '~/server/auth/adapters/better-auth';
 import {
   cookieHeader,
   readSessionToken,
@@ -31,7 +32,7 @@ export default {
     const cookie = req.headers.get('cookie');
 
     if (url.pathname === '/api/whoami' && req.method === 'GET') {
-      const me = await userFromSessionImpl(db, env, cookie);
+      const me = await userFromSessionImpl(db, betterAuthAdapter, env, cookie);
       return json({ user: me });
     }
 
@@ -45,7 +46,7 @@ export default {
         email?: string;
         name?: string;
       };
-      await findOrCreateUserBySsoImpl(db, { sub, email, name });
+      await findOrCreateUserBySsoImpl(db, { subject: sub, email: email ?? '', displayName: name });
       return json({ ok: true }, { headers: { 'set-cookie': cookieHeader(token) } });
     }
 

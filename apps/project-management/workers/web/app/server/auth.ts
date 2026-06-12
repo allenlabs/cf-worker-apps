@@ -10,12 +10,8 @@ import {
   hasPermission,
   permissionsForTeamRole,
 } from '~/lib/permissions';
-import {
-  readSessionToken,
-  verifySessionToken,
-  type SessionPayload,
-  type TeamMembershipClaim,
-} from './session.server';
+import { type TeamMembershipClaim } from './session.server';
+import type { AuthAdapter, AuthIdentity } from './auth/types';
 
 export interface CurrentUser {
   id: number;
@@ -133,23 +129,22 @@ export async function buildAuthContextImpl(
  */
 export async function userFromSessionImpl(
   db: DB,
+  adapter: AuthAdapter,
   env: Env,
   cookie: string | null,
 ): Promise<CurrentUser | null> {
-  const token = readSessionToken(cookie);
-  if (!token) return null;
-  const payload = await verifySessionToken(env, token);
-  if (!payload) return null;
+  const identity = await adapter.verify(env, cookie);
+  if (!identity) return null;
   const row = await db.query.users.findFirst({
-    where: eq(users.betterAuthUserId, payload.sub),
+    where: eq(users.betterAuthUserId, identity.subject),
   });
   if (!row || row.status !== 'active') return null;
 
-  // Keep the local handle/preferred name in step with the JWT (Phase 1
+  // Keep the local handle/preferred name in step with the identity (Phase 1
   // profile fields). Only write when something actually changed so we don't
   // pay a write on every request.
-  const claimUsername = payload.username ?? null;
-  const claimPreferred = payload.preferredName ?? null;
+  const claimUsername = identity.username ?? null;
+  const claimPreferred = identity.preferredName ?? null;
   if (
     (claimUsername !== null && claimUsername !== row.username) ||
     (claimPreferred !== null && claimPreferred !== row.preferredName)
@@ -174,7 +169,7 @@ export async function userFromSessionImpl(
     betterAuthUserId: row.betterAuthUserId,
     username: claimUsername ?? row.username,
     preferredName: claimPreferred ?? row.preferredName,
-    teamMemberships: payload.teamMemberships ?? [],
+    teamMemberships: identity.teamMemberships ?? [],
   };
 }
 
@@ -193,18 +188,18 @@ export async function userFromSessionImpl(
  */
 export async function findOrCreateUserBySsoImpl(
   db: DB,
-  payload: SessionPayload,
+  identity: AuthIdentity,
 ): Promise<CurrentUser> {
-  const email = payload.email?.toLowerCase().trim();
+  const email = identity.email.toLowerCase().trim();
 
-  const claimUsername = payload.username ?? null;
-  const claimPreferred = payload.preferredName ?? null;
+  const claimUsername = identity.username ?? null;
+  const claimPreferred = identity.preferredName ?? null;
 
   // 1. Direct link by better_auth_user_id.  Cold-start connection-level
   // retries are handled centrally in `~/db/client` (the postgres.js client
   // is proxied to retry once on connection-shaped errors).
   const linked = await db.query.users.findFirst({
-    where: eq(users.betterAuthUserId, payload.sub),
+    where: eq(users.betterAuthUserId, identity.subject),
   });
   if (linked) {
     await db
@@ -229,7 +224,7 @@ export async function findOrCreateUserBySsoImpl(
       await db
         .update(users)
         .set({
-          betterAuthUserId: payload.sub,
+          betterAuthUserId: identity.subject,
           lastLoginAt: new Date(),
           username: claimUsername ?? byEmail.username,
           preferredName: claimPreferred ?? byEmail.preferredName,
@@ -251,7 +246,7 @@ export async function findOrCreateUserBySsoImpl(
   const login = await pickAvailableLogin(db, baseLogin);
   const count = await db.select({ id: users.id }).from(users).limit(1);
   const isFirstUser = count.length === 0;
-  const [name1 = '', ...nameRest] = (payload.name ?? '').trim().split(/\s+/);
+  const [name1 = '', ...nameRest] = (identity.displayName ?? '').trim().split(/\s+/);
   const [created] = await db
     .insert(users)
     .values({
@@ -259,7 +254,7 @@ export async function findOrCreateUserBySsoImpl(
       email,
       firstname: name1,
       lastname: nameRest.join(' '),
-      betterAuthUserId: payload.sub,
+      betterAuthUserId: identity.subject,
       username: claimUsername,
       preferredName: claimPreferred,
       admin: isFirstUser,

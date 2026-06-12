@@ -3,8 +3,7 @@ import { createServerFn } from '@tanstack/react-start';
 import { sql } from 'drizzle-orm';
 import { getRequest } from '@tanstack/react-start/server';
 import { useT } from '@allenlabs/i18n/react';
-import { getDb, getEnv } from '~/server/auth-runtime.server';
-import { readSessionToken, verifySessionToken } from '~/server/session.server';
+import { getAdapter, getDb, getEnv } from '~/server/auth-runtime.server';
 
 interface ProjectRow {
   id: number;
@@ -25,12 +24,12 @@ const loadProjects = createServerFn({ method: 'GET' }).handler(async () => {
   const env = getEnv();
   const req = getRequest();
   const cookie = req?.headers.get('cookie') ?? null;
-  const token = readSessionToken(cookie);
+  const identity = await getAdapter(env).verify(env, cookie);
 
   const db = getDb();
-  if (!token) {
-    // Anonymous: only public + active.  Issue the simpler query so we
-    // don't pay for the user-resolution CTE on a no-cookie request.
+  if (!identity) {
+    // Anonymous (no/invalid session): only public + active. Issue the simpler
+    // query so we don't pay for the user-resolution CTE.
     const result = (await db.execute(
       sql`
         SELECT COALESCE(
@@ -53,9 +52,7 @@ const loadProjects = createServerFn({ method: 'GET' }).handler(async () => {
       ? ((arr0[0] as { data?: ProjectRow[] }).data ?? [])
       : [];
   }
-  const payload = await verifySessionToken(env, token);
-  if (!payload?.sub) return [] as ProjectRow[];
-  const sub = payload.sub;
+  const sub = identity.subject;
   // Phase 2: a project is visible if its Better Auth team id is among the
   // user's JWT team memberships. drizzle's `sql` template EXPANDS a JS array
   // into separate placeholders (for IN-lists), which breaks `= ANY($n::text[])`.
@@ -63,7 +60,7 @@ const loadProjects = createServerFn({ method: 'GET' }).handler(async () => {
   // scalar param, casting it to text[] in SQL. Empty list => '{}' which ANY
   // never matches. Team ids are [A-Za-z0-9_] so no escaping is needed, but we
   // defensively strip anything else.
-  const teamIds = (payload.teamMemberships ?? []).map((t) => t.teamId);
+  const teamIds = (identity.teamMemberships ?? []).map((t) => t.teamId);
   const teamIdArrayLiteral =
     '{' + teamIds.map((id) => id.replace(/[^A-Za-z0-9_-]/g, '')).join(',') + '}';
 

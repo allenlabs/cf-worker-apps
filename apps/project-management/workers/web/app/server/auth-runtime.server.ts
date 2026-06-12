@@ -19,6 +19,8 @@ import {
   type CurrentUser,
   userFromSessionImpl,
 } from './auth';
+import { type AuthAdapter } from './auth/types';
+import { selectAdapter } from './auth/registry';
 
 export function getEnv(): Env {
   const req = getRequest();
@@ -35,6 +37,10 @@ export function getDb(env: Env = getEnv()): DB {
   return makeDb(env);
 }
 
+export function getAdapter(env: Env = getEnv()): AuthAdapter {
+  return selectAdapter(env);
+}
+
 // Request-scoped dedupe.  TanStack Start's `beforeLoad` + `loader` + any
 // nested server fns each call into these helpers — without dedupe a
 // single /projects load was doing 3 separate `users.findFirst` queries
@@ -48,13 +54,13 @@ export function getCurrentUser(): Promise<CurrentUser | null> {
   const req = getRequest();
   if (!req) {
     const env = getEnv();
-    return userFromSessionImpl(getDb(env), env, null);
+    return userFromSessionImpl(getDb(env), getAdapter(env), env, null);
   }
   let p = userCache.get(req);
   if (!p) {
     const env = getEnv();
     const cookie = req.headers.get('cookie') ?? null;
-    p = userFromSessionImpl(getDb(env), env, cookie);
+    p = userFromSessionImpl(getDb(env), getAdapter(env), env, cookie);
     userCache.set(req, p);
   }
   return p;

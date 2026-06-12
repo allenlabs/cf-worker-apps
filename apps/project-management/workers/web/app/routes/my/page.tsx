@@ -4,22 +4,19 @@ import { getRequest } from '@tanstack/react-start/server';
 import { useT } from '@allenlabs/i18n/react';
 import { PriorityBadge, StatusBadge, TrackerBadge } from '~/components/badges';
 import { formatDate, issueKey, timeAgo } from '~/lib/format';
-import { getDb, getEnv } from '~/server/auth-runtime.server';
+import { getAdapter, getDb, getEnv } from '~/server/auth-runtime.server';
 import { loadMyPageImpl } from '~/server/home';
-import { readSessionToken, verifySessionToken } from '~/server/session.server';
 
-// Verify the JWT (cached JWKS — no DB hit) then dispatch to
+// Verify the session via the auth adapter (no DB hit) then dispatch to
 // loadMyPageImpl which resolves the user + all four sections in ONE
 // Hetzner round-trip.  See server/home.ts for the SQL.
 const loadMyPage = createServerFn({ method: 'GET' }).handler(async () => {
   const env = getEnv();
   const req = getRequest();
   const cookie = req?.headers.get('cookie') ?? null;
-  const token = readSessionToken(cookie);
-  if (!token) return null;
-  const payload = await verifySessionToken(env, token);
-  if (!payload?.sub) return null;
-  return loadMyPageImpl(getDb(), payload.sub);
+  const identity = await getAdapter(env).verify(env, cookie);
+  if (!identity) return null;
+  return loadMyPageImpl(getDb(), identity.subject);
 });
 
 export const Route = createFileRoute('/my/page')({

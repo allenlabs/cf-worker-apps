@@ -8,9 +8,8 @@ import {
 import { getRequest } from '@tanstack/react-start/server';
 import type { ReactNode } from 'react';
 import { Layout } from '~/components/Layout';
-import { getCurrentUser, getEnv } from '~/server/auth-runtime.server';
+import { getAdapter, getEnv } from '~/server/auth-runtime.server';
 import { isStaticAssetPath } from '~/lib/public-paths';
-import { readSessionToken, verifySessionToken } from '~/server/session.server';
 import appCss from '~/styles/app.css?url';
 import { DEFAULT_LOCALE, type Locale } from '@allenlabs/i18n';
 import { resolveLocale } from '@allenlabs/i18n/server';
@@ -79,7 +78,6 @@ export const Route = createRootRouteWithContext<RouterContext>()({
     const req = getRequest();
     if (!req) return;
     const cookie = req.headers.get('cookie') ?? null;
-    const token = readSessionToken(cookie);
     // `req.url` is normally a fully-qualified URL on the worker, but during
     // a server-fn-triggered router invalidation it can be a path-only
     // string or (in some TanStack Start versions) a non-stringable object,
@@ -109,11 +107,10 @@ export const Route = createRootRouteWithContext<RouterContext>()({
       ? PUBLIC_PATHS.has(pathname) || isStaticAssetPath(pathname)
       : false;
     if (isPublic) return;
-    if (token) {
-      const env = getEnv();
-      const payload = await verifySessionToken(env, token);
-      if (payload?.sub) return; // valid session
-    }
+    const env = getEnv();
+    // adapter.verify short-circuits on a missing cookie (no JWKS/crypto), so
+    // calling it unconditionally keeps the no-cookie path cheap.
+    if (await getAdapter(env).verify(env, cookie)) return; // valid session
     throw redirect({ to: '/auth/login' });
   },
   loader: async () => {
@@ -139,35 +136,28 @@ export const Route = createRootRouteWithContext<RouterContext>()({
       return { user: null, appName: 'Project Management', locale: DEFAULT_LOCALE };
     }
     const cookie = req.headers.get('cookie') ?? null;
-    const token = readSessionToken(cookie);
     const env = getEnv();
+    const identity = await getAdapter(env).verify(env, cookie);
     let user: { id: number; login: string; isAdmin: boolean } | null = null;
     let jwtLocale: string | null = null;
-    if (token) {
-      const payload = await verifySessionToken(env, token);
-      if (payload?.sub) {
-        // Suite-wide display convention: preferredName → name → username →
-        // email-local. Sourced straight from the JWT (no DB hit).
-        const displayName =
-          (typeof payload.preferredName === 'string' && payload.preferredName) ||
-          (typeof payload.name === 'string' && payload.name) ||
-          (typeof payload.username === 'string' && payload.username) ||
-          (typeof payload.email === 'string' && payload.email.split('@')[0]) ||
-          'user';
-        user = {
-          // No local users.id available without a DB hit; the layout
-          // only uses this for display, not as an FK.  Use -1 as a
-          // never-stored sentinel so any code that mistakenly treats
-          // it as a real id surfaces a foreign-key error rather than
-          // silently writing the wrong row.
-          id: -1,
-          login: displayName,
-          // isAdmin requires the DB; default to false in the layout.
-          // Pages that gate on admin (e.g. /admin/*) must re-check.
-          isAdmin: false,
-        };
-        if (typeof payload.locale === 'string') jwtLocale = payload.locale;
-      }
+    if (identity) {
+      // Suite-wide display convention: preferredName → display name → username →
+      // email-local. Sourced from the identity (no DB hit).
+      const displayName =
+        identity.preferredName ||
+        identity.displayName ||
+        identity.username ||
+        (identity.email ? identity.email.split('@')[0] : '') ||
+        'user';
+      user = {
+        // No local users.id without a DB hit; layout uses this for display
+        // only. -1 is a never-stored sentinel so misuse as an FK surfaces.
+        id: -1,
+        login: displayName,
+        // isAdmin requires the DB; default false. Admin pages re-check.
+        isAdmin: false,
+      };
+      jwtLocale = identity.locale ?? null;
     }
     // Locale priority: cookie → JWT claim → Accept-Language → 'en'. resolved
     // server-side so the very first SSR paint is already in the right language

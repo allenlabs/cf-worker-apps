@@ -341,61 +341,62 @@ describe('createProjectImpl', () => {
     expect(ms).toHaveLength(0);
   });
 
-  it('creates a backing Better Auth team and stores its id when org is provided', async () => {
-    const { vi } = await import('vitest');
+  it('stores the provision hook teamId and passes a project-created context', async () => {
     const u = await insertUser(db, { betterAuthUserId: 'ba-creator' });
-    let body = '';
-    const fetcher = vi.fn(async (_u: string, init: RequestInit) => {
-      body = init.body as string;
-      return new Response(JSON.stringify({ teamId: 'team_new', slug: 'team-proj' }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
-    }) as unknown as typeof fetch;
+    let seen: { actingExternalUserId: string | null; projectName: string; projectSlug: string } | null = null;
     const created = await createProjectImpl(
       db,
       makeUser({ id: u.id, login: u.login, betterAuthUserId: 'ba-creator' }),
       { identifier: 'team-proj', name: 'Team Proj', description: '', homepage: '', isPublic: false },
-      {
-        env: { AUTH_API_URL: 'https://auth-api.test', PM_ORG_HMAC_CLIENT_ID: 'pm', PM_ORG_HMAC_SECRET: 'sekret-1234567890' },
-        deps: { fetcher },
+      async (ctx) => {
+        seen = ctx;
+        return { teamId: 'team_new' };
       },
     );
     expect(created.authTeamId).toBe('team_new');
-    expect(JSON.parse(body)).toMatchObject({ actingUserId: 'ba-creator', name: 'Team Proj' });
+    expect(seen).toMatchObject({
+      actingExternalUserId: 'ba-creator',
+      projectName: 'Team Proj',
+      projectSlug: 'team-proj',
+    });
   });
 
-  it('falls back to a null team id when the org bridge fails', async () => {
-    const { vi } = await import('vitest');
+  it('stores a null team id when the provision hook returns null', async () => {
     const u = await insertUser(db, { betterAuthUserId: 'ba-fail' });
-    const fetcher = vi.fn(async () => new Response('nope', { status: 500 })) as unknown as typeof fetch;
     const created = await createProjectImpl(
       db,
       makeUser({ id: u.id, login: u.login, betterAuthUserId: 'ba-fail' }),
       { identifier: 'team-fail', name: 'Team Fail', description: '', homepage: '', isPublic: false },
-      {
-        env: { AUTH_API_URL: 'https://auth-api.test', PM_ORG_HMAC_CLIENT_ID: 'pm', PM_ORG_HMAC_SECRET: 'sekret-1234567890' },
-        deps: { fetcher },
-      },
+      async () => ({ teamId: null }),
     );
     expect(created.authTeamId).toBeNull();
   });
 
-  it('skips team creation when the user has no Better Auth id', async () => {
-    const { vi } = await import('vitest');
+  it('passes a null actingExternalUserId when the creator has no external id', async () => {
     const u = await insertUser(db);
-    const fetcher = vi.fn() as unknown as typeof fetch;
-    const created = await createProjectImpl(
+    let seen: { actingExternalUserId: string | null } | null = null;
+    await createProjectImpl(
       db,
       makeUser({ id: u.id, login: u.login, betterAuthUserId: null }),
-      { identifier: 'no-ba', name: 'No BA', description: '', homepage: '', isPublic: false },
-      {
-        env: { AUTH_API_URL: 'https://auth-api.test', PM_ORG_HMAC_CLIENT_ID: 'pm', PM_ORG_HMAC_SECRET: 'sekret-1234567890' },
-        deps: { fetcher },
+      { identifier: 'no-ext', name: 'No Ext', description: '', homepage: '', isPublic: false },
+      async (ctx) => {
+        seen = ctx;
+        return { teamId: null };
       },
     );
+    expect(seen?.actingExternalUserId).toBeNull();
+  });
+
+  it('creates with pm.members RBAC (null team) when no provision hook is given', async () => {
+    const u = await insertUser(db);
+    const created = await createProjectImpl(
+      db,
+      makeUser({ id: u.id, login: u.login }),
+      { identifier: 'no-prov', name: 'No Prov', description: '', homepage: '', isPublic: false },
+    );
     expect(created.authTeamId).toBeNull();
-    expect(fetcher).not.toHaveBeenCalled();
+    const ms = await db.query.members.findMany();
+    expect(ms).toHaveLength(1); // creator added as Manager
   });
 });
 

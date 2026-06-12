@@ -2,22 +2,19 @@ import { Link, createFileRoute } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
 import { getRequest } from '@tanstack/react-start/server';
 import { useT } from '@allenlabs/i18n/react';
-import { getDb, getEnv } from '~/server/auth-runtime.server';
+import { getAdapter, getDb, getEnv } from '~/server/auth-runtime.server';
 import { loadHomeImpl } from '~/server/home';
-import { readSessionToken, verifySessionToken } from '~/server/session.server';
 import { timeAgo } from '~/lib/format';
 
-// Verify the JWT, then dispatch to loadHomeImpl which does the rest in
-// ONE Hetzner round-trip.  See server/home.ts for the SQL.
+// Verify the session via the auth adapter, then dispatch to loadHomeImpl which
+// does the rest in ONE Hetzner round-trip.  See server/home.ts for the SQL.
 const loadHome = createServerFn({ method: 'GET' }).handler(async () => {
   const env = getEnv();
   const req = getRequest();
   const cookie = req?.headers.get('cookie') ?? null;
-  const token = readSessionToken(cookie);
-  if (!token) return null;
-  const payload = await verifySessionToken(env, token);
-  if (!payload?.sub) return null;
-  return loadHomeImpl(getDb(), payload.sub);
+  const identity = await getAdapter(env).verify(env, cookie);
+  if (!identity) return null;
+  return loadHomeImpl(getDb(), identity.subject);
 });
 
 export const Route = createFileRoute('/')({

@@ -19,10 +19,17 @@ import {
 } from '~/lib/permissions';
 import { logActivityImpl } from './activities';
 import { type CurrentUser } from './auth';
-import { buildAuthContext, getDb, getCurrentUser, getEnv, requirePermission, requireUser } from './auth-runtime.server';
-import { createTeam, type OrgClientDeps } from './org-client';
+import type { ProjectCreatedContext, ProjectProvisionResult } from './auth/types';
+import {
+  buildAuthContext,
+  getAdapter,
+  getDb,
+  getCurrentUser,
+  getEnv,
+  requirePermission,
+  requireUser,
+} from './auth-runtime.server';
 import { getRefData } from './ref-data';
-import type { Env } from '~/lib/env';
 
 const DEFAULT_MODULES = [
   'issue_tracking',
@@ -239,16 +246,19 @@ export async function getProjectImpl(
   };
 }
 
-type CreateProjectOrgEnv = Pick<
-  Env,
-  'AUTH_API_URL' | 'PM_ORG_HMAC_CLIENT_ID' | 'PM_ORG_HMAC_SECRET'
->;
+/**
+ * Optional team/org provisioning. The auth adapter supplies this (bound to env);
+ * absent ⇒ the project is created with pm.members RBAC only (authTeamId null).
+ */
+export type ProjectProvision = (
+  ctx: ProjectCreatedContext,
+) => Promise<ProjectProvisionResult>;
 
 export async function createProjectImpl(
   db: DB,
   user: CurrentUser,
   data: CreateProjectInput,
-  org?: { env: CreateProjectOrgEnv; deps?: OrgClientDeps },
+  provision?: ProjectProvision,
 ): Promise<typeof projects.$inferSelect> {
   const existing = await db.query.projects.findFirst({
     where: eq(projects.identifier, data.identifier),
@@ -265,23 +275,18 @@ export async function createProjectImpl(
   const keyTaken = await db.query.projects.findFirst({ where: eq(projects.key, key) });
   if (keyTaken) throw new Error(`Project key "${key}" is already used.`);
 
-  // Create the backing Better Auth team (in org_allenlabs) BEFORE inserting the
-  // project so we can store its id. Best-effort: if the auth-api bridge is
-  // unreachable, fall back to a null team id (legacy pm.members RBAC still
-  // works; the team can be backfilled). Requires the acting user's Better Auth
-  // id — present for SSO users; absent only for legacy/local rows.
+  // Let the auth adapter provision a backing team (e.g. a Better Auth team)
+  // BEFORE inserting the project so we can store its id. The adapter hook is
+  // itself best-effort (returns teamId null on failure), so a project always
+  // creates — falling back to pm.members RBAC when there's no team.
   let authTeamId: string | null = null;
-  if (org && user.betterAuthUserId) {
-    try {
-      const created = await createTeam(
-        org.env,
-        { actingUserId: user.betterAuthUserId, name: data.name, slug: data.identifier },
-        org.deps,
-      );
-      authTeamId = created.teamId;
-    } catch (err) {
-      console.error('[org] createTeam failed; project will have no team yet:', err);
-    }
+  if (provision) {
+    const result = await provision({
+      actingExternalUserId: user.betterAuthUserId ?? null,
+      projectName: data.name,
+      projectSlug: data.identifier,
+    });
+    authTeamId = result.teamId;
   }
 
   const [project] = await db
@@ -379,7 +384,11 @@ export const createProject = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
     const user = await requireUser();
     const env = getEnv();
-    return createProjectImpl(getDb(), user, data, { env });
+    const adapter = getAdapter(env);
+    const provision = adapter.onProjectCreated
+      ? (ctx: ProjectCreatedContext) => adapter.onProjectCreated!(env, ctx)
+      : undefined;
+    return createProjectImpl(getDb(), user, data, provision);
   });
 
 export const updateProject = createServerFn({ method: 'POST' })

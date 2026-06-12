@@ -18,6 +18,7 @@ import {
   userFromSessionImpl,
 } from '~/server/auth';
 import { cookieHeader } from '~/server/session.server';
+import { betterAuthAdapter } from '~/server/auth/adapters/better-auth';
 
 let db: TestDB;
 
@@ -138,19 +139,19 @@ describe('checkPermission', () => {
 
 describe('userFromSessionImpl', () => {
   it('returns null when cookie missing', async () => {
-    expect(await userFromSessionImpl(db, makeTestEnv(), null)).toBeNull();
+    expect(await userFromSessionImpl(db, betterAuthAdapter, makeTestEnv(), null)).toBeNull();
   });
 
   it('returns null when cookie present but token invalid', async () => {
     const env = makeTestEnv();
-    expect(await userFromSessionImpl(db, env, cookieHeader('not-a-real-jwt'))).toBeNull();
+    expect(await userFromSessionImpl(db, betterAuthAdapter, env, cookieHeader('not-a-real-jwt'))).toBeNull();
   });
 
   it('returns the user when JWT.sub matches better_auth_user_id', async () => {
     const u = await insertUser(db, { betterAuthUserId: 'ba-user-1' });
     const env = makeTestEnv();
     const token = await signTestJwt(env, { sub: 'ba-user-1', email: u.email });
-    const me = await userFromSessionImpl(db, env, cookieHeader(token));
+    const me = await userFromSessionImpl(db, betterAuthAdapter, env, cookieHeader(token));
     expect(me?.id).toBe(u.id);
     expect(me?.login).toBe(u.login);
   });
@@ -162,7 +163,7 @@ describe('userFromSessionImpl', () => {
       sub: 'ba-team',
       teamMemberships: [{ teamId: 'team_z', role: 'contributor' }],
     });
-    const me = await userFromSessionImpl(db, env, cookieHeader(token));
+    const me = await userFromSessionImpl(db, betterAuthAdapter, env, cookieHeader(token));
     expect(me?.teamMemberships).toEqual([{ teamId: 'team_z', role: 'contributor' }]);
   });
 
@@ -174,7 +175,7 @@ describe('userFromSessionImpl', () => {
       username: 'newhandle',
       preferredName: 'Preferred',
     });
-    const me = await userFromSessionImpl(db, env, cookieHeader(token));
+    const me = await userFromSessionImpl(db, betterAuthAdapter, env, cookieHeader(token));
     expect(me?.username).toBe('newhandle');
     expect(me?.preferredName).toBe('Preferred');
     const refreshed = await db.query.users.findFirst({ where: eq(users.id, u.id) });
@@ -195,7 +196,7 @@ describe('userFromSessionImpl', () => {
       sub: 'ba-partial',
       preferredName: 'ChangedPreferred',
     });
-    const me = await userFromSessionImpl(db, env, cookieHeader(token));
+    const me = await userFromSessionImpl(db, betterAuthAdapter, env, cookieHeader(token));
     expect(me?.username).toBe('keep');
     expect(me?.preferredName).toBe('ChangedPreferred');
     const refreshed = await db.query.users.findFirst({ where: eq(users.id, u.id) });
@@ -215,7 +216,7 @@ describe('userFromSessionImpl', () => {
       sub: 'ba-uname-only',
       username: 'newname',
     });
-    const me = await userFromSessionImpl(db, env, cookieHeader(token));
+    const me = await userFromSessionImpl(db, betterAuthAdapter, env, cookieHeader(token));
     expect(me?.username).toBe('newname');
     expect(me?.preferredName).toBe('StayPreferred');
     const refreshed = await db.query.users.findFirst({ where: eq(users.id, u.id) });
@@ -234,7 +235,7 @@ describe('userFromSessionImpl', () => {
       username: 'same',
       preferredName: 'Same',
     });
-    const me = await userFromSessionImpl(db, env, cookieHeader(token));
+    const me = await userFromSessionImpl(db, betterAuthAdapter, env, cookieHeader(token));
     expect(me?.username).toBe('same');
     expect(me?.teamMemberships).toEqual([]);
   });
@@ -243,14 +244,26 @@ describe('userFromSessionImpl', () => {
     await insertUser(db, { betterAuthUserId: 'ba-user-1' });
     const env = makeTestEnv();
     const token = await signTestJwt(env, { sub: 'unlinked-ba-user' });
-    expect(await userFromSessionImpl(db, env, cookieHeader(token))).toBeNull();
+    expect(await userFromSessionImpl(db, betterAuthAdapter, env, cookieHeader(token))).toBeNull();
+  });
+
+  it('defaults teamMemberships to [] when the identity omits them', async () => {
+    await insertUser(db, { betterAuthUserId: 'stub-sub' });
+    // A stub adapter whose identity carries no teamMemberships → the `?? []`
+    // default fires (the betterAuth adapter always supplies an array).
+    const stub = {
+      id: 'stub',
+      verify: async () => ({ subject: 'stub-sub', email: '' }),
+    } as unknown as Parameters<typeof userFromSessionImpl>[1];
+    const me = await userFromSessionImpl(db, stub, makeTestEnv(), 'cookie');
+    expect(me?.teamMemberships).toEqual([]);
   });
 
   it('returns null when the matched user is locked', async () => {
     await insertUser(db, { betterAuthUserId: 'ba-user-1', status: 'locked' });
     const env = makeTestEnv();
     const token = await signTestJwt(env, { sub: 'ba-user-1' });
-    expect(await userFromSessionImpl(db, env, cookieHeader(token))).toBeNull();
+    expect(await userFromSessionImpl(db, betterAuthAdapter, env, cookieHeader(token))).toBeNull();
   });
 });
 
@@ -258,7 +271,7 @@ describe('findOrCreateUserBySsoImpl', () => {
   it('returns the linked user when better_auth_user_id matches', async () => {
     const existing = await insertUser(db, { betterAuthUserId: 'linked-1' });
     const out = await findOrCreateUserBySsoImpl(db, {
-      sub: 'linked-1',
+      subject: 'linked-1',
       email: 'unused@example.com',
     });
     expect(out.id).toBe(existing.id);
@@ -267,7 +280,7 @@ describe('findOrCreateUserBySsoImpl', () => {
   it('syncs username/preferredName onto a linked user', async () => {
     const existing = await insertUser(db, { betterAuthUserId: 'linked-sync' });
     const out = await findOrCreateUserBySsoImpl(db, {
-      sub: 'linked-sync',
+      subject: 'linked-sync',
       email: 'unused@example.com',
       username: 'synced',
       preferredName: 'Synced Name',
@@ -281,9 +294,9 @@ describe('findOrCreateUserBySsoImpl', () => {
 
   it('persists username/preferredName on a brand-new user', async () => {
     const out = await findOrCreateUserBySsoImpl(db, {
-      sub: 'new-with-profile',
+      subject: 'new-with-profile',
       email: 'profile@example.com',
-      name: 'Profile User',
+      displayName: 'Profile User',
       username: 'profileuser',
       preferredName: 'Prof',
     });
@@ -295,7 +308,7 @@ describe('findOrCreateUserBySsoImpl', () => {
   it('backfills username/preferredName on an email-matched user', async () => {
     const existing = await insertUser(db, { email: 'bf@example.com' });
     const out = await findOrCreateUserBySsoImpl(db, {
-      sub: 'bf-uuid',
+      subject: 'bf-uuid',
       email: 'bf@example.com',
       username: 'bfhandle',
       preferredName: 'BF',
@@ -308,9 +321,9 @@ describe('findOrCreateUserBySsoImpl', () => {
   it('backfills the link onto an existing user matched by email', async () => {
     const existing = await insertUser(db, { email: 'migrating@example.com' });
     const out = await findOrCreateUserBySsoImpl(db, {
-      sub: 'fresh-uuid',
+      subject: 'fresh-uuid',
       email: 'Migrating@Example.Com',
-      name: 'Mig User',
+      displayName: 'Mig User',
     });
     expect(out.id).toBe(existing.id);
     const refreshed = await db.query.users.findFirst({ where: eq(users.id, existing.id) });
@@ -319,9 +332,9 @@ describe('findOrCreateUserBySsoImpl', () => {
 
   it('creates a brand-new user with admin=true when none exist yet', async () => {
     const out = await findOrCreateUserBySsoImpl(db, {
-      sub: 'first-user',
+      subject: 'first-user',
       email: 'first@example.com',
-      name: 'First User',
+      displayName: 'First User',
     });
     expect(out.email).toBe('first@example.com');
     expect(out.firstname).toBe('First');
@@ -332,7 +345,7 @@ describe('findOrCreateUserBySsoImpl', () => {
   it('creates a new user (non-admin) when other users already exist', async () => {
     await insertUser(db, { admin: true });
     const out = await findOrCreateUserBySsoImpl(db, {
-      sub: 'second-user',
+      subject: 'second-user',
       email: 'second@example.com',
     });
     expect(out.isAdmin).toBe(false);
@@ -341,7 +354,7 @@ describe('findOrCreateUserBySsoImpl', () => {
   it('dedupes the login when the email local-part is already taken', async () => {
     await insertUser(db, { login: 'taken', email: 'someone-else@example.com' });
     const out = await findOrCreateUserBySsoImpl(db, {
-      sub: 'sso-uuid',
+      subject: 'sso-uuid',
       email: 'taken@example.com',
     });
     expect(out.login).toBe('taken1');
@@ -349,7 +362,7 @@ describe('findOrCreateUserBySsoImpl', () => {
 
   it('throws when the JWT has no email claim and the user is brand-new', async () => {
     await expect(
-      findOrCreateUserBySsoImpl(db, { sub: 'no-email-uuid' }),
+      findOrCreateUserBySsoImpl(db, { subject: 'no-email-uuid', email: '' }),
     ).rejects.toThrow(/email/);
   });
 
@@ -358,7 +371,7 @@ describe('findOrCreateUserBySsoImpl', () => {
     // [^a-z0-9._-] regex, so `split('@')[0].replace(...)` returns ''
     // and the `|| 'user'` fallback fires.
     const out = await findOrCreateUserBySsoImpl(db, {
-      sub: 'junk-local-part',
+      subject: 'junk-local-part',
       email: '!!!@example.com',
     });
     expect(out.login).toBe('user');
