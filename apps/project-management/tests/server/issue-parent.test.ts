@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { type TestDB, insertProject, insertUser, makeTestDb } from '../_setup/db';
 import { issues } from '@allenlabs/pm-core/db/schema';
-import { type CurrentUser } from '~/server/auth';
+import { type CurrentUser } from '@allenlabs/pm-core/server/auth';
 import { createIssueImpl, getIssueImpl, updateIssueImpl } from '~/server/issues';
 import { assertValidParentImpl, rollupParentDoneRatioImpl } from '~/server/subtasks';
 

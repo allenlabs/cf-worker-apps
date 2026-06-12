@@ -8,7 +8,9 @@
     "./lib/*": "./src/lib/*.ts",
     "./db/*": "./src/db/*.ts",
     "./server/*": "./src/server/*.ts",
-    "./testing/db": "./src/testing/db.ts"
+    "./testing/db": "./src/testing/db.ts",
+    "./testing/env": "./src/testing/env.ts",
+    "./testing/jwt": "./src/testing/jwt.ts"
   },
   "files": ["src", "drizzle-pg"],
   "scripts": {
@@ -17,17 +19,21 @@
     "test:coverage": "vitest run --coverage"
   },
   "peerDependencies": {
+    "@tanstack/react-router": ">=1.170.0",
     "@tanstack/react-start": ">=1.168.0",
     "drizzle-orm": ">=0.45.0",
+    "jose": ">=6.0.0",
     "marked": ">=18.0.0",
     "postgres": ">=3.4.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.0.0",
     "@electric-sql/pglite": "^0.4.0",
+    "@tanstack/react-router": "1.170.8",
     "@tanstack/react-start": "^1.168.14",
     "@vitest/coverage-v8": "4.1.7",
     "drizzle-orm": "0.45.2",
+    "jose": "6.2.3",
     "marked": "18.0.4",
     "postgres": "^3.4.5",
     "typescript": "5.7.2",

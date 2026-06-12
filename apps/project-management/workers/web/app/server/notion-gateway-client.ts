@@ -22,7 +22,7 @@ import {
 } from '@allenlabs/pm-core/db/schema';
 import { getRefData } from '@allenlabs/pm-core/server/ref-data';
 import type { DB } from '@allenlabs/pm-core/db/client';
-import type { Env } from '~/lib/env';
+import type { Env } from '@allenlabs/pm-core/lib/env';
 import type {
   DatabaseInspectResponse,
   GatewayConnection,

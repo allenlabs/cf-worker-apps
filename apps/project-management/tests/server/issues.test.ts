@@ -7,7 +7,7 @@ import {
   makeTestDb,
 } from '../_setup/db';
 import { issues, journals, watchers } from '@allenlabs/pm-core/db/schema';
-import { type CurrentUser } from '~/server/auth';
+import { type CurrentUser } from '@allenlabs/pm-core/server/auth';
 import {
   countIssuesImpl,
   createIssueImpl,

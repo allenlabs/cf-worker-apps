@@ -25,8 +25,8 @@
 import { eq } from 'drizzle-orm';
 import type { DB } from '@allenlabs/pm-core/db/client';
 import { issues } from '@allenlabs/pm-core/db/schema';
-import type { Env } from '~/lib/env';
-import type { CurrentUser } from './auth';
+import type { Env } from '@allenlabs/pm-core/lib/env';
+import type { CurrentUser } from '@allenlabs/pm-core/server/auth';
 import { updateIssueImpl } from './issues';
 import { sign } from './notion-gateway-client';
 

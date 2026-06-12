@@ -2,7 +2,7 @@
 // SSR runtime. The default is the Better Auth adapter; a deployment can register
 // and select another via the AUTH_ADAPTER env var with zero core edits.
 
-import type { Env } from '~/lib/env';
+import type { Env } from '@allenlabs/pm-core/lib/env';
 import type { AuthAdapter } from './types';
 import { betterAuthAdapter } from './adapters/better-auth';
 

@@ -3,8 +3,8 @@
 // allenlabs deployment uses the `betterAuth` adapter (Better Auth SSO); a second
 // deployment plugs in its own adapter + config with no core edits.
 
-import type { Env } from '~/lib/env';
-import type { TeamMembershipClaim } from '~/server/session.server';
+import type { Env } from '@allenlabs/pm-core/lib/env';
+import type { TeamMembershipClaim } from '@allenlabs/pm-core/server/session.server';
 
 /**
  * Backend-neutral identity the core consumes. An adapter's `verify` turns a

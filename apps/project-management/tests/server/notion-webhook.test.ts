@@ -15,7 +15,7 @@ import {
 } from '~/server/notion-webhook';
 import { activities, issueCategories, issueStatuses, issues, journals, trackers, versions } from '@allenlabs/pm-core/db/schema';
 import { createIssueImpl, updateIssueImpl } from '~/server/issues';
-import { type CurrentUser } from '~/server/auth';
+import { type CurrentUser } from '@allenlabs/pm-core/server/auth';
 import { type TestDB, insertProject, insertUser, makeTestDb } from '../_setup/db';
 import { makeTestEnv } from '../_setup/env';
 

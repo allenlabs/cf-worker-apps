@@ -7,7 +7,7 @@ import {
   setMemberRole,
   signOrg,
   signedRequest,
-} from '~/server/org-client';
+} from '@allenlabs/pm-core/server/org-client';
 
 const env = {
   AUTH_API_URL: 'https://auth-api.test',

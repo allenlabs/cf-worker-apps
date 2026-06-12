@@ -6,9 +6,9 @@ import {
   insertProject,
   insertUser,
   makeTestDb,
-} from '../_setup/db';
-import { makeTestEnv } from '../_setup/env';
-import { primeJwks, signTestJwt } from '../_setup/jwt';
+} from '../../src/testing/db';
+import { makeTestEnv } from '../../src/testing/env';
+import { primeJwks, signTestJwt } from '../../src/testing/jwt';
 import { users } from '@allenlabs/pm-core/db/schema';
 import { ForbiddenError, UnauthorizedError } from '@allenlabs/pm-core/lib/permissions';
 import {
@@ -16,9 +16,9 @@ import {
   checkPermission,
   findOrCreateUserBySsoImpl,
   userFromSessionImpl,
-} from '~/server/auth';
-import { cookieHeader } from '~/server/session.server';
-import { betterAuthAdapter } from '~/server/auth/adapters/better-auth';
+} from '@allenlabs/pm-core/server/auth';
+import { cookieHeader } from '@allenlabs/pm-core/server/session.server';
+import { betterAuthAdapter } from '@allenlabs/pm-core/server/auth/adapters/better-auth';
 
 let db: TestDB;
 

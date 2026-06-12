@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { makeTestEnv } from '../../_setup/env';
-import { primeJwks, resetTestJwt, signTestJwt } from '../../_setup/jwt';
-import type { Env } from '~/lib/env';
-import { betterAuthAdapter } from '~/server/auth/adapters/better-auth';
+import { makeTestEnv } from '../../../src/testing/env';
+import { primeJwks, resetTestJwt, signTestJwt } from '../../../src/testing/jwt';
+import type { Env } from '@allenlabs/pm-core/lib/env';
+import { betterAuthAdapter } from '@allenlabs/pm-core/server/auth/adapters/better-auth';
 
 let env: Env;
 

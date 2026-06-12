@@ -1,5 +1,5 @@
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
-import type { Env } from '~/lib/env';
+import type { Env } from '@allenlabs/pm-core/lib/env';
 
 /**
  * Session handling for the post-SSO world.

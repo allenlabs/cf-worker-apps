@@ -14,7 +14,7 @@
 //
 // Lives under app/server/ so the secret never reaches the client bundle.
 
-import type { Env } from '~/lib/env';
+import type { Env } from '@allenlabs/pm-core/lib/env';
 
 const enc = new TextEncoder();
 

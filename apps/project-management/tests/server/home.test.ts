@@ -13,7 +13,7 @@ import {
   loadMyPageImpl,
 } from '~/server/home';
 import { createIssueImpl } from '~/server/issues';
-import { type CurrentUser } from '~/server/auth';
+import { type CurrentUser } from '@allenlabs/pm-core/server/auth';
 
 let db: TestDB;
 

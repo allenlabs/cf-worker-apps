@@ -53,7 +53,7 @@ vi.mock('~/server/auth-runtime.server', () => ({
   },
 }));
 
-vi.mock('~/server/session.server', () => ({
+vi.mock('@allenlabs/pm-core/server/session.server', () => ({
   readSessionToken: () => {
     callTracker.readSessionToken++;
     return 'mock-token';

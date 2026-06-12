@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { makeTestEnv } from '../../_setup/env';
-import { registerAdapter, selectAdapter } from '~/server/auth/registry';
-import { betterAuthAdapter } from '~/server/auth/adapters/better-auth';
-import type { AuthAdapter } from '~/server/auth/types';
+import { makeTestEnv } from '../../../src/testing/env';
+import { registerAdapter, selectAdapter } from '@allenlabs/pm-core/server/auth/registry';
+import { betterAuthAdapter } from '@allenlabs/pm-core/server/auth/adapters/better-auth';
+import type { AuthAdapter } from '@allenlabs/pm-core/server/auth/types';
 
 describe('selectAdapter', () => {
   it('defaults to the betterAuth adapter', () => {

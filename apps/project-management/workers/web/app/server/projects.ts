@@ -18,8 +18,8 @@ import {
   UnauthorizedError,
 } from '@allenlabs/pm-core/lib/permissions';
 import { logActivityImpl } from '@allenlabs/pm-core/server/activities';
-import { type CurrentUser } from './auth';
-import type { ProjectCreatedContext, ProjectProvisionResult } from './auth/types';
+import { type CurrentUser } from '@allenlabs/pm-core/server/auth';
+import type { ProjectCreatedContext, ProjectProvisionResult } from '@allenlabs/pm-core/server/auth/types';
 import {
   buildAuthContext,
   getAdapter,

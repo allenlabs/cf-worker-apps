@@ -17,8 +17,8 @@ import {
   wikis,
 } from '@allenlabs/pm-core/db/schema';
 import { type AuthContext, type Permission } from '@allenlabs/pm-core/lib/permissions';
-import { type CurrentUser } from '~/server/auth';
-import { type ProjectCreatedContext } from '~/server/auth/types';
+import { type CurrentUser } from '@allenlabs/pm-core/server/auth';
+import { type ProjectCreatedContext } from '@allenlabs/pm-core/server/auth/types';
 import {
   createProjectImpl,
   deleteProjectImpl,

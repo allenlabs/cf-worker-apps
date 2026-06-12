@@ -1,6 +1,6 @@
 import { createFileRoute, redirect } from '@tanstack/react-router';
 import { getRequest } from '@tanstack/react-start/server';
-import { findOrCreateUserBySsoImpl } from '~/server/auth';
+import { findOrCreateUserBySsoImpl } from '@allenlabs/pm-core/server/auth';
 import { getAdapter, getDb, getEnv } from '~/server/auth-runtime.server';
 
 /**

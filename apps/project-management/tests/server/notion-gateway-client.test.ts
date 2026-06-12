@@ -18,7 +18,7 @@ import {
 } from '../_setup/db';
 import { makeTestEnv } from '../_setup/env';
 import { issueCategories, versions } from '@allenlabs/pm-core/db/schema';
-import { type CurrentUser } from '~/server/auth';
+import { type CurrentUser } from '@allenlabs/pm-core/server/auth';
 import { createIssueImpl } from '~/server/issues';
 import {
   deletePage,

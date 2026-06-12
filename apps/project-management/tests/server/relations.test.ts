@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { type TestDB, insertProject, insertUser, makeTestDb } from '../_setup/db';
 import { issueRelations } from '@allenlabs/pm-core/db/schema';
-import { type CurrentUser } from '~/server/auth';
+import { type CurrentUser } from '@allenlabs/pm-core/server/auth';
 import { createIssueImpl } from '~/server/issues';
 import {
   addRelationImpl,

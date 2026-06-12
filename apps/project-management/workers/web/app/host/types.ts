@@ -7,7 +7,7 @@
 
 import type { DB } from '@allenlabs/pm-core/db/client';
 import type { Permission } from '@allenlabs/pm-core/lib/permissions';
-import type { CurrentUser } from '~/server/auth';
+import type { CurrentUser } from '@allenlabs/pm-core/server/auth';
 import type { CreateIssueInput } from '~/server/issues';
 import type { Issue } from '@allenlabs/pm-core/db/schema';
 

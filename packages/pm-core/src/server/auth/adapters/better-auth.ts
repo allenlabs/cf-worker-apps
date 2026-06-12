@@ -5,7 +5,7 @@
 // assumptions live here.
 
 import { redirect } from '@tanstack/react-router';
-import type { Env } from '~/lib/env';
+import type { Env } from '@allenlabs/pm-core/lib/env';
 import {
   clearCookieHeader,
   cookieHeader,
@@ -13,8 +13,8 @@ import {
   revokeSession,
   type SessionPayload,
   verifySessionToken,
-} from '~/server/session.server';
-import { createTeam } from '~/server/org-client';
+} from '@allenlabs/pm-core/server/session.server';
+import { createTeam } from '@allenlabs/pm-core/server/org-client';
 import type { AuthAdapter, AuthIdentity } from '../types';
 
 /** Map the verified JWT payload to the backend-neutral identity. */

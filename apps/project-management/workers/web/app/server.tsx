@@ -20,7 +20,7 @@ import {
   defaultStreamHandler,
 } from '@tanstack/react-start/server';
 import { instrument, type ResolveConfigFn } from '@microlabs/otel-cf-workers';
-import type { Env } from '~/lib/env';
+import type { Env } from '@allenlabs/pm-core/lib/env';
 
 const handler = createStartHandler(defaultStreamHandler);
 

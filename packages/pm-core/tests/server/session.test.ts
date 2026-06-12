@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { makeTestEnv } from '../_setup/env';
-import { primeJwks, signTestJwt } from '../_setup/jwt';
+import { makeTestEnv } from '../../src/testing/env';
+import { primeJwks, signTestJwt } from '../../src/testing/jwt';
 import {
   SESSION_COOKIE,
   clearCookieHeader,
@@ -8,7 +8,7 @@ import {
   readSessionToken,
   revokeSession,
   verifySessionToken,
-} from '~/server/session.server';
+} from '@allenlabs/pm-core/server/session.server';
 
 describe('verifySessionToken (RS256 / JWKS)', () => {
   beforeEach(async () => {
@@ -69,7 +69,7 @@ describe('verifySessionToken (RS256 / JWKS)', () => {
     // JWKS cache with a fresh ephemeral key so the token verifies.
     const env = makeTestEnv();
     const { SignJWT, generateKeyPair, exportJWK, createLocalJWKSet } = await import('jose');
-    const { _setJwksForTests } = await import('~/server/session.server');
+    const { _setJwksForTests } = await import('@allenlabs/pm-core/server/session.server');
     const { privateKey, publicKey } = await generateKeyPair('RS256', { extractable: true });
     const publicJwk = await exportJWK(publicKey);
     publicJwk.kid = 'numeric-sub-kid';
@@ -94,7 +94,7 @@ describe('verifySessionToken (RS256 / JWKS)', () => {
     // branch: `err instanceof Error ? ... : String(err)`.  Force jwtVerify
     // to throw a bare string so that branch runs.
     const env = makeTestEnv();
-    const { _setJwksForTests } = await import('~/server/session.server');
+    const { _setJwksForTests } = await import('@allenlabs/pm-core/server/session.server');
     // A JWKS callable that throws a string — non-Error throw values are
     // rare but legal and our catch must handle them.
     _setJwksForTests(env.AUTH_API_URL, (() => {

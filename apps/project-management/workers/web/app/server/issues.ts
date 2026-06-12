@@ -20,7 +20,7 @@ import { host } from '~/host';
 import { logActivityImpl } from '@allenlabs/pm-core/server/activities';
 import { listIssueLabelsImpl } from './labels';
 import { RELATION_TYPES, listRelationsImpl } from './relations';
-import { type CurrentUser } from './auth';
+import { type CurrentUser } from '@allenlabs/pm-core/server/auth';
 import { buildAuthContext, getDb, getCurrentUser, getEnv, requirePermission, requireUser } from './auth-runtime.server';
 import * as notionGateway from './notion-gateway-client';
 import { getRefData } from '@allenlabs/pm-core/server/ref-data';

@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { type DB } from '@allenlabs/pm-core/db/client';
 import { issues, projects, wikiPages, wikiRevisions, wikis } from '@allenlabs/pm-core/db/schema';
 import { type AuthContext } from '@allenlabs/pm-core/lib/permissions';
-import { type CurrentUser } from './auth';
+import { type CurrentUser } from '@allenlabs/pm-core/server/auth';
 import { buildAuthContext, getCurrentUser, getDb } from './auth-runtime.server';
 
 export interface SearchInput {

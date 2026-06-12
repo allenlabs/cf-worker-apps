@@ -12,9 +12,9 @@ import {
   type OrgClientDeps,
   type TeamInvitation,
   type TeamMember,
-} from './org-client';
+} from '@allenlabs/pm-core/server/org-client';
 import { getRefData } from '@allenlabs/pm-core/server/ref-data';
-import type { Env } from '~/lib/env';
+import type { Env } from '@allenlabs/pm-core/lib/env';
 
 type OrgEnv = Pick<Env, 'AUTH_API_URL' | 'PM_ORG_HMAC_CLIENT_ID' | 'PM_ORG_HMAC_SECRET'>;
 

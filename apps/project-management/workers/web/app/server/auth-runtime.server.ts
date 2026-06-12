@@ -6,7 +6,7 @@
 /* v8 ignore start */
 import { getRequest } from '@tanstack/react-start/server';
 import { type DB, makeDb } from '@allenlabs/pm-core/db/client';
-import type { Env } from '~/lib/env';
+import type { Env } from '@allenlabs/pm-core/lib/env';
 import {
   type AuthContext,
   type Permission,
@@ -18,9 +18,9 @@ import {
   checkPermission,
   type CurrentUser,
   userFromSessionImpl,
-} from './auth';
-import { type AuthAdapter } from './auth/types';
-import { selectAdapter } from './auth/registry';
+} from '@allenlabs/pm-core/server/auth';
+import { type AuthAdapter } from '@allenlabs/pm-core/server/auth/types';
+import { selectAdapter } from '@allenlabs/pm-core/server/auth/registry';
 
 export function getEnv(): Env {
   const req = getRequest();

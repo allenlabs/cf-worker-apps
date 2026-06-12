@@ -3,7 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { issues, projects, users } from '@allenlabs/pm-core/db/schema';
 import type { DB } from '@allenlabs/pm-core/db/client';
-import { buildAuthContextImpl, type CurrentUser } from '../../../web/app/server/auth';
+import { buildAuthContextImpl, type CurrentUser } from '@allenlabs/pm-core/server/auth';
 import {
   countIssuesImpl,
   createIssueImpl,
