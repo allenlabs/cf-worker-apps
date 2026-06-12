@@ -1,7 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import { definePmPlugin } from '~/host/types';
-import { issues } from '~/db/schema';
-import type { DB } from '~/db/client';
+import { issues } from '@allenlabs/pm-core/db/schema';
+import type { DB } from '@allenlabs/pm-core/db/client';
 import { addRelationImpl } from '~/server/relations';
 
 function findByNumber(db: DB, projectId: number, number: number) {

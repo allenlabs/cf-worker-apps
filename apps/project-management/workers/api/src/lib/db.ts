@@ -5,8 +5,8 @@
 
 import postgres from 'postgres';
 import { drizzle } from 'drizzle-orm/postgres-js';
-import * as schema from '../../../web/app/db/schema';
-import type { DB } from '../../../web/app/db/client';
+import * as schema from '@allenlabs/pm-core/db/schema';
+import type { DB } from '@allenlabs/pm-core/db/client';
 
 export function makeDb(env: { HYPERDRIVE: Hyperdrive }): DB {
   const raw = postgres(env.HYPERDRIVE.connectionString, {

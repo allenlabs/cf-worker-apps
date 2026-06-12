@@ -7,7 +7,7 @@ import {
   insertUser,
   makeTestDb,
 } from '../_setup/db';
-import { activities, issues, watchers } from '~/db/schema';
+import { activities, issues, watchers } from '@allenlabs/pm-core/db/schema';
 import {
   loadHomeImpl,
   loadMyPageImpl,

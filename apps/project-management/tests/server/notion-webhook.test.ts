@@ -13,7 +13,7 @@ import {
   translateFieldsImpl,
   verifyWebhookImpl,
 } from '~/server/notion-webhook';
-import { activities, issueCategories, issueStatuses, issues, journals, trackers, versions } from '~/db/schema';
+import { activities, issueCategories, issueStatuses, issues, journals, trackers, versions } from '@allenlabs/pm-core/db/schema';
 import { createIssueImpl, updateIssueImpl } from '~/server/issues';
 import { type CurrentUser } from '~/server/auth';
 import { type TestDB, insertProject, insertUser, makeTestDb } from '../_setup/db';

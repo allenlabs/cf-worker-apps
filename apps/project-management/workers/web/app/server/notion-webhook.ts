@@ -23,8 +23,8 @@
 // secret both sides use — the gateway signs outbound; PM signs inbound).
 
 import { eq } from 'drizzle-orm';
-import type { DB } from '~/db/client';
-import { issues } from '~/db/schema';
+import type { DB } from '@allenlabs/pm-core/db/client';
+import { issues } from '@allenlabs/pm-core/db/schema';
 import type { Env } from '~/lib/env';
 import type { CurrentUser } from './auth';
 import { updateIssueImpl } from './issues';
@@ -99,7 +99,7 @@ import {
   issueCategories,
   users,
   versions,
-} from '~/db/schema';
+} from '@allenlabs/pm-core/db/schema';
 import { getRefData } from './ref-data';
 
 async function resolveByName<T extends { id: number; name: string }>(

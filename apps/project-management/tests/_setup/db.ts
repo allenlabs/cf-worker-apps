@@ -2,8 +2,8 @@ import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { type DB } from '~/db/client';
-import * as schema from '~/db/schema';
+import { type DB } from '@allenlabs/pm-core/db/client';
+import * as schema from '@allenlabs/pm-core/db/schema';
 import { deriveProjectKey } from '@allenlabs/pm-core/lib/format';
 
 // We surface `DB` as the test database type so server impls (typed

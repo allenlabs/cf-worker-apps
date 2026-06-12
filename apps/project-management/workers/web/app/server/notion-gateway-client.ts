@@ -19,9 +19,9 @@ import {
   issues,
   users,
   versions,
-} from '~/db/schema';
+} from '@allenlabs/pm-core/db/schema';
 import { getRefData } from './ref-data';
-import type { DB } from '~/db/client';
+import type { DB } from '@allenlabs/pm-core/db/client';
 import type { Env } from '~/lib/env';
 import type {
   DatabaseInspectResponse,

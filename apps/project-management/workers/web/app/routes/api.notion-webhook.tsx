@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { eq } from 'drizzle-orm';
-import { users } from '~/db/schema';
+import { users } from '@allenlabs/pm-core/db/schema';
 import {
   dispatchWebhookImpl,
   verifyWebhookImpl,

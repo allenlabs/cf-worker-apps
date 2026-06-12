@@ -1,8 +1,8 @@
 import { Hono } from 'hono';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { issues, projects, users } from '../../../web/app/db/schema';
-import type { DB } from '../../../web/app/db/client';
+import { issues, projects, users } from '@allenlabs/pm-core/db/schema';
+import type { DB } from '@allenlabs/pm-core/db/client';
 import { buildAuthContextImpl, type CurrentUser } from '../../../web/app/server/auth';
 import {
   countIssuesImpl,

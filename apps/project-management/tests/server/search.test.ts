@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { type TestDB, insertProject, insertUser, makeTestDb } from '../_setup/db';
-import { issues } from '~/db/schema';
+import { issues } from '@allenlabs/pm-core/db/schema';
 import { type CurrentUser } from '~/server/auth';
 import { saveWikiPageImpl } from '~/server/wiki';
 import { searchImpl, visibleProjectIdsImpl } from '~/server/search';

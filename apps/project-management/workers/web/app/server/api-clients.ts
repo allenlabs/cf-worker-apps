@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
-import { type DB } from '~/db/client';
-import { apiClients } from '~/db/schema';
+import { type DB } from '@allenlabs/pm-core/db/client';
+import { apiClients } from '@allenlabs/pm-core/db/schema';
 
 export interface ApiClientRow {
   id: number;

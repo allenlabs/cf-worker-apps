@@ -1,7 +1,7 @@
 import { createServerFn } from '@tanstack/react-start';
 import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { type DB } from '~/db/client';
+import { type DB } from '@allenlabs/pm-core/db/client';
 import {
   enabledModules,
   issueCategories,
@@ -10,7 +10,7 @@ import {
   projects,
   versions,
   wikis,
-} from '~/db/schema';
+} from '@allenlabs/pm-core/db/schema';
 import { deriveProjectKey, PROJECT_KEY_RE, slugify } from '@allenlabs/pm-core/lib/format';
 import {
   type AuthContext,

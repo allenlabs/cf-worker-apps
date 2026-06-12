@@ -1,8 +1,8 @@
 import { createServerFn } from '@tanstack/react-start';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { type DB } from '~/db/client';
-import { members, projects, roles, users } from '~/db/schema';
+import { type DB } from '@allenlabs/pm-core/db/client';
+import { members, projects, roles, users } from '@allenlabs/pm-core/db/schema';
 import { getDb, getEnv, requirePermission, requireUser } from './auth-runtime.server';
 import {
   inviteMember,

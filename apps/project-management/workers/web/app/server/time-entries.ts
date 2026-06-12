@@ -1,8 +1,8 @@
 import { createServerFn } from '@tanstack/react-start';
 import { and, desc, eq, gte, lte, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { type DB } from '~/db/client';
-import { issues, timeEntries, timeEntryActivities, users } from '~/db/schema';
+import { type DB } from '@allenlabs/pm-core/db/client';
+import { issues, timeEntries, timeEntryActivities, users } from '@allenlabs/pm-core/db/schema';
 import { logActivityImpl } from './activities';
 import { type CurrentUser } from './auth';
 import { getDb, requirePermission, requireUser } from './auth-runtime.server';

@@ -6,6 +6,12 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts', 'src/**/*.tsx'],
+      // db/* is the SSR-runtime client (makeDb/buildClient need a live
+      // Hyperdrive binding + the TanStack request context), so it's covered
+      // by deploy/integration, not in-process unit tests — mirroring the app's
+      // own `workers/web/app/db/**` coverage exclusion. The pure retry logic
+      // in client.ts is still behaviourally exercised by tests/db/cold-start.
+      exclude: ['src/db/**'],
       thresholds: {
         lines: 100,
         statements: 100,

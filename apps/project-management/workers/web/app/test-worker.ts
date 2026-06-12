@@ -8,7 +8,7 @@
 // the @tanstack/start-plugin-core Vite plugin has set up `#tanstack-router-entry`.
 // For the integration tests we just need to prove the leaf primitives behave.
 
-import { makeDb } from '~/db/client';
+import { makeDb } from '@allenlabs/pm-core/db/client';
 import type { Env } from '~/lib/env';
 import { findOrCreateUserBySsoImpl, userFromSessionImpl } from '~/server/auth';
 import { betterAuthAdapter } from '~/server/auth/adapters/better-auth';

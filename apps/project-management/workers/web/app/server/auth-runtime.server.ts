@@ -5,7 +5,7 @@
 // tests/workers/ (they exercise the same code paths via real HTTP requests).
 /* v8 ignore start */
 import { getRequest } from '@tanstack/react-start/server';
-import { type DB, makeDb } from '~/db/client';
+import { type DB, makeDb } from '@allenlabs/pm-core/db/client';
 import type { Env } from '~/lib/env';
 import {
   type AuthContext,

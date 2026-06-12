@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { type TestDB, insertProject, insertUser, makeTestDb } from '../_setup/db';
-import { attachments } from '~/db/schema';
+import { attachments } from '@allenlabs/pm-core/db/schema';
 import { makeMemoryR2 } from '../_setup/env';
 import {
   deleteAttachmentImpl,

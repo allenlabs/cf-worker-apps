@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { type TestDB, insertProject, insertUser, makeTestDb } from '../_setup/db';
-import { wikiPages } from '~/db/schema';
+import { wikiPages } from '@allenlabs/pm-core/db/schema';
 import { type CurrentUser } from '~/server/auth';
 import {
   deleteWikiPageImpl,
@@ -39,7 +39,7 @@ describe('wiki impls', () => {
 
   it('creates a wiki row on-demand for a project that has none', async () => {
     // wipe the wiki row that insertProject() left behind
-    const { wikis: wikisTable } = await import('~/db/schema');
+    const { wikis: wikisTable } = await import('@allenlabs/pm-core/db/schema');
     const { eq: eqOp } = await import('drizzle-orm');
     await db.delete(wikisTable).where(eqOp(wikisTable.projectId, projectId));
     const { wiki } = await listWikiPagesImpl(db, projectId);
@@ -85,7 +85,7 @@ describe('wiki impls', () => {
   });
 
   it('getWikiPageImpl returns null revision when page has no currentRevisionId', async () => {
-    const { wikiPages, wikis } = await import('~/db/schema');
+    const { wikiPages, wikis } = await import('@allenlabs/pm-core/db/schema');
     const { eq: eqOp } = await import('drizzle-orm');
     const wiki = (await db.query.wikis.findFirst({ where: eqOp(wikis.projectId, projectId) }))!;
     await db.insert(wikiPages).values({

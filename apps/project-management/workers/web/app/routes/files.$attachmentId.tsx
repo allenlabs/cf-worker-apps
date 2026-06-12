@@ -2,7 +2,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { attachments } from '~/db/schema';
+import { attachments } from '@allenlabs/pm-core/db/schema';
 import { streamAttachment } from '~/server/attachments';
 import {
   buildAuthContext,

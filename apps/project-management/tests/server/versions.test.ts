@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { type TestDB, insertProject, insertUser, makeTestDb } from '../_setup/db';
-import { issues, versions } from '~/db/schema';
+import { issues, versions } from '@allenlabs/pm-core/db/schema';
 import {
   createVersionImpl,
   deleteVersionImpl,

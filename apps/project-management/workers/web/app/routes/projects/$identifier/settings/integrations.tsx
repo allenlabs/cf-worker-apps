@@ -3,7 +3,7 @@ import { createServerFn } from '@tanstack/react-start';
 import { eq } from 'drizzle-orm';
 import { useState } from 'react';
 import { z } from 'zod';
-import { issues, issueStatuses } from '~/db/schema';
+import { issues, issueStatuses } from '@allenlabs/pm-core/db/schema';
 import { PM_FIELDS } from '@cf-worker-apps/notion-gateway/shared/src/types';
 import { useT } from '@allenlabs/i18n/react';
 import { notifyError, notifySuccess } from '~/lib/toast';

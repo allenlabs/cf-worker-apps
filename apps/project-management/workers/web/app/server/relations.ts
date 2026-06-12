@@ -1,8 +1,8 @@
 import { createServerFn } from '@tanstack/react-start';
 import { and, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
-import { type DB } from '~/db/client';
-import { issueRelations, issueStatuses, issues, projects } from '~/db/schema';
+import { type DB } from '@allenlabs/pm-core/db/client';
+import { issueRelations, issueStatuses, issues, projects } from '@allenlabs/pm-core/db/schema';
 import { getDb, requirePermission } from './auth-runtime.server';
 
 // Canonical (stored) relation types and their displayed inverse.

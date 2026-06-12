@@ -1,7 +1,7 @@
 import { createServerFn } from '@tanstack/react-start';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { type DB } from '~/db/client';
+import { type DB } from '@allenlabs/pm-core/db/client';
 import {
   issueCategories,
   issuePriorities,
@@ -14,7 +14,7 @@ import {
   users,
   versions,
   watchers,
-} from '~/db/schema';
+} from '@allenlabs/pm-core/db/schema';
 import { ForbiddenError } from '@allenlabs/pm-core/lib/permissions';
 import { host } from '~/host';
 import { logActivityImpl } from './activities';

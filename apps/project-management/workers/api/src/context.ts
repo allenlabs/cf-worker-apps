@@ -1,5 +1,5 @@
 import type { Env } from './lib/env';
-import type { DB } from '../../web/app/db/client';
+import type { DB } from '@allenlabs/pm-core/db/client';
 
 export interface AppClientContext {
   id: number;

@@ -1,8 +1,8 @@
 import { createServerFn } from '@tanstack/react-start';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { type DB } from '~/db/client';
-import { issueStatuses, issues, versions } from '~/db/schema';
+import { type DB } from '@allenlabs/pm-core/db/client';
+import { issueStatuses, issues, versions } from '@allenlabs/pm-core/db/schema';
 import { getDb, requirePermission } from './auth-runtime.server';
 
 export interface VersionWithProgress {

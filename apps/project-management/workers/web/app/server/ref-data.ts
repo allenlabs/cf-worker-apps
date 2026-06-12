@@ -10,13 +10,13 @@
 // memory, so each freshly-warmed worker pays one cold lookup, after which
 // every subsequent request inside the 60 s window is free.
 
-import { type DB } from '~/db/client';
+import { type DB } from '@allenlabs/pm-core/db/client';
 import {
   issuePriorities,
   issueStatuses,
   roles,
   trackers,
-} from '~/db/schema';
+} from '@allenlabs/pm-core/db/schema';
 
 export type Tracker = typeof trackers.$inferSelect;
 export type IssueStatus = typeof issueStatuses.$inferSelect;

@@ -9,7 +9,7 @@ import type { Context, MiddlewareHandler } from 'hono';
 import { verifyRequest } from '@allenlabs/pm-core/lib/hmac';
 import { findApiClientImpl } from '../../../web/app/server/api-clients';
 import { makeDb } from '../lib/db';
-import type { DB } from '../../../web/app/db/client';
+import type { DB } from '@allenlabs/pm-core/db/client';
 import type { AppBindings, AppClientContext } from '../context';
 
 /* v8 ignore next 1 — default-factory closure exercised end-to-end at deploy. */

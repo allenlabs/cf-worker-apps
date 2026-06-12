@@ -1,8 +1,8 @@
 import { createServerFn } from '@tanstack/react-start';
 import { and, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { type DB } from '~/db/client';
-import { attachments } from '~/db/schema';
+import { type DB } from '@allenlabs/pm-core/db/client';
+import { attachments } from '@allenlabs/pm-core/db/schema';
 import { getDb, getEnv, requirePermission } from './auth-runtime.server';
 
 export type ContainerType = 'issue' | 'wiki_page' | 'project' | 'journal';

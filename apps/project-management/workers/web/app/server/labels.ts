@@ -1,8 +1,8 @@
 import { createServerFn } from '@tanstack/react-start';
 import { and, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
-import { type DB } from '~/db/client';
-import { issueLabels, issues, labels } from '~/db/schema';
+import { type DB } from '@allenlabs/pm-core/db/client';
+import { issueLabels, issues, labels } from '@allenlabs/pm-core/db/schema';
 import { getDb, requirePermission } from './auth-runtime.server';
 
 export type LabelRow = typeof labels.$inferSelect;

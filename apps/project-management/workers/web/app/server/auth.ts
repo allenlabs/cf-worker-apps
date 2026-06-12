@@ -1,6 +1,6 @@
 import { eq, inArray } from 'drizzle-orm';
-import { type DB } from '~/db/client';
-import { members, projects, roles, users } from '~/db/schema';
+import { type DB } from '@allenlabs/pm-core/db/client';
+import { members, projects, roles, users } from '@allenlabs/pm-core/db/schema';
 import type { Env } from '~/lib/env';
 import {
   type AuthContext,

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { type TestDB, insertProject, insertUser, makeTestDb } from '../_setup/db';
-import { timeEntries } from '~/db/schema';
+import { timeEntries } from '@allenlabs/pm-core/db/schema';
 import { type CurrentUser } from '~/server/auth';
 import {
   createTimeEntryImpl,
@@ -51,7 +51,7 @@ describe('time entry impls', () => {
   });
 
   it('createTimeEntryImpl mentions issueId in activity title when set', async () => {
-    const { issues } = await import('~/db/schema');
+    const { issues } = await import('@allenlabs/pm-core/db/schema');
     const [issue] = await db
       .insert(issues)
       .values({

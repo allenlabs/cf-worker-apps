@@ -15,7 +15,7 @@
  * shape.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { wrapWithColdStartRetry } from '~/db/client';
+import { wrapWithColdStartRetry } from '../../src/db/client';
 
 const COLD_START_ERR = Object.assign(new Error('write CONNECTION_DESTROYED'), {
   code: 'CONNECTION_DESTROYED',

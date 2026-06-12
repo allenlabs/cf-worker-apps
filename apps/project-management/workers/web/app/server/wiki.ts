@@ -1,8 +1,8 @@
 import { createServerFn } from '@tanstack/react-start';
 import { and, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { type DB } from '~/db/client';
-import { users, wikiPages, wikiRevisions, wikis } from '~/db/schema';
+import { type DB } from '@allenlabs/pm-core/db/client';
+import { users, wikiPages, wikiRevisions, wikis } from '@allenlabs/pm-core/db/schema';
 import { slugify } from '@allenlabs/pm-core/lib/format';
 import { logActivityImpl } from './activities';
 import { type CurrentUser } from './auth';

@@ -6,7 +6,7 @@ import {
   insertUser,
   makeTestDb,
 } from '../_setup/db';
-import { issues, journals, watchers } from '~/db/schema';
+import { issues, journals, watchers } from '@allenlabs/pm-core/db/schema';
 import { type CurrentUser } from '~/server/auth';
 import {
   countIssuesImpl,
@@ -81,7 +81,7 @@ describe('createIssueImpl', () => {
 
   it('throws if default status/priority missing', async () => {
     // wipe seeded defaults
-    await db.delete((await import('~/db/schema')).issueStatuses);
+    await db.delete((await import('@allenlabs/pm-core/db/schema')).issueStatuses);
     await expect(seedIssue()).rejects.toThrow(/Default status/);
   });
 
@@ -192,7 +192,7 @@ describe('listIssuesImpl', () => {
   });
 
   it('filters by priority, version, and category', async () => {
-    const { versions, issueCategories } = await import('~/db/schema');
+    const { versions, issueCategories } = await import('@allenlabs/pm-core/db/schema');
     const [ver] = await db
       .insert(versions)
       .values({ projectId, name: 'v1', description: '', sharing: 'none' })
@@ -238,7 +238,7 @@ describe('getIssueImpl', () => {
   });
 
   it('returns assignee / category / version / parent when all are set', async () => {
-    const { issueCategories, versions } = await import('~/db/schema');
+    const { issueCategories, versions } = await import('@allenlabs/pm-core/db/schema');
     const [cat] = await db
       .insert(issueCategories)
       .values({ projectId, name: 'Backend' })

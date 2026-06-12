@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
-import { type DB } from '~/db/client';
-import { issues } from '~/db/schema';
+import { type DB } from '@allenlabs/pm-core/db/client';
+import { issues } from '@allenlabs/pm-core/db/schema';
 
 /**
  * Validate that `childId` may be parented under `parentId` (null = detach). Same

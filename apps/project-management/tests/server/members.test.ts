@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { type TestDB, addManager, insertProject, insertUser, makeTestDb } from '../_setup/db';
-import { members, roles } from '~/db/schema';
+import { members, roles } from '@allenlabs/pm-core/db/schema';
 import {
   addMemberImpl,
   changeMemberRoleImpl,

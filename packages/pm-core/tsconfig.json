@@ -11,7 +11,7 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": ["node"]
+    "types": ["@cloudflare/workers-types", "node"]
   },
   "include": ["src/**/*", "tests/**/*"]
 }

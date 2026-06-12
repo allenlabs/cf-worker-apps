@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { type TestDB, insertProject, insertUser, makeTestDb } from '../_setup/db';
-import { watchers } from '~/db/schema';
+import { watchers } from '@allenlabs/pm-core/db/schema';
 import { type CurrentUser } from '~/server/auth';
 import { createIssueImpl, updateIssueImpl } from '~/server/issues';
 import {

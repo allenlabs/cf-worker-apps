@@ -15,7 +15,7 @@ import {
   projectTrackers,
   versions,
   wikis,
-} from '~/db/schema';
+} from '@allenlabs/pm-core/db/schema';
 import { type AuthContext, type Permission } from '@allenlabs/pm-core/lib/permissions';
 import { type CurrentUser } from '~/server/auth';
 import { type ProjectCreatedContext } from '~/server/auth/types';
@@ -313,7 +313,7 @@ describe('createProjectImpl', () => {
   });
 
   it('skips tracker enabling when no trackers seeded', async () => {
-    const { trackers } = await import('~/db/schema');
+    const { trackers } = await import('@allenlabs/pm-core/db/schema');
     await db.delete(trackers);
     const u = await insertUser(db);
     const created = await createProjectImpl(db, makeUser({ id: u.id, login: u.login }), {
@@ -327,7 +327,7 @@ describe('createProjectImpl', () => {
   });
 
   it('skips manager assignment when Manager role missing', async () => {
-    const { roles } = await import('~/db/schema');
+    const { roles } = await import('@allenlabs/pm-core/db/schema');
     await db.delete(roles);
     const u = await insertUser(db);
     const created = await createProjectImpl(db, makeUser({ id: u.id, login: u.login }), {
