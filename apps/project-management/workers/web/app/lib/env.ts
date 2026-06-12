@@ -19,6 +19,11 @@ export interface Env {
   DEFAULT_LANGUAGE: string;
   ATTACHMENT_TTL_DAYS?: string;
 
+  // Selects the auth adapter (server/auth/registry.ts); defaults to 'betterAuth'.
+  // The AUTH_WEB_URL/AUTH_API_URL/PM_ORG_HMAC_* below are the betterAuth adapter's
+  // config — a second deployment points them at its own Better Auth auth-api.
+  AUTH_ADAPTER?: string;
+
   // SSO — both must point at the same allenlabs-auth deployment. Sign-in
   // happens at AUTH_WEB_URL/sign-in; PM exchanges codes and verifies JWTs
   // against AUTH_API_URL.
