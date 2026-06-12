@@ -18,6 +18,7 @@ import {
 } from '~/db/schema';
 import { type AuthContext, type Permission } from '~/lib/permissions';
 import { type CurrentUser } from '~/server/auth';
+import { type ProjectCreatedContext } from '~/server/auth/types';
 import {
   createProjectImpl,
   deleteProjectImpl,
@@ -374,17 +375,17 @@ describe('createProjectImpl', () => {
 
   it('passes a null actingExternalUserId when the creator has no external id', async () => {
     const u = await insertUser(db);
-    let seen: { actingExternalUserId: string | null } | null = null;
+    const holder: { ctx: ProjectCreatedContext | null } = { ctx: null };
     await createProjectImpl(
       db,
       makeUser({ id: u.id, login: u.login, betterAuthUserId: null }),
       { identifier: 'no-ext', name: 'No Ext', description: '', homepage: '', isPublic: false },
       async (ctx) => {
-        seen = ctx;
+        holder.ctx = ctx;
         return { teamId: null };
       },
     );
-    expect(seen?.actingExternalUserId).toBeNull();
+    expect(holder.ctx?.actingExternalUserId).toBeNull();
   });
 
   it('creates with pm.members RBAC (null team) when no provision hook is given', async () => {

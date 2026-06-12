@@ -16,10 +16,10 @@ import {
   watchers,
 } from '~/db/schema';
 import { ForbiddenError } from '~/lib/permissions';
+import { host } from '~/host';
 import { logActivityImpl } from './activities';
-import { listIssueLabelsImpl, setIssueLabelsImpl } from './labels';
-import { dispatchIssueNotificationsImpl } from './notifications';
-import { RELATION_TYPES, addRelationImpl, listRelationsImpl } from './relations';
+import { listIssueLabelsImpl } from './labels';
+import { RELATION_TYPES, listRelationsImpl } from './relations';
 import { type CurrentUser } from './auth';
 import { buildAuthContext, getDb, getCurrentUser, getEnv, requirePermission, requireUser } from './auth-runtime.server';
 import * as notionGateway from './notion-gateway-client';
@@ -323,29 +323,10 @@ export async function createIssueImpl(
     throw new Error('Default status or priority is missing — run db seed.');
   }
 
-  // A new issue can only be parented under an existing issue in the same
-  // project. (A cycle is impossible at creation — the issue has no children.)
-  if (data.parentId != null) {
-    const parent = await db.query.issues.findFirst({ where: eq(issues.id, data.parentId) });
-    if (!parent || parent.projectId !== data.projectId) {
-      throw new Error('Parent issue must be in the same project.');
-    }
-  }
-
-  // Pre-resolve relation targets (given by per-project number) so a bad target
-  // fails BEFORE the issue row is created — no orphaned issue on error.
-  const relationTargets: Array<{ targetId: number; type: (typeof RELATION_TYPES)[number] }> = [];
-  if (data.relations) {
-    for (const rel of data.relations) {
-      const target = await db.query.issues.findFirst({
-        where: and(eq(issues.projectId, data.projectId), eq(issues.number, rel.targetNumber)),
-      });
-      if (!target) {
-        throw new Error(`Related issue #${rel.targetNumber} not found in this project.`);
-      }
-      relationTargets.push({ targetId: target.id, type: rel.type });
-    }
-  }
+  const ctx = { db, actingUser: user, host };
+  // Pre-insert validation (parent same-project, relation targets exist) so a
+  // bad input fails BEFORE the row is created — no orphaned issue.
+  await host.dispatch('onBeforeIssueCreate', ctx, { projectId: data.projectId, input: data });
 
   // Allocate the next per-project issue number atomically by bumping the
   // project's counter in a single UPDATE ... RETURNING. The returned value is
@@ -381,23 +362,8 @@ export async function createIssueImpl(
   /* v8 ignore next */
   if (!created) throw new Error('failed to create issue');
 
-  if (data.labelIds && data.labelIds.length > 0) {
-    await setIssueLabelsImpl(db, created.id, data.labelIds);
-  }
-
-  // Wire up the pre-resolved relations now that the source issue exists.
-  for (const r of relationTargets) {
-    await addRelationImpl(db, { sourceIssueId: created.id, targetIssueId: r.targetId, type: r.type });
-  }
-
-  // Notify the assignee (if any) and anyone @mentioned in the description.
-  await dispatchIssueNotificationsImpl(db, {
-    issueId: created.id,
-    actorId: user.id,
-    newAssigneeId: data.assignedToId ?? null,
-    note: data.description,
-    notifyWatchers: false,
-  });
+  // Plugins react: assign labels, wire relations, notify, roll up the parent.
+  await host.dispatch('onIssueCreated', ctx, { issue: created, input: data });
 
   await logActivityImpl(db, {
     projectId: data.projectId,
@@ -406,9 +372,6 @@ export async function createIssueImpl(
     refId: created.id,
     title: `${user.login} opened issue #${created.id}: ${created.subject}`,
   });
-
-  // Keep the parent's rolled-up done ratio in sync with the new child.
-  if (data.parentId != null) await rollupParentDoneRatioImpl(db, data.parentId);
 
   return created;
 }
@@ -441,14 +404,9 @@ export async function updateIssueImpl(
     if (accepted.has(k)) patch[k] = v;
   }
 
-  // Validate a parent re-link before touching the row: same project, not self,
-  // no circular chain. (createIssue handles the create-time check.)
-  if ('parentId' in patch) {
-    const newParent = patch.parentId == null ? null : Number(patch.parentId);
-    if (newParent !== (current.parentId ?? null)) {
-      await assertValidParentImpl(db, data.id, newParent);
-    }
-  }
+  const ctx = { db, actingUser: user, host };
+  // Pre-update validation (e.g. parent re-link: same project, no cycle).
+  await host.dispatch('onBeforeIssueUpdate', ctx, { current, patch });
 
   let updated = current;
   const detailRows: Array<{
@@ -516,77 +474,16 @@ export async function updateIssueImpl(
       body: opts.notionOrigin ? 'notionOrigin=true' : '',
     });
 
-    // Notify the (new) assignee, @mentioned users in the comment, and watchers.
-    const assigneeChanged = detailRows.some((d) => d.prop_key === 'assigned_to');
-    await dispatchIssueNotificationsImpl(db, {
-      issueId: data.id,
-      actorId: user.id,
-      newAssigneeId: assigneeChanged
-        ? patch.assignedToId == null
-          ? null
-          : Number(patch.assignedToId)
-        : undefined,
-      note: data.notes,
-      notifyWatchers: true,
-      isComment: data.notes.length > 0,
+    // Plugins react: notify (assignee/@mention/watchers), roll up parent ratios.
+    await host.dispatch('onIssueUpdated', ctx, {
+      before: current,
+      after: updated,
+      patch,
+      notes: data.notes,
     });
   }
 
-  // Subtask roll-up: keep parents' done ratio in sync. A re-parent touches both
-  // the old and new parent; a done-ratio change touches the issue's own parent.
-  if ('parentId' in patch) {
-    if (current.parentId) await rollupParentDoneRatioImpl(db, current.parentId);
-    if (updated.parentId) await rollupParentDoneRatioImpl(db, updated.parentId);
-  } else if (updated.parentId != null && updated.doneRatio !== current.doneRatio) {
-    await rollupParentDoneRatioImpl(db, updated.parentId);
-  }
-
   return updated;
-}
-
-/**
- * Validate that `childId` may be parented under `parentId` (null = detach). Same
- * project, never itself, and no circular chain. parent_id has no DB FK, so we
- * also guard against pre-existing loops / dangling pointers while walking up.
- */
-export async function assertValidParentImpl(
-  db: DB,
-  childId: number,
-  parentId: number | null,
-): Promise<void> {
-  if (parentId == null) return;
-  if (parentId === childId) throw new Error('An issue cannot be its own parent.');
-  const child = await db.query.issues.findFirst({ where: eq(issues.id, childId) });
-  if (!child) throw new Error('Issue not found');
-  const parent = await db.query.issues.findFirst({ where: eq(issues.id, parentId) });
-  if (!parent) throw new Error('Parent issue not found');
-  if (parent.projectId !== child.projectId) {
-    throw new Error('Parent must be in the same project.');
-  }
-  // Walk up from the proposed parent; reaching childId would form a cycle.
-  const seen = new Set<number>();
-  let cursor: number | null = parent.parentId;
-  while (cursor != null) {
-    if (cursor === childId) throw new Error('That would create a circular parent chain.');
-    if (seen.has(cursor)) break; // pre-existing loop in data — stop walking
-    seen.add(cursor);
-    const up = await db.query.issues.findFirst({ where: eq(issues.id, cursor) });
-    cursor = up ? up.parentId : null;
-  }
-}
-
-/**
- * Recompute a parent's done ratio as the average of its children's. No-op when
- * the parent has no children (manual done ratio is left untouched).
- */
-export async function rollupParentDoneRatioImpl(db: DB, parentId: number): Promise<void> {
-  const kids = await db
-    .select({ doneRatio: issues.doneRatio })
-    .from(issues)
-    .where(eq(issues.parentId, parentId));
-  if (kids.length === 0) return;
-  const avg = Math.round(kids.reduce((s, k) => s + k.doneRatio, 0) / kids.length);
-  await db.update(issues).set({ doneRatio: avg, updatedAt: new Date() }).where(eq(issues.id, parentId));
 }
 
 export async function watchIssueImpl(

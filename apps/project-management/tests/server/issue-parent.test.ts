@@ -3,13 +3,8 @@ import { eq } from 'drizzle-orm';
 import { type TestDB, insertProject, insertUser, makeTestDb } from '../_setup/db';
 import { issues } from '~/db/schema';
 import { type CurrentUser } from '~/server/auth';
-import {
-  assertValidParentImpl,
-  createIssueImpl,
-  getIssueImpl,
-  rollupParentDoneRatioImpl,
-  updateIssueImpl,
-} from '~/server/issues';
+import { createIssueImpl, getIssueImpl, updateIssueImpl } from '~/server/issues';
+import { assertValidParentImpl, rollupParentDoneRatioImpl } from '~/server/subtasks';
 
 let db: TestDB;
 let alice: CurrentUser;
