@@ -2,7 +2,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
 import { useT } from '@allenlabs/i18n/react';
 import { timeAgo } from '@allenlabs/pm-core/lib/format';
-import { listActivitiesImpl } from '~/server/activities';
+import { listActivitiesImpl } from '@allenlabs/pm-core/server/activities';
 import { getDb } from '~/server/auth-runtime.server';
 
 // Inline server fn — see routes/index.tsx for the bug context (TanStack

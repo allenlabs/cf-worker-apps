@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { type TestDB, insertProject, insertUser, makeTestDb } from '../_setup/db';
-import { listActivitiesImpl, logActivityImpl } from '~/server/activities';
+import { type TestDB, insertProject, insertUser, makeTestDb } from '../../src/testing/db';
+import { listActivitiesImpl, logActivityImpl } from '../../src/server/activities';
 
 let db: TestDB;
 

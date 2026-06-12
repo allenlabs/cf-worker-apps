@@ -17,7 +17,7 @@ import {
   ForbiddenError,
   UnauthorizedError,
 } from '@allenlabs/pm-core/lib/permissions';
-import { logActivityImpl } from './activities';
+import { logActivityImpl } from '@allenlabs/pm-core/server/activities';
 import { type CurrentUser } from './auth';
 import type { ProjectCreatedContext, ProjectProvisionResult } from './auth/types';
 import {

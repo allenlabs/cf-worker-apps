@@ -17,7 +17,7 @@ import {
 } from '@allenlabs/pm-core/db/schema';
 import { ForbiddenError } from '@allenlabs/pm-core/lib/permissions';
 import { host } from '~/host';
-import { logActivityImpl } from './activities';
+import { logActivityImpl } from '@allenlabs/pm-core/server/activities';
 import { listIssueLabelsImpl } from './labels';
 import { RELATION_TYPES, listRelationsImpl } from './relations';
 import { type CurrentUser } from './auth';

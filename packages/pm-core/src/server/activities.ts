@@ -1,8 +1,6 @@
-import { createServerFn } from '@tanstack/react-start';
 import { desc, eq } from 'drizzle-orm';
-import { type DB } from '@allenlabs/pm-core/db/client';
-import { activities, projects, users } from '@allenlabs/pm-core/db/schema';
-import { getDb } from './auth-runtime.server';
+import { type DB } from '../db/client';
+import { activities, projects, users } from '../db/schema';
 
 type Kind =
   | 'issue_created'
@@ -72,18 +70,3 @@ export async function listActivitiesImpl(
     .limit(opts.limit ?? 50);
   return rows as ActivityRow[];
 }
-
-// Legacy named exports — exercised by wrangler integration tests.
-/* v8 ignore start */
-// Legacy named exports — kept for routes that imported them previously.
-export async function logActivity(input: LogActivityInput): Promise<void> {
-  return logActivityImpl(getDb(), input);
-}
-
-export async function listActivities(
-  opts: { projectId?: number; limit?: number } = {},
-): Promise<ActivityRow[]> {
-  return listActivitiesImpl(getDb(), opts);
-}
-
-/* v8 ignore stop */

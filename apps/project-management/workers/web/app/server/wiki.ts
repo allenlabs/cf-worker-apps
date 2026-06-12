@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { type DB } from '@allenlabs/pm-core/db/client';
 import { users, wikiPages, wikiRevisions, wikis } from '@allenlabs/pm-core/db/schema';
 import { slugify } from '@allenlabs/pm-core/lib/format';
-import { logActivityImpl } from './activities';
+import { logActivityImpl } from '@allenlabs/pm-core/server/activities';
 import { type CurrentUser } from './auth';
 import { getDb, requirePermission } from './auth-runtime.server';
 
