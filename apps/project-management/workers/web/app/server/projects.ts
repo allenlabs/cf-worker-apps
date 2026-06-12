@@ -11,12 +11,12 @@ import {
   versions,
   wikis,
 } from '~/db/schema';
-import { deriveProjectKey, PROJECT_KEY_RE, slugify } from '~/lib/format';
+import { deriveProjectKey, PROJECT_KEY_RE, slugify } from '@allenlabs/pm-core/lib/format';
 import {
   type AuthContext,
   ForbiddenError,
   UnauthorizedError,
-} from '~/lib/permissions';
+} from '@allenlabs/pm-core/lib/permissions';
 import { logActivityImpl } from './activities';
 import { type CurrentUser } from './auth';
 import type { ProjectCreatedContext, ProjectProvisionResult } from './auth/types';

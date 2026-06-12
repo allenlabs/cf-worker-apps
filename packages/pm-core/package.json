@@ -1,0 +1,21 @@
+{
+  "name": "@allenlabs/pm-core",
+  "version": "0.0.0",
+  "description": "Reusable core for the Allen Labs project-management suite — schema, pure server-side logic, the plugin host, the auth-adapter seam, and shared utilities. Consumed source-level by a thin TanStack Start app.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./lib/*": "./src/lib/*.ts"
+  },
+  "files": ["src"],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "4.1.7",
+    "typescript": "5.7.2",
+    "vitest": "4.1.7"
+  }
+}

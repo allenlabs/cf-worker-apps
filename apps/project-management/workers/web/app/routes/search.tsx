@@ -2,7 +2,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
 import { z } from 'zod';
 import { useT } from '@allenlabs/i18n/react';
-import { issueKey } from '~/lib/format';
+import { issueKey } from '@allenlabs/pm-core/lib/format';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { searchImpl } from '~/server/search';
 

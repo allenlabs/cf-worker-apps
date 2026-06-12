@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseMentions } from '~/lib/mentions';
+import { parseMentions } from '../../src/lib/mentions';
 
 describe('parseMentions', () => {
   it('extracts unique lowercased handles', () => {

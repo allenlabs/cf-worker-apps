@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isStaticAssetPath } from '~/lib/public-paths';
+import { isStaticAssetPath } from '../../src/lib/public-paths';
 
 describe('isStaticAssetPath', () => {
   it('matches hashed build assets under /assets/', () => {

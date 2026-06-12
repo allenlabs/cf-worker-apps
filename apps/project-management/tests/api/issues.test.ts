@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { sql } from 'drizzle-orm';
 import { hmacMiddleware } from '../../workers/api/src/middleware/hmac';
 import { issuesRouter } from '../../workers/api/src/handlers/issues';
-import { signRequest } from '~/lib/hmac';
+import { signRequest } from '@allenlabs/pm-core/lib/hmac';
 import { makeTestDb, insertProject, insertUser, type TestDB } from '../_setup/db';
 import type { AppBindings } from '../../workers/api/src/context';
 

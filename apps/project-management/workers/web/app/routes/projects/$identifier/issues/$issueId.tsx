@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { useT } from '@allenlabs/i18n/react';
 import { LabelChip, PriorityBadge, ProgressBar, StatusBadge, TrackerBadge } from '~/components/badges';
 import { Markdown } from '~/components/Markdown';
-import { formatDate, formatDateTime, formatHours, issueKey } from '~/lib/format';
+import { formatDate, formatDateTime, formatHours, issueKey } from '@allenlabs/pm-core/lib/format';
 import { notifyError, notifySuccess } from '~/lib/toast';
 import { getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { addChildIssue, getIssueImpl, setIssueParent, updateIssue, watchIssue } from '~/server/issues';

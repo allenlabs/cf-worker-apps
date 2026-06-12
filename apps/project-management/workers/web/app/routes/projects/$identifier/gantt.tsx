@@ -2,7 +2,7 @@ import { createFileRoute, getRouteApi } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
 import { z } from 'zod';
 import { useT } from '@allenlabs/i18n/react';
-import { formatDate, issueKey } from '~/lib/format';
+import { formatDate, issueKey } from '@allenlabs/pm-core/lib/format';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { listIssuesImpl } from '~/server/issues';
 import { listPrecedesEdgesImpl } from '~/server/relations';

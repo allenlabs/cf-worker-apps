@@ -7,7 +7,7 @@ import {
   permissionsForTeamRole,
   type AuthContext,
   type Permission,
-} from '~/lib/permissions';
+} from '../../src/lib/permissions';
 
 function makeCtx(overrides: Partial<AuthContext> = {}): AuthContext {
   return {

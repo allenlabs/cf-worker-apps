@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type DB } from '~/db/client';
 import * as schema from '~/db/schema';
-import { deriveProjectKey } from '~/lib/format';
+import { deriveProjectKey } from '@allenlabs/pm-core/lib/format';
 
 // We surface `DB` as the test database type so server impls (typed
 // `PostgresJsDatabase<typeof schema>` via `~/db/client`) accept the PGlite-

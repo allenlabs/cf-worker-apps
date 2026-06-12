@@ -27,6 +27,7 @@
   },
   "dependencies": {
     "@allenlabs/i18n": "*",
+    "@allenlabs/pm-core": "*",
     "@microlabs/otel-cf-workers": "^1.0.0-rc.52",
     "@tanstack/react-query": "5.100.11",
     "@tanstack/react-router": "1.170.8",

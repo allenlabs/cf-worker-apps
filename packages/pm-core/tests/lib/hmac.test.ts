@@ -4,7 +4,7 @@ import {
   bytesToBase64,
   signRequest,
   verifyRequest,
-} from '~/lib/hmac';
+} from '../../src/lib/hmac';
 
 const secret = 'unit-test-secret-32-bytes-long-aaa';
 

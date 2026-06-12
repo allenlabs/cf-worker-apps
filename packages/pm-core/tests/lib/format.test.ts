@@ -10,7 +10,7 @@ import {
   issueKey,
   slugify,
   timeAgo,
-} from '~/lib/format';
+} from '../../src/lib/format';
 
 describe('formatDate', () => {
   it('returns empty for nullish input', () => {

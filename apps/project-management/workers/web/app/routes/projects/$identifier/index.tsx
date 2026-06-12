@@ -4,7 +4,7 @@ import { useT } from '@allenlabs/i18n/react';
 import { ProgressBar } from '~/components/badges';
 import { Markdown } from '~/components/Markdown';
 import { renderMarkdown } from '~/server/markdown';
-import { timeAgo } from '~/lib/format';
+import { timeAgo } from '@allenlabs/pm-core/lib/format';
 
 const parentRoute = getRouteApi('/projects/$identifier');
 

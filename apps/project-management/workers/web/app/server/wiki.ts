@@ -3,7 +3,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { type DB } from '~/db/client';
 import { users, wikiPages, wikiRevisions, wikis } from '~/db/schema';
-import { slugify } from '~/lib/format';
+import { slugify } from '@allenlabs/pm-core/lib/format';
 import { logActivityImpl } from './activities';
 import { type CurrentUser } from './auth';
 import { getDb, requirePermission } from './auth-runtime.server';

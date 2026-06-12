@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { createServerFn } from '@tanstack/react-start';
 import { z } from 'zod';
 import { useT } from '@allenlabs/i18n/react';
-import { formatDateTime } from '~/lib/format';
+import { formatDateTime } from '@allenlabs/pm-core/lib/format';
 import {
   buildAuthContext,
   getCurrentUser,

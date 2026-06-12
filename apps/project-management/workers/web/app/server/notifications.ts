@@ -3,7 +3,7 @@ import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { type DB } from '~/db/client';
 import { issues, notifications, projects, users, watchers } from '~/db/schema';
-import { parseMentions } from '~/lib/mentions';
+import { parseMentions } from '@allenlabs/pm-core/lib/mentions';
 import { getCurrentUser, getDb, requireUser } from './auth-runtime.server';
 
 export type NotificationKind = 'assigned' | 'mentioned' | 'commented' | 'updated';

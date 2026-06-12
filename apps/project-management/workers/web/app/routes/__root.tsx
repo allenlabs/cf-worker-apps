@@ -9,7 +9,7 @@ import { getRequest } from '@tanstack/react-start/server';
 import type { ReactNode } from 'react';
 import { Layout } from '~/components/Layout';
 import { getAdapter, getEnv } from '~/server/auth-runtime.server';
-import { isStaticAssetPath } from '~/lib/public-paths';
+import { isStaticAssetPath } from '@allenlabs/pm-core/lib/public-paths';
 import appCss from '~/styles/app.css?url';
 import { DEFAULT_LOCALE, type Locale } from '@allenlabs/i18n';
 import { resolveLocale } from '@allenlabs/i18n/server';

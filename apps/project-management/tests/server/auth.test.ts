@@ -10,7 +10,7 @@ import {
 import { makeTestEnv } from '../_setup/env';
 import { primeJwks, signTestJwt } from '../_setup/jwt';
 import { users } from '~/db/schema';
-import { ForbiddenError, UnauthorizedError } from '~/lib/permissions';
+import { ForbiddenError, UnauthorizedError } from '@allenlabs/pm-core/lib/permissions';
 import {
   buildAuthContextImpl,
   checkPermission,

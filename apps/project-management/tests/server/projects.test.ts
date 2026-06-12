@@ -16,7 +16,7 @@ import {
   versions,
   wikis,
 } from '~/db/schema';
-import { type AuthContext, type Permission } from '~/lib/permissions';
+import { type AuthContext, type Permission } from '@allenlabs/pm-core/lib/permissions';
 import { type CurrentUser } from '~/server/auth';
 import { type ProjectCreatedContext } from '~/server/auth/types';
 import {

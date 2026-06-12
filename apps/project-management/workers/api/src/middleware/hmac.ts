@@ -6,7 +6,7 @@
 // On success, handlers find c.var.apiClient + c.var.db + c.var.rawBody set.
 
 import type { Context, MiddlewareHandler } from 'hono';
-import { verifyRequest } from '../../../web/app/lib/hmac';
+import { verifyRequest } from '@allenlabs/pm-core/lib/hmac';
 import { findApiClientImpl } from '../../../web/app/server/api-clients';
 import { makeDb } from '../lib/db';
 import type { DB } from '../../../web/app/db/client';

@@ -3,7 +3,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { type DB } from '~/db/client';
 import { issues, projects, wikiPages, wikiRevisions, wikis } from '~/db/schema';
-import { type AuthContext } from '~/lib/permissions';
+import { type AuthContext } from '@allenlabs/pm-core/lib/permissions';
 import { type CurrentUser } from './auth';
 import { buildAuthContext, getCurrentUser, getDb } from './auth-runtime.server';
 

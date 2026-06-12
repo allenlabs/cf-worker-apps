@@ -9,7 +9,7 @@ import {
   UnauthorizedError,
   hasPermission,
   permissionsForTeamRole,
-} from '~/lib/permissions';
+} from '@allenlabs/pm-core/lib/permissions';
 import { type TeamMembershipClaim } from './session.server';
 import type { AuthAdapter, AuthIdentity } from './auth/types';
 

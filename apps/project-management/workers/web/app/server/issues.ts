@@ -15,7 +15,7 @@ import {
   versions,
   watchers,
 } from '~/db/schema';
-import { ForbiddenError } from '~/lib/permissions';
+import { ForbiddenError } from '@allenlabs/pm-core/lib/permissions';
 import { host } from '~/host';
 import { logActivityImpl } from './activities';
 import { listIssueLabelsImpl } from './labels';

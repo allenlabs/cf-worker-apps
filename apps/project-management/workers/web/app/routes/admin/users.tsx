@@ -4,7 +4,7 @@ import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { useT } from '@allenlabs/i18n/react';
 import { users } from '~/db/schema';
-import { formatDateTime } from '~/lib/format';
+import { formatDateTime } from '@allenlabs/pm-core/lib/format';
 import { notifyError, notifySuccess } from '~/lib/toast';
 import { getDb, requireAdmin } from '~/server/auth-runtime.server';
 

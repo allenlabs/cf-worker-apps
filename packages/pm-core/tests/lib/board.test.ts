@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { groupIssuesByStatus, type StatusColumn } from '~/lib/board';
+import { groupIssuesByStatus, type StatusColumn } from '../../src/lib/board';
 
 const statuses: StatusColumn[] = [
   { id: 1, name: 'New', color: '#fff', isClosed: false },

@@ -3,7 +3,7 @@ import { createServerFn } from '@tanstack/react-start';
 import { getRequest } from '@tanstack/react-start/server';
 import { useT } from '@allenlabs/i18n/react';
 import { PriorityBadge, StatusBadge, TrackerBadge } from '~/components/badges';
-import { formatDate, issueKey, timeAgo } from '~/lib/format';
+import { formatDate, issueKey, timeAgo } from '@allenlabs/pm-core/lib/format';
 import { getAdapter, getDb, getEnv } from '~/server/auth-runtime.server';
 import { loadMyPageImpl } from '~/server/home';
 

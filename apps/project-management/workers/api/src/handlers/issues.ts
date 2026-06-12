@@ -14,8 +14,8 @@ import {
 import { RELATION_TYPES } from '../../../web/app/server/relations';
 import { listProjectsImpl } from '../../../web/app/server/projects';
 import { getRefData } from '../../../web/app/server/ref-data';
-import { type AuthContext, hasPermission, type Permission } from '../../../web/app/lib/permissions';
-import { issueKey } from '../../../web/app/lib/format';
+import { type AuthContext, hasPermission, type Permission } from '@allenlabs/pm-core/lib/permissions';
+import { issueKey } from '@allenlabs/pm-core/lib/format';
 import type { AppBindings } from '../context';
 
 export const issuesRouter = new Hono<AppBindings>();

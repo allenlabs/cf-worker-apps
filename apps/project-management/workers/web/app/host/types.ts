@@ -6,7 +6,7 @@
 // are layered on in later stages; the PmPlugin shape already reserves room.
 
 import type { DB } from '~/db/client';
-import type { Permission } from '~/lib/permissions';
+import type { Permission } from '@allenlabs/pm-core/lib/permissions';
 import type { CurrentUser } from '~/server/auth';
 import type { CreateIssueInput } from '~/server/issues';
 import type { Issue } from '~/db/schema';

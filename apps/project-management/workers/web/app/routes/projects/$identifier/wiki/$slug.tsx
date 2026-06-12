@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { z } from 'zod';
 import { useT } from '@allenlabs/i18n/react';
 import { Markdown } from '~/components/Markdown';
-import { formatDateTime } from '~/lib/format';
+import { formatDateTime } from '@allenlabs/pm-core/lib/format';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { renderMarkdown } from '~/server/markdown';
 import { getProjectImpl } from '~/server/projects';

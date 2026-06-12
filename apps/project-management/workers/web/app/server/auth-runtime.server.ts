@@ -12,7 +12,7 @@ import {
   type Permission,
   ForbiddenError,
   UnauthorizedError,
-} from '~/lib/permissions';
+} from '@allenlabs/pm-core/lib/permissions';
 import {
   buildAuthContextImpl,
   checkPermission,

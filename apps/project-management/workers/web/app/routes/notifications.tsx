@@ -1,7 +1,7 @@
 import { Link, createFileRoute, redirect, useRouter } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
 import { useT } from '@allenlabs/i18n/react';
-import { issueKey, timeAgo } from '~/lib/format';
+import { issueKey, timeAgo } from '@allenlabs/pm-core/lib/format';
 import { getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import {
   listNotificationsImpl,

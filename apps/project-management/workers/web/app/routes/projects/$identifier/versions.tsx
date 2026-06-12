@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { z } from 'zod';
 import { useT } from '@allenlabs/i18n/react';
 import { ProgressBar } from '~/components/badges';
-import { formatDate } from '~/lib/format';
+import { formatDate } from '@allenlabs/pm-core/lib/format';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { getProjectImpl } from '~/server/projects';
 import { createVersion, deleteVersion, listVersionsImpl, updateVersion } from '~/server/versions';

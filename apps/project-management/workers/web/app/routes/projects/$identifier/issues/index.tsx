@@ -3,7 +3,7 @@ import { createServerFn } from '@tanstack/react-start';
 import { z } from 'zod';
 import { useT } from '@allenlabs/i18n/react';
 import { LabelChip, PriorityBadge, StatusBadge, TrackerBadge } from '~/components/badges';
-import { formatDate, issueKey, timeAgo } from '~/lib/format';
+import { formatDate, issueKey, timeAgo } from '@allenlabs/pm-core/lib/format';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { countIssuesImpl, listIssuesImpl } from '~/server/issues';
 import { type LabelRow, labelsByIssueImpl, listLabelsImpl } from '~/server/labels';
