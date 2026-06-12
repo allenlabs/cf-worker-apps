@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { type TestDB, insertProject, insertUser, makeTestDb } from '../_setup/db';
 import { issues } from '@allenlabs/pm-core/db/schema';
 import { type CurrentUser } from '@allenlabs/pm-core/server/auth';
-import { saveWikiPageImpl } from '~/server/wiki';
+import { saveWikiPageImpl } from '@allenlabs/pm-core/server/wiki';
 import { searchImpl, visibleProjectIdsImpl } from '~/server/search';
 
 let db: TestDB;

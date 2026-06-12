@@ -6,12 +6,11 @@ import { useT } from '@allenlabs/i18n/react';
 import { formatDate, formatHours } from '@allenlabs/pm-core/lib/format';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { getProjectImpl } from '~/server/projects';
+import { createTimeEntry, deleteTimeEntry } from '~/server/time-entries';
 import {
-  createTimeEntry,
-  deleteTimeEntry,
   listActivitiesImpl,
   listTimeEntriesImpl,
-} from '~/server/time-entries';
+} from '@allenlabs/pm-core/server/time-entries';
 
 const parentRoute = getRouteApi('/projects/$identifier');
 

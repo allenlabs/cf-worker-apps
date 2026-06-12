@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { type TestDB, insertProject, insertUser, makeTestDb } from '../_setup/db';
+import { type TestDB, insertProject, insertUser, makeTestDb } from '../../src/testing/db';
 import { timeEntries } from '@allenlabs/pm-core/db/schema';
 import { type CurrentUser } from '@allenlabs/pm-core/server/auth';
 import {
@@ -8,7 +8,7 @@ import {
   deleteTimeEntryImpl,
   listActivitiesImpl,
   listTimeEntriesImpl,
-} from '~/server/time-entries';
+} from '../../src/server/time-entries';
 
 let db: TestDB;
 let projectId: number;
