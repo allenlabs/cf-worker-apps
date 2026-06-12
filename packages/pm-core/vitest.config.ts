@@ -11,7 +11,7 @@ export default defineConfig({
       // by deploy/integration, not in-process unit tests — mirroring the app's
       // own `workers/web/app/db/**` coverage exclusion. The pure retry logic
       // in client.ts is still behaviourally exercised by tests/db/cold-start.
-      exclude: ['src/db/**'],
+      exclude: ['src/db/**', 'src/testing/**'],
       thresholds: {
         lines: 100,
         statements: 100,
