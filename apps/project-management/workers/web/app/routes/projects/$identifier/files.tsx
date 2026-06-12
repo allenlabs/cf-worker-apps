@@ -10,7 +10,8 @@ import {
   getDb,
   requirePermission,
 } from '~/server/auth-runtime.server';
-import { deleteAttachment, listProjectFilesImpl, uploadAttachment } from '~/server/attachments';
+import { deleteAttachment, uploadAttachment } from '~/server/attachments';
+import { listProjectFilesImpl } from '@allenlabs/pm-core/server/attachments';
 import { getProjectImpl } from '~/server/projects';
 
 const parentRoute = getRouteApi('/projects/$identifier');

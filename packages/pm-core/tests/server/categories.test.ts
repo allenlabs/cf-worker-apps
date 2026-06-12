@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { type TestDB, insertProject, insertUser, makeTestDb } from '../_setup/db';
+import { type TestDB, insertProject, insertUser, makeTestDb } from '../../src/testing/db';
 import { issueCategories } from '@allenlabs/pm-core/db/schema';
 import {
   createCategoryImpl,
   deleteCategoryImpl,
   listCategoriesImpl,
-} from '~/server/categories';
+} from '../../src/server/categories';
 
 let db: TestDB;
 let projectId: number;

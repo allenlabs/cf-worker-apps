@@ -4,7 +4,8 @@ import { useState } from 'react';
 import { z } from 'zod';
 import { useT } from '@allenlabs/i18n/react';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
-import { createCategory, deleteCategory, listCategoriesImpl } from '~/server/categories';
+import { createCategory, deleteCategory } from '~/server/categories';
+import { listCategoriesImpl } from '@allenlabs/pm-core/server/categories';
 import { listMembersImpl } from '~/server/members';
 import { getProjectImpl } from '~/server/projects';
 
