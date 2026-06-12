@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { useT } from '@allenlabs/i18n/react';
 import { ProjectSidebar } from '~/components/ProjectSidebar';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
-import { getProjectImpl } from '~/server/projects';
+import { getProjectImpl } from '@allenlabs/pm-core/server/projects';
 
 // Inline server fn — see routes/index.tsx for the bug context (TanStack
 // Start 1.168.9 dispatch issue: imported `createServerFn` exports return

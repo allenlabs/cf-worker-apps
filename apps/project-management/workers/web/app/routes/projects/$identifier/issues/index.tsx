@@ -7,7 +7,7 @@ import { formatDate, issueKey, timeAgo } from '@allenlabs/pm-core/lib/format';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { countIssuesImpl, listIssuesImpl } from '~/server/issues';
 import { type LabelRow, labelsByIssueImpl, listLabelsImpl } from '~/server/labels';
-import { getProjectImpl } from '~/server/projects';
+import { getProjectImpl } from '@allenlabs/pm-core/server/projects';
 import { getRefData } from '@allenlabs/pm-core/server/ref-data';
 
 const parentRoute = getRouteApi('/projects/$identifier');

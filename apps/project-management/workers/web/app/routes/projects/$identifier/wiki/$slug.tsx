@@ -7,7 +7,7 @@ import { Markdown } from '~/components/Markdown';
 import { formatDateTime } from '@allenlabs/pm-core/lib/format';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { renderMarkdown } from '@allenlabs/pm-core/server/markdown';
-import { getProjectImpl } from '~/server/projects';
+import { getProjectImpl } from '@allenlabs/pm-core/server/projects';
 import { deleteWikiPage, saveWikiPage } from '~/server/wiki';
 import { getWikiPageImpl } from '@allenlabs/pm-core/server/wiki';
 

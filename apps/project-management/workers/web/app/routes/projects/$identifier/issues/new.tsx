@@ -10,7 +10,7 @@ import { listMembersImpl } from '~/server/members';
 import { createIssue } from '~/server/issues';
 import { listLabelsImpl } from '~/server/labels';
 import { RELATION_TYPES } from '~/server/relations';
-import { getProjectImpl } from '~/server/projects';
+import { getProjectImpl } from '@allenlabs/pm-core/server/projects';
 
 const parentRoute = getRouteApi('/projects/$identifier');
 

@@ -6,7 +6,7 @@ import { formatDate, issueKey } from '@allenlabs/pm-core/lib/format';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { listIssuesImpl } from '~/server/issues';
 import { listPrecedesEdgesImpl } from '~/server/relations';
-import { getProjectImpl } from '~/server/projects';
+import { getProjectImpl } from '@allenlabs/pm-core/server/projects';
 
 const parentRoute = getRouteApi('/projects/$identifier');
 

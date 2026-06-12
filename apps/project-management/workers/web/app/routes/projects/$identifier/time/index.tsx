@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { useT } from '@allenlabs/i18n/react';
 import { formatDate, formatHours } from '@allenlabs/pm-core/lib/format';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
-import { getProjectImpl } from '~/server/projects';
+import { getProjectImpl } from '@allenlabs/pm-core/server/projects';
 import { createTimeEntry, deleteTimeEntry } from '~/server/time-entries';
 import {
   listActivitiesImpl,

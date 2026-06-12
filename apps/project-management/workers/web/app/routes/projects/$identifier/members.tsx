@@ -13,7 +13,7 @@ import {
   setTeamMemberRole,
   TEAM_ROLE_OPTIONS,
 } from '~/server/members';
-import { getProjectImpl } from '~/server/projects';
+import { getProjectImpl } from '@allenlabs/pm-core/server/projects';
 
 const parentRoute = getRouteApi('/projects/$identifier');
 

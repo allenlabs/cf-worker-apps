@@ -3,7 +3,7 @@ import { createServerFn } from '@tanstack/react-start';
 import { z } from 'zod';
 import { useT } from '@allenlabs/i18n/react';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
-import { getProjectImpl } from '~/server/projects';
+import { getProjectImpl } from '@allenlabs/pm-core/server/projects';
 import { listWikiPagesImpl } from '@allenlabs/pm-core/server/wiki';
 
 const parentRoute = getRouteApi('/projects/$identifier');

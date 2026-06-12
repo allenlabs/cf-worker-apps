@@ -6,7 +6,7 @@ import { useT } from '@allenlabs/i18n/react';
 import { LabelChip } from '~/components/badges';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { createLabel, deleteLabel, listLabelsImpl } from '~/server/labels';
-import { getProjectImpl } from '~/server/projects';
+import { getProjectImpl } from '@allenlabs/pm-core/server/projects';
 
 const parentRoute = getRouteApi('/projects/$identifier');
 

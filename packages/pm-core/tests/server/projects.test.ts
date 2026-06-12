@@ -6,7 +6,7 @@ import {
   insertUser,
   makeTestDb,
   addManager,
-} from '../_setup/db';
+} from '../../src/testing/db';
 import {
   enabledModules,
   issueCategories,
@@ -26,7 +26,7 @@ import {
   getProjectImpl,
   listProjectsImpl,
   updateProjectImpl,
-} from '~/server/projects';
+} from '../../src/server/projects';
 
 let db: TestDB;
 

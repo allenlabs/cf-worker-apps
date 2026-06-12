@@ -7,7 +7,7 @@
 
 import { sql } from 'drizzle-orm';
 import { type DB } from '@allenlabs/pm-core/db/client';
-import { extractRows } from './projects';
+import { extractRows } from '@allenlabs/pm-core/server/projects';
 
 export interface HomePayload {
   projects: Array<{

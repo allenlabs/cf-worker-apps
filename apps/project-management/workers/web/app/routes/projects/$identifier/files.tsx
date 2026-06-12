@@ -12,7 +12,7 @@ import {
 } from '~/server/auth-runtime.server';
 import { deleteAttachment, uploadAttachment } from '~/server/attachments';
 import { listProjectFilesImpl } from '@allenlabs/pm-core/server/attachments';
-import { getProjectImpl } from '~/server/projects';
+import { getProjectImpl } from '@allenlabs/pm-core/server/projects';
 
 const parentRoute = getRouteApi('/projects/$identifier');
 

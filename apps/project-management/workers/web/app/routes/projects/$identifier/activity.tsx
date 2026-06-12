@@ -5,7 +5,7 @@ import { useT } from '@allenlabs/i18n/react';
 import { timeAgo } from '@allenlabs/pm-core/lib/format';
 import { listActivitiesImpl } from '@allenlabs/pm-core/server/activities';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
-import { getProjectImpl } from '~/server/projects';
+import { getProjectImpl } from '@allenlabs/pm-core/server/projects';
 
 // Inline server fn — TanStack Start 1.168.9 dispatch bug workaround.
 const loadProjectActivity = createServerFn({ method: 'GET' })

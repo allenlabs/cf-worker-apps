@@ -7,7 +7,7 @@ import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.s
 import { createCategory, deleteCategory } from '~/server/categories';
 import { listCategoriesImpl } from '@allenlabs/pm-core/server/categories';
 import { listMembersImpl } from '~/server/members';
-import { getProjectImpl } from '~/server/projects';
+import { getProjectImpl } from '@allenlabs/pm-core/server/projects';
 
 const parentRoute = getRouteApi('/projects/$identifier');
 
