@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { linkifyRefs, renderMarkdown } from '~/server/markdown';
+import { linkifyRefs, renderMarkdown } from '../../src/server/markdown';
 
 describe('renderMarkdown', () => {
   it('returns empty for empty input', () => {

@@ -29,7 +29,7 @@ import {
   requirePermission,
   requireUser,
 } from './auth-runtime.server';
-import { getRefData } from './ref-data';
+import { getRefData } from '@allenlabs/pm-core/server/ref-data';
 
 const DEFAULT_MODULES = [
   'issue_tracking',

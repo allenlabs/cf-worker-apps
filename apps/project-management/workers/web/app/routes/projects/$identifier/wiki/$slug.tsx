@@ -6,7 +6,7 @@ import { useT } from '@allenlabs/i18n/react';
 import { Markdown } from '~/components/Markdown';
 import { formatDateTime } from '@allenlabs/pm-core/lib/format';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
-import { renderMarkdown } from '~/server/markdown';
+import { renderMarkdown } from '@allenlabs/pm-core/server/markdown';
 import { getProjectImpl } from '~/server/projects';
 import { deleteWikiPage, getWikiPageImpl, saveWikiPage } from '~/server/wiki';
 

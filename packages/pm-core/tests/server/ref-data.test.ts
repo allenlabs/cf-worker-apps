@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { type TestDB, makeTestDb } from '../_setup/db';
+import { type TestDB, makeTestDb } from '../../src/testing/db';
 import {
   _clearRefDataCacheForTests,
   getRefData,
-} from '~/server/ref-data';
+} from '../../src/server/ref-data';
 
 let db: TestDB;
 

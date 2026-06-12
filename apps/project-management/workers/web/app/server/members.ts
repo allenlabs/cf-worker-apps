@@ -13,7 +13,7 @@ import {
   type TeamInvitation,
   type TeamMember,
 } from './org-client';
-import { getRefData } from './ref-data';
+import { getRefData } from '@allenlabs/pm-core/server/ref-data';
 import type { Env } from '~/lib/env';
 
 type OrgEnv = Pick<Env, 'AUTH_API_URL' | 'PM_ORG_HMAC_CLIENT_ID' | 'PM_ORG_HMAC_SECRET'>;

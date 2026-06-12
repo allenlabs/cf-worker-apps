@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { type TestDB, insertUser, makeTestDb } from '../_setup/db';
-import { createApiClientImpl, findApiClientImpl } from '~/server/api-clients';
+import { type TestDB, insertUser, makeTestDb } from '../../src/testing/db';
+import { createApiClientImpl, findApiClientImpl } from '../../src/server/api-clients';
 
 let db: TestDB;
 let userId: number;

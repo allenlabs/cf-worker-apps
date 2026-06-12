@@ -10,7 +10,7 @@ import { notifyError } from '~/lib/toast';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { listIssuesImpl, updateIssue } from '~/server/issues';
 import { getProjectImpl } from '~/server/projects';
-import { getRefData } from '~/server/ref-data';
+import { getRefData } from '@allenlabs/pm-core/server/ref-data';
 
 const parentRoute = getRouteApi('/projects/$identifier');
 

@@ -12,8 +12,8 @@ import { addChildIssue, getIssueImpl, setIssueParent, updateIssue, watchIssue } 
 import { listLabelsImpl, setIssueLabels } from '~/server/labels';
 import { RELATION_TYPES, addRelation, removeRelation } from '~/server/relations';
 import { listMembersImpl } from '~/server/members';
-import { renderMarkdown } from '~/server/markdown';
-import { getRefData } from '~/server/ref-data';
+import { renderMarkdown } from '@allenlabs/pm-core/server/markdown';
+import { getRefData } from '@allenlabs/pm-core/server/ref-data';
 
 const parentRoute = getRouteApi('/projects/$identifier');
 

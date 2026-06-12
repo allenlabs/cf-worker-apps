@@ -100,7 +100,7 @@ import {
   users,
   versions,
 } from '@allenlabs/pm-core/db/schema';
-import { getRefData } from './ref-data';
+import { getRefData } from '@allenlabs/pm-core/server/ref-data';
 
 async function resolveByName<T extends { id: number; name: string }>(
   rows: T[],

@@ -23,7 +23,7 @@ import { RELATION_TYPES, listRelationsImpl } from './relations';
 import { type CurrentUser } from './auth';
 import { buildAuthContext, getDb, getCurrentUser, getEnv, requirePermission, requireUser } from './auth-runtime.server';
 import * as notionGateway from './notion-gateway-client';
-import { getRefData } from './ref-data';
+import { getRefData } from '@allenlabs/pm-core/server/ref-data';
 
 const ISSUE_FIELDS = {
   trackerId: 'tracker',

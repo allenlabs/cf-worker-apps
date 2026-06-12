@@ -8,7 +8,7 @@ import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.s
 import { countIssuesImpl, listIssuesImpl } from '~/server/issues';
 import { type LabelRow, labelsByIssueImpl, listLabelsImpl } from '~/server/labels';
 import { getProjectImpl } from '~/server/projects';
-import { getRefData } from '~/server/ref-data';
+import { getRefData } from '@allenlabs/pm-core/server/ref-data';
 
 const parentRoute = getRouteApi('/projects/$identifier');
 
