@@ -11,7 +11,7 @@ import { getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { addChildIssue, getIssueImpl, setIssueParent, updateIssue, watchIssue } from '~/server/issues';
 import { listLabelsImpl, setIssueLabels } from '~/server/labels';
 import { RELATION_TYPES, addRelation, removeRelation } from '~/server/relations';
-import { listMembersImpl } from '~/server/members';
+import { listMembersImpl } from '@allenlabs/pm-core/server/members';
 import { renderMarkdown } from '@allenlabs/pm-core/server/markdown';
 import { getRefData } from '@allenlabs/pm-core/server/ref-data';
 

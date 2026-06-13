@@ -6,7 +6,7 @@ import { useT } from '@allenlabs/i18n/react';
 import { issueKey } from '@allenlabs/pm-core/lib/format';
 import { notifyError, notifySuccess } from '~/lib/toast';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
-import { listMembersImpl } from '~/server/members';
+import { listMembersImpl } from '@allenlabs/pm-core/server/members';
 import { createIssue } from '~/server/issues';
 import { listLabelsImpl } from '~/server/labels';
 import { RELATION_TYPES } from '~/server/relations';

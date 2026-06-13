@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { type TestDB, addManager, insertProject, insertUser, makeTestDb } from '../_setup/db';
+import { type TestDB, addManager, insertProject, insertUser, makeTestDb } from '../../src/testing/db';
 import { members, roles } from '@allenlabs/pm-core/db/schema';
 import {
   addMemberImpl,
@@ -14,7 +14,7 @@ import {
   removeTeamMemberImpl,
   setTeamMemberRoleImpl,
   teamIdForProjectImpl,
-} from '~/server/members';
+} from '../../src/server/members';
 
 const ORG_ENV = {
   AUTH_API_URL: 'https://auth-api.test',

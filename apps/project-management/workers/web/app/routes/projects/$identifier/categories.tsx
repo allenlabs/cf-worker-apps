@@ -6,7 +6,7 @@ import { useT } from '@allenlabs/i18n/react';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { createCategory, deleteCategory } from '~/server/categories';
 import { listCategoriesImpl } from '@allenlabs/pm-core/server/categories';
-import { listMembersImpl } from '~/server/members';
+import { listMembersImpl } from '@allenlabs/pm-core/server/members';
 import { getProjectImpl } from '@allenlabs/pm-core/server/projects';
 
 const parentRoute = getRouteApi('/projects/$identifier');
