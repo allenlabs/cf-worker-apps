@@ -9,7 +9,7 @@ import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.s
 import { listMembersImpl } from '@allenlabs/pm-core/server/members';
 import { createIssue } from '~/server/issues';
 import { listLabelsImpl } from '~/server/labels';
-import { RELATION_TYPES } from '~/server/relations';
+import { RELATION_TYPES } from '@allenlabs/pm-relations';
 import { getProjectImpl } from '@allenlabs/pm-core/server/projects';
 
 const parentRoute = getRouteApi('/projects/$identifier');

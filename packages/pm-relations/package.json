@@ -1,0 +1,22 @@
+{
+  "name": "@allenlabs/pm-relations",
+  "version": "0.0.0",
+  "description": "Issue relations (relates/blocks/duplicates/…) plugin for the Allen Labs PM suite. Depends only on @allenlabs/pm-core.",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "files": ["src"],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": { "@allenlabs/pm-core": "*" },
+  "peerDependencies": { "drizzle-orm": ">=0.45.0" },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.4.0",
+    "@vitest/coverage-v8": "4.1.7",
+    "drizzle-orm": "0.45.2",
+    "typescript": "5.7.2",
+    "vitest": "4.1.7"
+  }
+}

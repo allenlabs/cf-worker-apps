@@ -12,7 +12,8 @@ import { addChildIssue, setIssueParent, updateIssue, watchIssue } from '~/server
 import { getIssueImpl } from '@allenlabs/pm-core/server/issues';
 import { host } from '~/host';
 import { listLabelsImpl, type listIssueLabelsImpl, setIssueLabels } from '~/server/labels';
-import { RELATION_TYPES, addRelation, type listRelationsImpl, removeRelation } from '~/server/relations';
+import { addRelation, removeRelation } from '~/server/relations';
+import { RELATION_TYPES, type listRelationsImpl } from '@allenlabs/pm-relations';
 import { listMembersImpl } from '@allenlabs/pm-core/server/members';
 import { renderMarkdown } from '@allenlabs/pm-core/server/markdown';
 import { getRefData } from '@allenlabs/pm-core/server/ref-data';

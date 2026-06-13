@@ -5,7 +5,7 @@
 
 import { createPmHost } from '@allenlabs/pm-core/host/create-host';
 import { subtasksPlugin } from '@allenlabs/pm-subtasks';
-import { relationsPlugin } from '~/plugins/relations.plugin';
+import { relationsPlugin } from '@allenlabs/pm-relations';
 import { labelsPlugin } from '~/plugins/labels.plugin';
 import { notificationsPlugin } from '~/plugins/notifications.plugin';
 

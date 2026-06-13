@@ -12,7 +12,7 @@ import {
   updateIssueImpl,
 } from '@allenlabs/pm-core/server/issues';
 import { host } from '../../../web/app/host';
-import { RELATION_TYPES } from '../../../web/app/server/relations';
+import { RELATION_TYPES } from '@allenlabs/pm-relations';
 import { listProjectsImpl } from '@allenlabs/pm-core/server/projects';
 import { getRefData } from '@allenlabs/pm-core/server/ref-data';
 import { type AuthContext, hasPermission, type Permission } from '@allenlabs/pm-core/lib/permissions';

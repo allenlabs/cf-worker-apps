@@ -5,7 +5,7 @@ import { useT } from '@allenlabs/i18n/react';
 import { formatDate, issueKey } from '@allenlabs/pm-core/lib/format';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { listIssuesImpl } from '@allenlabs/pm-core/server/issues';
-import { listPrecedesEdgesImpl } from '~/server/relations';
+import { listPrecedesEdgesImpl } from '@allenlabs/pm-relations';
 import { getProjectImpl } from '@allenlabs/pm-core/server/projects';
 
 const parentRoute = getRouteApi('/projects/$identifier');

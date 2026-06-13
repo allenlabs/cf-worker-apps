@@ -7,7 +7,7 @@ import {
   type RelationType,
   addRelationImpl,
   listRelationsImpl,
-} from '~/server/relations';
+} from './server/relations';
 
 function findByNumber(db: DB, projectId: number, number: number) {
   return db.query.issues.findFirst({

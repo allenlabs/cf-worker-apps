@@ -1,15 +1,19 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { host } from '~/host';
-import { type TestDB, insertProject, insertUser, makeTestDb } from '../_setup/db';
+import { createPmHost } from '@allenlabs/pm-core/host/create-host';
+import { relationsPlugin } from '../src/relations.plugin';
+import { type TestDB, insertProject, insertUser, makeTestDb } from '@allenlabs/pm-core/testing/db';
 import { issueRelations } from '@allenlabs/pm-core/db/schema';
 import { type CurrentUser } from '@allenlabs/pm-core/server/auth';
-import { createIssueImpl } from '@allenlabs/pm-core/server/issues';
+import { createIssueImpl, getIssueImpl } from '@allenlabs/pm-core/server/issues';
 import {
   addRelationImpl,
   listPrecedesEdgesImpl,
   listRelationsImpl,
   removeRelationImpl,
-} from '~/server/relations';
+} from '../src/server/relations';
+
+// Exercise the relations plugin in isolation (wiring + detail + type validation).
+const host = createPmHost([relationsPlugin]);
 
 let db: TestDB;
 let alice: CurrentUser;
@@ -138,6 +142,24 @@ describe('listRelationsImpl', () => {
       .values({ sourceIssueId: a.id, targetIssueId: b.id, relationType: 'mystery' });
     const fromB = await listRelationsImpl(db, b.id);
     expect(fromB[0]!.type).toBe('mystery');
+  });
+});
+
+describe('onIssueDetailLoad', () => {
+  it('contributes the issue relations to the detail payload', async () => {
+    const a = await makeIssue('rel-target');
+    const src = await createIssueImpl(db, alice, {
+      projectId,
+      trackerId: 1,
+      subject: 'rel-source',
+      description: '',
+      doneRatio: 0,
+      relations: [{ targetNumber: a.number, type: 'blocks' }],
+    }, host);
+    const full = (await getIssueImpl(db, src.id, host)) as Awaited<
+      ReturnType<typeof getIssueImpl>
+    > & { relations: Array<{ type: string }> };
+    expect(full.relations.map((r) => r.type)).toContain('blocks');
   });
 });
 
