@@ -1,5 +1,5 @@
 import { definePmPlugin } from '@allenlabs/pm-core/host/types';
-import { listIssueLabelsImpl, setIssueLabelsImpl } from '~/server/labels';
+import { listIssueLabelsImpl, setIssueLabelsImpl } from './server/labels';
 
 /** Labels: apply those chosen at creation + contribute them to issue detail. */
 export const labelsPlugin = definePmPlugin({

@@ -6,7 +6,7 @@
 import { createPmHost } from '@allenlabs/pm-core/host/create-host';
 import { subtasksPlugin } from '@allenlabs/pm-subtasks';
 import { relationsPlugin } from '@allenlabs/pm-relations';
-import { labelsPlugin } from '~/plugins/labels.plugin';
+import { labelsPlugin } from '@allenlabs/pm-labels';
 import { notificationsPlugin } from '~/plugins/notifications.plugin';
 
 export const host = createPmHost([

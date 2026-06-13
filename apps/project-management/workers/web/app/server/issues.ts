@@ -21,7 +21,7 @@ import {
   watchIssueImpl,
 } from '@allenlabs/pm-core/server/issues';
 import { host } from '~/host';
-import type { listIssueLabelsImpl } from '~/server/labels';
+import type { listIssueLabelsImpl } from '@allenlabs/pm-labels';
 import type { listRelationsImpl } from '@allenlabs/pm-relations';
 import {
   buildAuthContext,

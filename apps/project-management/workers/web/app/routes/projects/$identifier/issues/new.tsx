@@ -8,7 +8,7 @@ import { notifyError, notifySuccess } from '~/lib/toast';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { listMembersImpl } from '@allenlabs/pm-core/server/members';
 import { createIssue } from '~/server/issues';
-import { listLabelsImpl } from '~/server/labels';
+import { listLabelsImpl } from '@allenlabs/pm-labels';
 import { RELATION_TYPES } from '@allenlabs/pm-relations';
 import { getProjectImpl } from '@allenlabs/pm-core/server/projects';
 

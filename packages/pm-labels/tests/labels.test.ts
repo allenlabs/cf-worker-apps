@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { host } from '~/host';
-import { type TestDB, insertProject, insertUser, makeTestDb } from '../_setup/db';
+import { createPmHost } from '@allenlabs/pm-core/host/create-host';
+import { labelsPlugin } from '../src/labels.plugin';
+import { type TestDB, insertProject, insertUser, makeTestDb } from '@allenlabs/pm-core/testing/db';
 import { type CurrentUser } from '@allenlabs/pm-core/server/auth';
-import { createIssueImpl } from '@allenlabs/pm-core/server/issues';
+import { createIssueImpl, getIssueImpl } from '@allenlabs/pm-core/server/issues';
 import {
   createLabelImpl,
   deleteLabelImpl,
@@ -10,7 +11,10 @@ import {
   listIssueLabelsImpl,
   listLabelsImpl,
   setIssueLabelsImpl,
-} from '~/server/labels';
+} from '../src/server/labels';
+
+// Exercise the labels plugin in isolation (apply-on-create + detail load).
+const host = createPmHost([labelsPlugin]);
 
 let db: TestDB;
 let alice: CurrentUser;
@@ -132,5 +136,17 @@ describe('createIssueImpl with labelIds', () => {
       labelIds: [a.id],
     }, host);
     expect((await listIssueLabelsImpl(db, issue.id)).map((l) => l.name)).toEqual(['a']);
+  });
+});
+
+describe('onIssueDetailLoad', () => {
+  it('contributes the issue labels to the detail payload', async () => {
+    const a = await createLabelImpl(db, { projectId, name: 'a' });
+    const issue = await makeIssue('detail');
+    await setIssueLabelsImpl(db, issue.id, [a.id]);
+    const full = (await getIssueImpl(db, issue.id, host)) as Awaited<
+      ReturnType<typeof getIssueImpl>
+    > & { labels: Array<{ name: string }> };
+    expect(full.labels.map((l) => l.name)).toEqual(['a']);
   });
 });
