@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { type TestDB, insertProject, insertUser, makeTestDb } from '../_setup/db';
+import { type TestDB, insertProject, insertUser, makeTestDb } from '@allenlabs/pm-core/testing/db';
 import { issues } from '@allenlabs/pm-core/db/schema';
 import { type CurrentUser } from '@allenlabs/pm-core/server/auth';
 import { saveWikiPageImpl } from '@allenlabs/pm-core/server/wiki';
-import { searchImpl, visibleProjectIdsImpl } from '~/server/search';
+import { searchImpl, visibleProjectIdsImpl } from '../src/server/search';
 
 let db: TestDB;
 let alice: CurrentUser;

@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { useT } from '@allenlabs/i18n/react';
 import { issueKey } from '@allenlabs/pm-core/lib/format';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
-import { searchImpl } from '~/server/search';
+import { searchImpl } from '@allenlabs/pm-search';
 
 // Inline server fn — see routes/index.tsx for the bug context (TanStack
 // Start 1.168.9 dispatch issue).  Bypass via the *Impl helper.

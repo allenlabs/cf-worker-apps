@@ -1,11 +1,8 @@
-import { createServerFn } from '@tanstack/react-start';
 import { and, eq, sql } from 'drizzle-orm';
-import { z } from 'zod';
 import { type DB } from '@allenlabs/pm-core/db/client';
 import { issues, projects, wikiPages, wikiRevisions, wikis } from '@allenlabs/pm-core/db/schema';
 import { type AuthContext } from '@allenlabs/pm-core/lib/permissions';
 import { type CurrentUser } from '@allenlabs/pm-core/server/auth';
-import { buildAuthContext, getCurrentUser, getDb } from './auth-runtime.server';
 
 export interface SearchInput {
   q: string;
@@ -123,18 +120,3 @@ export async function searchImpl(
 
   return { issues: issueRows as SearchResult['issues'], wikis: wikiRows as SearchResult['wikis'] };
 }
-
-// ---------- wrappers ----------
-// Covered by wrangler integration tests.
-/* v8 ignore start */
-export const search = createServerFn({ method: 'GET' })
-  .inputValidator((d: unknown) =>
-    z.object({ q: z.string().min(1), projectId: z.number().optional() }).parse(d),
-  )
-  .handler(async ({ data }) => {
-    const me = await getCurrentUser();
-    const ctx = me ? await buildAuthContext(me.id) : null;
-    return searchImpl(getDb(), me, ctx, data);
-  });
-
-/* v8 ignore stop */
