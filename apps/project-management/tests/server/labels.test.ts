@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { host } from '~/host';
 import { type TestDB, insertProject, insertUser, makeTestDb } from '../_setup/db';
 import { type CurrentUser } from '@allenlabs/pm-core/server/auth';
-import { createIssueImpl } from '~/server/issues';
+import { createIssueImpl } from '@allenlabs/pm-core/server/issues';
 import {
   createLabelImpl,
   deleteLabelImpl,
@@ -38,7 +39,7 @@ async function makeIssue(subject = 'i') {
     subject,
     description: '',
     doneRatio: 0,
-  });
+  }, host);
 }
 
 describe('createLabelImpl / listLabelsImpl', () => {
@@ -129,7 +130,7 @@ describe('createIssueImpl with labelIds', () => {
       description: '',
       doneRatio: 0,
       labelIds: [a.id],
-    });
+    }, host);
     expect((await listIssueLabelsImpl(db, issue.id)).map((l) => l.name)).toEqual(['a']);
   });
 });

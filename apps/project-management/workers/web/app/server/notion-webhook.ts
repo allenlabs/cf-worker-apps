@@ -27,7 +27,8 @@ import type { DB } from '@allenlabs/pm-core/db/client';
 import { issues } from '@allenlabs/pm-core/db/schema';
 import type { Env } from '@allenlabs/pm-core/lib/env';
 import type { CurrentUser } from '@allenlabs/pm-core/server/auth';
-import { updateIssueImpl } from './issues';
+import { updateIssueImpl } from '@allenlabs/pm-core/server/issues';
+import { host } from '~/host';
 import { sign } from './notion-gateway-client';
 
 export const MAX_SKEW_MS = 5 * 60 * 1000;
@@ -225,6 +226,7 @@ export async function dispatchWebhookImpl(
       db,
       ctx.systemUser,
       { id: issueId, notes: '', changes },
+      host,
       { notionOrigin: true },
     );
     return { status: 200, body: '{"ok":true,"updated":true}' };

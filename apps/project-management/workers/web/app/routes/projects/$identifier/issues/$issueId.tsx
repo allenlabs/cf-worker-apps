@@ -8,9 +8,11 @@ import { Markdown } from '~/components/Markdown';
 import { formatDate, formatDateTime, formatHours, issueKey } from '@allenlabs/pm-core/lib/format';
 import { notifyError, notifySuccess } from '~/lib/toast';
 import { getCurrentUser, getDb } from '~/server/auth-runtime.server';
-import { addChildIssue, getIssueImpl, setIssueParent, updateIssue, watchIssue } from '~/server/issues';
-import { listLabelsImpl, setIssueLabels } from '~/server/labels';
-import { RELATION_TYPES, addRelation, removeRelation } from '~/server/relations';
+import { addChildIssue, setIssueParent, updateIssue, watchIssue } from '~/server/issues';
+import { getIssueImpl } from '@allenlabs/pm-core/server/issues';
+import { host } from '~/host';
+import { listLabelsImpl, type listIssueLabelsImpl, setIssueLabels } from '~/server/labels';
+import { RELATION_TYPES, addRelation, type listRelationsImpl, removeRelation } from '~/server/relations';
 import { listMembersImpl } from '@allenlabs/pm-core/server/members';
 import { renderMarkdown } from '@allenlabs/pm-core/server/markdown';
 import { getRefData } from '@allenlabs/pm-core/server/ref-data';
@@ -23,12 +25,20 @@ const loadIssue = createServerFn({ method: 'GET' })
   .handler(async ({ data }) => {
     const db = getDb();
     const me = await getCurrentUser();
-    const result = await getIssueImpl(db, data.id);
+    const result = await getIssueImpl(db, data.id, host, me);
     const members = await listMembersImpl(db, result.issue.projectId);
     const projectLabels = await listLabelsImpl(db, result.issue.projectId);
     const refData = await getRefData(db);
+    // labels/relations come from the issue-detail hook (this app composes those
+    // plugins); re-type the loosely-typed extras for the component.
+    const issue = { ...result, isWatching: me ? result.watchers.includes(me.id) : false } as
+      typeof result & {
+        isWatching: boolean;
+        labels: Awaited<ReturnType<typeof listIssueLabelsImpl>>;
+        relations: Awaited<ReturnType<typeof listRelationsImpl>>;
+      };
     return {
-      issue: { ...result, isWatching: me ? result.watchers.includes(me.id) : false },
+      issue,
       members,
       projectLabels,
       statuses: refData.statuses.map((s) => ({ id: s.id, name: s.name })),

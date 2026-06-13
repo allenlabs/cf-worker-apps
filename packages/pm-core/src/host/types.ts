@@ -2,19 +2,22 @@
 // plugins) hook into the issue lifecycle without the core importing them. Core
 // emits events; the host fans them out to registered plugins in order.
 //
-// Stage 2 covers the server lifecycle hooks. Schema/routes/UI-slot contributions
-// are layered on in later stages; the PmPlugin shape already reserves room.
+// The host is composed by the consuming app (allenlabs' app, or a private
+// tenant's) and INJECTED into the core impls (createIssueImpl/updateIssueImpl/
+// getIssueImpl take a `host` param) — so pm-core never imports an app-side
+// singleton, and a deployment chooses its own plugin set.
 
-import type { DB } from '@allenlabs/pm-core/db/client';
-import type { Permission } from '@allenlabs/pm-core/lib/permissions';
-import type { CurrentUser } from '@allenlabs/pm-core/server/auth';
-import type { CreateIssueInput } from '~/server/issues';
-import type { Issue } from '@allenlabs/pm-core/db/schema';
+import type { DB } from '../db/client';
+import type { Permission } from '../lib/permissions';
+import type { CurrentUser } from '../server/auth';
+import type { CreateIssueInput } from '../server/issues';
+import type { Issue } from '../db/schema';
 
 /** Threaded into every hook so impls stay pure (no SSR runtime). */
 export interface PmContext {
   db: DB;
-  actingUser: CurrentUser;
+  /** The acting user, or null for unauthenticated reads (e.g. public-project issue detail). */
+  actingUser: CurrentUser | null;
   host: PmHost;
 }
 
@@ -38,12 +41,25 @@ export interface IssueUpdatedEvent {
   notes: string;
 }
 
+/**
+ * Mutable accumulator passed to `onIssueDetailLoad`. Feature plugins attach
+ * their slice of the issue-detail payload (labels, relations, …) onto it; the
+ * core merges it into getIssueImpl's result. Keeping it open is what lets the
+ * core read path stay free of any feature import.
+ */
+export type IssueDetailExtras = Record<string, unknown>;
+export interface IssueDetailLoadEvent {
+  issue: Issue;
+  detail: IssueDetailExtras;
+}
+
 /** Maps each hook name to its event payload (used to type `dispatch`). */
 export interface HookEventMap {
   onBeforeIssueCreate: BeforeIssueCreateEvent;
   onIssueCreated: IssueCreatedEvent;
   onBeforeIssueUpdate: BeforeIssueUpdateEvent;
   onIssueUpdated: IssueUpdatedEvent;
+  onIssueDetailLoad: IssueDetailLoadEvent;
 }
 export type HookName = keyof HookEventMap;
 

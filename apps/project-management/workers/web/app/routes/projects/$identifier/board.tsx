@@ -8,7 +8,8 @@ import { groupIssuesByStatus } from '@allenlabs/pm-core/lib/board';
 import { issueKey } from '@allenlabs/pm-core/lib/format';
 import { notifyError } from '~/lib/toast';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
-import { listIssuesImpl, updateIssue } from '~/server/issues';
+import { updateIssue } from '~/server/issues';
+import { listIssuesImpl } from '@allenlabs/pm-core/server/issues';
 import { getProjectImpl } from '@allenlabs/pm-core/server/projects';
 import { getRefData } from '@allenlabs/pm-core/server/ref-data';
 

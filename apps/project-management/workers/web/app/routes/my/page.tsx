@@ -5,7 +5,7 @@ import { useT } from '@allenlabs/i18n/react';
 import { PriorityBadge, StatusBadge, TrackerBadge } from '~/components/badges';
 import { formatDate, issueKey, timeAgo } from '@allenlabs/pm-core/lib/format';
 import { getAdapter, getDb, getEnv } from '~/server/auth-runtime.server';
-import { loadMyPageImpl } from '~/server/home';
+import { loadMyPageImpl } from '@allenlabs/pm-core/server/home';
 
 // Verify the session via the auth adapter (no DB hit) then dispatch to
 // loadMyPageImpl which resolves the user + all four sections in ONE

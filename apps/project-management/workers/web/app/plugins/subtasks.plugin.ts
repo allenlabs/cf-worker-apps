@@ -1,4 +1,4 @@
-import { definePmPlugin } from '~/host/types';
+import { definePmPlugin } from '@allenlabs/pm-core/host/types';
 import {
   assertParentSameProjectImpl,
   assertValidParentImpl,

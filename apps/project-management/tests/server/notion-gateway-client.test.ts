@@ -1,4 +1,5 @@
 // Tests for the HMAC-signed notion-gateway client.
+import { host } from '~/host';
 //
 // The client only does two distinct things:
 //
@@ -19,7 +20,7 @@ import {
 import { makeTestEnv } from '../_setup/env';
 import { issueCategories, versions } from '@allenlabs/pm-core/db/schema';
 import { type CurrentUser } from '@allenlabs/pm-core/server/auth';
-import { createIssueImpl } from '~/server/issues';
+import { createIssueImpl } from '@allenlabs/pm-core/server/issues';
 import {
   deletePage,
   disconnectConnection,
@@ -300,7 +301,7 @@ describe('loadIssueFields', () => {
       dueDate: '2026-05-30',
       startDate: '2026-05-23',
       estimatedHours: 2.5,
-    });
+    }, host);
     const f = await loadIssueFields(db, issue.id);
     expect(f).toMatchObject({
       subject: 'A bug',
@@ -328,7 +329,7 @@ describe('loadIssueFields', () => {
       subject: 'naked',
       description: '',
       doneRatio: 0,
-    });
+    }, host);
     const f = await loadIssueFields(db, issue.id);
     expect(f?.assignedTo).toBeNull();
     expect(f?.category).toBeNull();
@@ -349,7 +350,7 @@ describe('pushIssueBackground', () => {
       subject: 'x',
       description: '',
       doneRatio: 0,
-    });
+    }, host);
     const calls: Array<{ url: string; init: RequestInit }> = [];
     const fetcher = ((input: RequestInfo | URL, init?: RequestInit) => {
       calls.push({ url: String(input), init: init ?? {} });
@@ -391,7 +392,7 @@ describe('pushIssueBackground', () => {
       subject: 'x',
       description: '',
       doneRatio: 0,
-    });
+    }, host);
     const fetcher = vi.fn(async () => new Response('nope', { status: 404 }));
     const waits: Promise<unknown>[] = [];
     const ctx = { waitUntil: (p: Promise<unknown>) => waits.push(p) } as unknown as ExecutionContext;
@@ -412,7 +413,7 @@ describe('pushIssueBackground', () => {
       subject: 'x',
       description: '',
       doneRatio: 0,
-    });
+    }, host);
     const fetcher = vi.fn(async () => new Response('boom', { status: 500 }));
     const waits: Promise<unknown>[] = [];
     const ctx = { waitUntil: (p: Promise<unknown>) => waits.push(p) } as unknown as ExecutionContext;
@@ -432,7 +433,7 @@ describe('pushIssueBackground', () => {
       subject: 'x',
       description: '',
       doneRatio: 0,
-    });
+    }, host);
     const fetcher = vi.fn(() => Promise.reject('not-an-error'));
     const waits: Promise<unknown>[] = [];
     const ctx = { waitUntil: (p: Promise<unknown>) => waits.push(p) } as unknown as ExecutionContext;
@@ -451,7 +452,7 @@ describe('pushIssueBackground', () => {
       subject: 'x',
       description: '',
       doneRatio: 0,
-    });
+    }, host);
     let resolveCall!: () => void;
     const called = new Promise<void>((r) => {
       resolveCall = r;

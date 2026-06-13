@@ -3,7 +3,7 @@ import { createServerFn } from '@tanstack/react-start';
 import { getRequest } from '@tanstack/react-start/server';
 import { useT } from '@allenlabs/i18n/react';
 import { getAdapter, getDb, getEnv } from '~/server/auth-runtime.server';
-import { loadHomeImpl } from '~/server/home';
+import { loadHomeImpl } from '@allenlabs/pm-core/server/home';
 import { timeAgo } from '@allenlabs/pm-core/lib/format';
 
 // Verify the session via the auth adapter, then dispatch to loadHomeImpl which

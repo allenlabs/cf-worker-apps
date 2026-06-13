@@ -3,7 +3,7 @@
 // order = dispatch order. A second deployment composes its own host with a
 // different plugin list (incl. private plugins) — the core never changes.
 
-import { createPmHost } from './create-host';
+import { createPmHost } from '@allenlabs/pm-core/host/create-host';
 import { subtasksPlugin } from '~/plugins/subtasks.plugin';
 import { relationsPlugin } from '~/plugins/relations.plugin';
 import { labelsPlugin } from '~/plugins/labels.plugin';

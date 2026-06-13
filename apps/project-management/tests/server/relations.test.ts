@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { host } from '~/host';
 import { type TestDB, insertProject, insertUser, makeTestDb } from '../_setup/db';
 import { issueRelations } from '@allenlabs/pm-core/db/schema';
 import { type CurrentUser } from '@allenlabs/pm-core/server/auth';
-import { createIssueImpl } from '~/server/issues';
+import { createIssueImpl } from '@allenlabs/pm-core/server/issues';
 import {
   addRelationImpl,
   listPrecedesEdgesImpl,
@@ -37,7 +38,7 @@ function makeIssue(subject: string, pid = projectId) {
     subject,
     description: '',
     doneRatio: 0,
-  });
+  }, host);
 }
 
 describe('addRelationImpl', () => {
@@ -154,7 +155,7 @@ describe('createIssueImpl with relations', () => {
         { targetNumber: a.number, type: 'blocks' },
         { targetNumber: b.number, type: 'relates' },
       ],
-    });
+    }, host);
     const rels = await listRelationsImpl(db, created.id);
     expect(rels.map((r) => `${r.type}:${r.number}`).sort()).toEqual([
       `blocks:${a.number}`,
@@ -172,10 +173,24 @@ describe('createIssueImpl with relations', () => {
         description: '',
         doneRatio: 0,
         relations: [{ targetNumber: 9999, type: 'relates' }],
-      }),
+      }, host),
     ).rejects.toThrow(/not found in this project/);
     const after = await db.select().from(issueRelations);
     expect(after.length).toBe(before.length); // no relation rows created
+  });
+
+  it('rejects an unknown relation type (vocabulary owned by the plugin)', async () => {
+    const a = await makeIssue('target');
+    await expect(
+      createIssueImpl(db, alice, {
+        projectId,
+        trackerId: 1,
+        subject: 'bad type',
+        description: '',
+        doneRatio: 0,
+        relations: [{ targetNumber: a.number, type: 'not-a-real-type' }],
+      }, host),
+    ).rejects.toThrow(/Unknown relation type/);
   });
 });
 

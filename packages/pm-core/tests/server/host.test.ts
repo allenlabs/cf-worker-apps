@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createPmHost } from '~/host/create-host';
-import { definePmPlugin, type PmContext } from '~/host/types';
+import { createPmHost } from '../../src/host/create-host';
+import { definePmPlugin, type PmContext } from '../../src/host/types';
 
 // A throwaway context — these tests never touch the DB; they only assert the
 // host's fan-out / ordering / validation, so a cast is enough.

@@ -10,7 +10,8 @@ import {
   getIssueImpl,
   listIssuesImpl,
   updateIssueImpl,
-} from '../../../web/app/server/issues';
+} from '@allenlabs/pm-core/server/issues';
+import { host } from '../../../web/app/host';
 import { RELATION_TYPES } from '../../../web/app/server/relations';
 import { listProjectsImpl } from '@allenlabs/pm-core/server/projects';
 import { getRefData } from '@allenlabs/pm-core/server/ref-data';
@@ -138,7 +139,14 @@ issuesRouter.get('/projects/:key/issues/:number', async (c) => {
     where: and(eq(issues.projectId, project.id), eq(issues.number, number)),
   });
   if (!row) return c.json({ error: 'issue not found' }, 404);
-  const full = await getIssueImpl(db, row.id);
+  // labels/relations arrive via the issue-detail hook (the labels + relations
+  // plugins this worker's host composes); cast to read those extra slices.
+  const full = (await getIssueImpl(db, row.id, host, principal.me)) as Awaited<
+    ReturnType<typeof getIssueImpl>
+  > & {
+    labels: Array<{ name: string }>;
+    relations: Array<{ type: string; projectKey: string; number: number }>;
+  };
   return c.json({
     key: issueKey(project.key, full.issue.number),
     id: full.issue.id,
@@ -155,8 +163,12 @@ issuesRouter.get('/projects/:key/issues/:number', async (c) => {
     dueDate: full.issue.dueDate,
     parent: full.parent ? issueKey(project.key, full.parent.number) : null,
     children: full.children.map((k) => issueKey(project.key, k.number)),
-    labels: full.labels.map((l) => l.name),
-    relations: full.relations.map((r) => ({ type: r.type, key: issueKey(r.projectKey, r.number) })),
+    // labels/relations arrive via the issue-detail hook (the labels + relations
+    // plugins), so the core getIssueImpl return types them loosely.
+    labels: (full.labels as Array<{ name: string }>).map((l) => l.name),
+    relations: (full.relations as Array<{ type: string; projectKey: string; number: number }>).map(
+      (r) => ({ type: r.type, key: issueKey(r.projectKey, r.number) }),
+    ),
   });
 });
 
@@ -224,7 +236,7 @@ issuesRouter.post('/projects/:key/issues', async (c) => {
       labelIds: result.data.labelIds,
       parentId,
       relations: result.data.relations,
-    });
+    }, host);
   } catch (e) {
     return c.json({ error: errMsg(e) }, 422);
   }
@@ -268,7 +280,7 @@ issuesRouter.post('/projects/:key/issues/:number', async (c) => {
   }
   let updated;
   try {
-    updated = await updateIssueImpl(db, principal.me, { id: row.id, notes, changes });
+    updated = await updateIssueImpl(db, principal.me, { id: row.id, notes, changes }, host);
   } catch (e) {
     return c.json({ error: errMsg(e) }, 422);
   }
@@ -306,7 +318,7 @@ issuesRouter.post('/projects/:key/issues/:number/parent', async (c) => {
     parentId = parent.id;
   }
   try {
-    await updateIssueImpl(db, principal.me, { id: row.id, notes: '', changes: { parentId } });
+    await updateIssueImpl(db, principal.me, { id: row.id, notes: '', changes: { parentId } }, host);
   } catch (e) {
     return c.json({ error: errMsg(e) }, 422);
   }
@@ -343,7 +355,7 @@ issuesRouter.post('/projects/:key/issues/:number/children', async (c) => {
   const child = await findByNumber(db, project.id, body.data.childNumber);
   if (!child) return c.json({ error: `child #${body.data.childNumber} not found` }, 422);
   try {
-    await updateIssueImpl(db, principal.me, { id: child.id, notes: '', changes: { parentId: parent.id } });
+    await updateIssueImpl(db, principal.me, { id: child.id, notes: '', changes: { parentId: parent.id } }, host);
   } catch (e) {
     return c.json({ error: errMsg(e) }, 422);
   }

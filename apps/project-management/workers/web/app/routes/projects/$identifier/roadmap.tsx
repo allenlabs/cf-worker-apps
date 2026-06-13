@@ -5,7 +5,7 @@ import { useT } from '@allenlabs/i18n/react';
 import { ProgressBar } from '~/components/badges';
 import { formatDate } from '@allenlabs/pm-core/lib/format';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
-import { listIssuesImpl } from '~/server/issues';
+import { listIssuesImpl } from '@allenlabs/pm-core/server/issues';
 import { getProjectImpl } from '@allenlabs/pm-core/server/projects';
 import { listVersionsImpl } from '@allenlabs/pm-core/server/versions';
 

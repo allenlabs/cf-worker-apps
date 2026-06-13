@@ -6,8 +6,8 @@
 // the TanStack Start runtime.
 
 import { sql } from 'drizzle-orm';
-import { type DB } from '@allenlabs/pm-core/db/client';
-import { extractRows } from '@allenlabs/pm-core/server/projects';
+import { type DB } from '../db/client';
+import { extractRows } from './projects';
 
 export interface HomePayload {
   projects: Array<{

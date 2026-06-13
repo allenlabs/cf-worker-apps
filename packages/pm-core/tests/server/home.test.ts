@@ -6,14 +6,15 @@ import {
   insertProject,
   insertUser,
   makeTestDb,
-} from '../_setup/db';
+} from '../../src/testing/db';
 import { activities, issues, watchers } from '@allenlabs/pm-core/db/schema';
-import {
-  loadHomeImpl,
-  loadMyPageImpl,
-} from '~/server/home';
-import { createIssueImpl } from '~/server/issues';
+import { loadHomeImpl, loadMyPageImpl } from '../../src/server/home';
+import { createIssueImpl } from '../../src/server/issues';
+import { createPmHost } from '../../src/host/create-host';
 import { type CurrentUser } from '@allenlabs/pm-core/server/auth';
+
+// home only needs issue rows to exist; a plugin-less host is enough.
+const host = createPmHost([]);
 
 let db: TestDB;
 
@@ -148,14 +149,14 @@ describe('loadMyPageImpl', () => {
       subject: 'reported-by-alice',
       description: '',
       doneRatio: 0,
-    });
+    }, host);
     const reportedByBob = await createIssueImpl(db, asCurrentUser(bob), {
       projectId: p.id,
       trackerId: 1,
       subject: 'reported-by-bob',
       description: '',
       doneRatio: 0,
-    });
+    }, host);
     // bob assigns one of his issues to alice
     await db
       .update(issues)

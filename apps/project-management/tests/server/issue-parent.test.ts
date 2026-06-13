@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { host } from '~/host';
 import { eq } from 'drizzle-orm';
 import { type TestDB, insertProject, insertUser, makeTestDb } from '../_setup/db';
 import { issues } from '@allenlabs/pm-core/db/schema';
 import { type CurrentUser } from '@allenlabs/pm-core/server/auth';
-import { createIssueImpl, getIssueImpl, updateIssueImpl } from '~/server/issues';
+import { createIssueImpl, getIssueImpl, updateIssueImpl } from '@allenlabs/pm-core/server/issues';
 import { assertValidParentImpl, rollupParentDoneRatioImpl } from '~/server/subtasks';
 
 let db: TestDB;
@@ -25,7 +26,7 @@ function mk(overrides: Partial<{ subject: string; doneRatio: number; parentId: n
     description: '',
     doneRatio: overrides.doneRatio ?? 0,
     parentId: overrides.parentId,
-  });
+  }, host);
 }
 
 describe('assertValidParentImpl', () => {
@@ -115,7 +116,7 @@ describe('createIssueImpl parent handling', () => {
   it('creates under a valid parent and rolls up the parent done ratio', async () => {
     const p = await mk();
     const c = await mk({ parentId: p.id, doneRatio: 50 });
-    const got = await getIssueImpl(db, p.id);
+    const got = await getIssueImpl(db, p.id, host);
     expect(got.children.map((k) => k.id)).toEqual([c.id]);
     expect((await db.query.issues.findFirst({ where: eq(issues.id, p.id) }))!.doneRatio).toBe(50);
   });
@@ -131,7 +132,7 @@ describe('updateIssueImpl re-parenting + roll-up', () => {
   it('attaches a child and rolls up the new parent', async () => {
     const p = await mk();
     const c = await mk({ doneRatio: 80 });
-    await updateIssueImpl(db, alice, { id: c.id, notes: '', changes: { parentId: p.id } });
+    await updateIssueImpl(db, alice, { id: c.id, notes: '', changes: { parentId: p.id } }, host);
     expect((await db.query.issues.findFirst({ where: eq(issues.id, c.id) }))!.parentId).toBe(p.id);
     expect((await db.query.issues.findFirst({ where: eq(issues.id, p.id) }))!.doneRatio).toBe(80);
   });
@@ -140,7 +141,7 @@ describe('updateIssueImpl re-parenting + roll-up', () => {
     const a = await mk();
     const b = await mk();
     const c = await mk({ parentId: a.id, doneRatio: 100 }); // create rolls a up to 100
-    await updateIssueImpl(db, alice, { id: c.id, notes: '', changes: { parentId: b.id } });
+    await updateIssueImpl(db, alice, { id: c.id, notes: '', changes: { parentId: b.id } }, host);
     // a is now childless → roll-up is a no-op, so it keeps its last value (100);
     // b inherits the child's 100.
     expect((await db.query.issues.findFirst({ where: eq(issues.id, a.id) }))!.doneRatio).toBe(100);
@@ -150,7 +151,7 @@ describe('updateIssueImpl re-parenting + roll-up', () => {
   it('detaches a child (parentId → null)', async () => {
     const p = await mk();
     const c = await mk({ parentId: p.id });
-    await updateIssueImpl(db, alice, { id: c.id, notes: '', changes: { parentId: null } });
+    await updateIssueImpl(db, alice, { id: c.id, notes: '', changes: { parentId: null } }, host);
     expect((await db.query.issues.findFirst({ where: eq(issues.id, c.id) }))!.parentId).toBeNull();
   });
 
@@ -158,20 +159,20 @@ describe('updateIssueImpl re-parenting + roll-up', () => {
     const p = await mk();
     const c = await mk({ parentId: p.id });
     await expect(
-      updateIssueImpl(db, alice, { id: c.id, notes: '', changes: { parentId: p.id } }),
+      updateIssueImpl(db, alice, { id: c.id, notes: '', changes: { parentId: p.id } }, host),
     ).resolves.toBeTruthy();
   });
 
   it('rolls up the parent when a child done ratio changes', async () => {
     const p = await mk();
     const c = await mk({ parentId: p.id, doneRatio: 0 });
-    await updateIssueImpl(db, alice, { id: c.id, notes: '', changes: { doneRatio: 60 } });
+    await updateIssueImpl(db, alice, { id: c.id, notes: '', changes: { doneRatio: 60 } }, host);
     expect((await db.query.issues.findFirst({ where: eq(issues.id, p.id) }))!.doneRatio).toBe(60);
   });
 
   it('does not roll up a parentless issue on done-ratio change', async () => {
     const a = await mk({ doneRatio: 0 });
-    await updateIssueImpl(db, alice, { id: a.id, notes: '', changes: { doneRatio: 90 } });
+    await updateIssueImpl(db, alice, { id: a.id, notes: '', changes: { doneRatio: 90 } }, host);
     expect((await db.query.issues.findFirst({ where: eq(issues.id, a.id) }))!.doneRatio).toBe(90);
   });
 
@@ -179,7 +180,7 @@ describe('updateIssueImpl re-parenting + roll-up', () => {
     const a = await mk();
     const b = await mk({ parentId: a.id });
     await expect(
-      updateIssueImpl(db, alice, { id: a.id, notes: '', changes: { parentId: b.id } }),
+      updateIssueImpl(db, alice, { id: a.id, notes: '', changes: { parentId: b.id } }, host),
     ).rejects.toThrow(/circular/);
   });
 });

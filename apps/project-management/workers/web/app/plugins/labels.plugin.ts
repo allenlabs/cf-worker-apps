@@ -1,7 +1,7 @@
-import { definePmPlugin } from '~/host/types';
-import { setIssueLabelsImpl } from '~/server/labels';
+import { definePmPlugin } from '@allenlabs/pm-core/host/types';
+import { listIssueLabelsImpl, setIssueLabelsImpl } from '~/server/labels';
 
-/** Apply labels chosen at issue creation. */
+/** Labels: apply those chosen at creation + contribute them to issue detail. */
 export const labelsPlugin = definePmPlugin({
   id: 'labels',
   permissions: ['manage_categories'],
@@ -10,6 +10,9 @@ export const labelsPlugin = definePmPlugin({
       if (input.labelIds && input.labelIds.length > 0) {
         await setIssueLabelsImpl(ctx.db, issue.id, input.labelIds);
       }
+    },
+    async onIssueDetailLoad(ctx, { issue, detail }) {
+      detail.labels = await listIssueLabelsImpl(ctx.db, issue.id);
     },
   },
 });

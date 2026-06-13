@@ -5,8 +5,8 @@ import {
   insertProject,
   insertUser,
   makeTestDb,
-} from '../_setup/db';
-import { issues, journals, watchers } from '@allenlabs/pm-core/db/schema';
+} from '../../src/testing/db';
+import { activities, issueLabels, issues, journals, labels, watchers } from '@allenlabs/pm-core/db/schema';
 import { type CurrentUser } from '@allenlabs/pm-core/server/auth';
 import {
   countIssuesImpl,
@@ -16,8 +16,14 @@ import {
   listIssuesImpl,
   updateIssueImpl,
   watchIssueImpl,
-} from '~/server/issues';
-import { createLabelImpl, setIssueLabelsImpl } from '~/server/labels';
+} from '../../src/server/issues';
+import { createPmHost } from '../../src/host/create-host';
+
+// issues.ts is host-agnostic; a plugin-less host exercises the dispatch points
+// (no-ops) while keeping this suite focused on the core issue logic. Feature
+// reactions (labels/relations/rollup/notifications) are tested in their own
+// packages / the app integration suite.
+const host = createPmHost([]);
 
 let db: TestDB;
 let alice: CurrentUser;
@@ -46,7 +52,7 @@ async function seedIssue(overrides: Partial<{ subject: string; trackerId: number
     subject: overrides.subject ?? 'A bug',
     description: overrides.description ?? 'It broke',
     doneRatio: 0,
-  });
+  }, host);
 }
 
 describe('createIssueImpl', () => {
@@ -73,7 +79,7 @@ describe('createIssueImpl', () => {
       statusId: 3,
       priorityId: 4,
       doneRatio: 50,
-    });
+    }, host);
     expect(i.statusId).toBe(3);
     expect(i.priorityId).toBe(4);
     expect(i.doneRatio).toBe(50);
@@ -98,7 +104,7 @@ describe('createIssueImpl', () => {
       subject: 'o1',
       description: '',
       doneRatio: 0,
-    });
+    }, host);
     expect(otherFirst.number).toBe(1);
   });
 
@@ -110,7 +116,7 @@ describe('createIssueImpl', () => {
         subject: 'ghost',
         description: '',
         doneRatio: 0,
-      }),
+      }, host),
     ).rejects.toThrow(/not found/);
   });
 });
@@ -153,9 +159,9 @@ describe('listIssuesImpl', () => {
 
   it('filters by label', async () => {
     const tagged = await seedIssue({ subject: 'tagged' });
-    const label = await createLabelImpl(db, { projectId, name: 'urgent' });
-    await setIssueLabelsImpl(db, tagged.id, [label.id]);
-    const list = await listIssuesImpl(db, { projectId, statusFilter: 'all', label: label.id });
+    const [label] = await db.insert(labels).values({ projectId, name: 'urgent' }).returning();
+    await db.insert(issueLabels).values({ issueId: tagged.id, labelId: label!.id });
+    const list = await listIssuesImpl(db, { projectId, statusFilter: 'all', label: label!.id });
     expect(list.map((i) => i.subject)).toEqual(['tagged']);
   });
 
@@ -218,9 +224,9 @@ describe('getIssueImpl', () => {
     const parent = await seedIssue({ subject: 'parent' });
     const child = await seedIssue({ subject: 'child' });
     await db.update(issues).set({ parentId: parent.id }).where(eq(issues.id, child.id));
-    await updateIssueImpl(db, alice, { id: parent.id, notes: 'hello', changes: {} });
+    await updateIssueImpl(db, alice, { id: parent.id, notes: 'hello', changes: {} }, host);
 
-    const r = await getIssueImpl(db, parent.id);
+    const r = await getIssueImpl(db, parent.id, host);
     expect(r.issue.subject).toBe('parent');
     expect(r.children.map((c) => c.subject)).toEqual(['child']);
     expect(r.journals).toHaveLength(1);
@@ -230,8 +236,8 @@ describe('getIssueImpl', () => {
 
   it('hydrates journal details for changed-field journals', async () => {
     const i = await seedIssue();
-    await updateIssueImpl(db, alice, { id: i.id, notes: 'work', changes: { statusId: 2 } });
-    const r = await getIssueImpl(db, i.id);
+    await updateIssueImpl(db, alice, { id: i.id, notes: 'work', changes: { statusId: 2 } }, host);
+    const r = await getIssueImpl(db, i.id, host);
     expect(r.journals).toHaveLength(1);
     expect(r.journals[0]!.details.length).toBeGreaterThan(0);
     expect(r.journals[0]!.details[0]!.prop_key).toBe('status');
@@ -261,7 +267,7 @@ describe('getIssueImpl', () => {
       })
       .where(eq(issues.id, child.id));
 
-    const r = await getIssueImpl(db, child.id);
+    const r = await getIssueImpl(db, child.id, host);
     expect(r.assignee?.id).toBe(alice.id);
     expect(r.category?.id).toBe(cat.id);
     expect(r.version?.id).toBe(ver.id);
@@ -275,8 +281,8 @@ describe('getIssueImpl', () => {
       id: i.id,
       notes: '',
       changes: { assignedToId: alice.id },
-    });
-    const r = await getIssueImpl(db, i.id);
+    }, host);
+    const r = await getIssueImpl(db, i.id, host);
     const detail = r.journals[0]!.details.find((d) => d.prop_key === 'assigned_to');
     expect(detail?.oldValue).toBeNull();
     expect(detail?.newValue).toBe(String(alice.id));
@@ -286,8 +292,8 @@ describe('getIssueImpl', () => {
       id: i.id,
       notes: '',
       changes: { assignedToId: null },
-    });
-    const r2 = await getIssueImpl(db, i.id);
+    }, host);
+    const r2 = await getIssueImpl(db, i.id, host);
     const last = r2.journals[r2.journals.length - 1]!.details.find(
       (d) => d.prop_key === 'assigned_to',
     );
@@ -296,18 +302,29 @@ describe('getIssueImpl', () => {
   });
 
   it('throws when issue is missing', async () => {
-    await expect(getIssueImpl(db, 99999)).rejects.toThrow(/not found/);
+    await expect(getIssueImpl(db, 99999, host)).rejects.toThrow(/not found/);
   });
 });
 
 describe('updateIssueImpl', () => {
+  it('records the notion-origin marker on the activity when opts.notionOrigin is set', async () => {
+    const i = await seedIssue();
+    await updateIssueImpl(db, alice, { id: i.id, notes: 'sync', changes: {} }, host, {
+      notionOrigin: true,
+    });
+    const act = await db.query.activities.findFirst({
+      where: eq(activities.kind, 'comment_added'),
+    });
+    expect(act?.body).toBe('notionOrigin=true');
+  });
+
   it('writes journal_details for changed fields', async () => {
     const i = await seedIssue();
     await updateIssueImpl(db, alice, {
       id: i.id,
       notes: '',
       changes: { statusId: 2, doneRatio: 25 },
-    });
+    }, host);
     const j = await db.query.journals.findFirst({ where: eq(journals.issueId, i.id) });
     expect(j).toBeDefined();
     const details = await db.query.journalDetails.findMany();
@@ -322,7 +339,7 @@ describe('updateIssueImpl', () => {
       id: i.id,
       notes: '',
       changes: { statusId: i.statusId, bogus: 'x' },
-    });
+    }, host);
     const journalsForIssue = await db.query.journals.findMany({
       where: eq(journals.issueId, i.id),
     });
@@ -336,13 +353,13 @@ describe('updateIssueImpl', () => {
       id: i.id,
       notes: '',
       changes: { statusId: 5 }, // Closed
-    });
+    }, host);
     expect(updated.closedAt).not.toBeNull();
   });
 
   it('records comment_added when only notes provided', async () => {
     const i = await seedIssue();
-    await updateIssueImpl(db, alice, { id: i.id, notes: 'looks good', changes: {} });
+    await updateIssueImpl(db, alice, { id: i.id, notes: 'looks good', changes: {} }, host);
     const act = await db.query.activities.findMany();
     const comment = act.find((a) => a.kind === 'comment_added');
     expect(comment?.title).toContain('alice');
@@ -350,7 +367,7 @@ describe('updateIssueImpl', () => {
 
   it('throws on missing issue', async () => {
     await expect(
-      updateIssueImpl(db, alice, { id: 99999, notes: '', changes: { statusId: 2 } }),
+      updateIssueImpl(db, alice, { id: 99999, notes: '', changes: { statusId: 2 } }, host),
     ).rejects.toThrow(/not found/);
   });
 });
@@ -374,7 +391,7 @@ describe('watchIssueImpl', () => {
   it('getIssueImpl returns the watcher list', async () => {
     const i = await seedIssue();
     await watchIssueImpl(db, alice, i.id, true);
-    const r = await getIssueImpl(db, i.id);
+    const r = await getIssueImpl(db, i.id, host);
     expect(r.watchers).toEqual([alice.id]);
   });
 });

@@ -7,6 +7,7 @@
     ".": "./src/index.ts",
     "./lib/*": "./src/lib/*.ts",
     "./db/*": "./src/db/*.ts",
+    "./host/*": "./src/host/*.ts",
     "./server/*": "./src/server/*.ts",
     "./testing/db": "./src/testing/db.ts",
     "./testing/env": "./src/testing/env.ts",

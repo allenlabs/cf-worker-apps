@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { host } from '~/host';
 import { type TestDB, insertProject, insertUser, makeTestDb } from '../_setup/db';
 import { watchers } from '@allenlabs/pm-core/db/schema';
 import { type CurrentUser } from '@allenlabs/pm-core/server/auth';
-import { createIssueImpl, updateIssueImpl } from '~/server/issues';
+import { createIssueImpl, updateIssueImpl } from '@allenlabs/pm-core/server/issues';
 import {
   dispatchIssueNotificationsImpl,
   listNotificationsImpl,
@@ -38,7 +39,7 @@ function makeIssue(assignedToId?: number, description = '') {
     description,
     doneRatio: 0,
     assignedToId: assignedToId ?? null,
-  });
+  }, host);
 }
 
 describe('dispatchIssueNotificationsImpl', () => {
@@ -151,7 +152,7 @@ describe('issue events generate notifications', () => {
       id: issue.id,
       notes: 'taking a look',
       changes: { assignedToId: bob.id },
-    });
+    }, host);
     expect((await listNotificationsImpl(db, bob.id)).map((n) => n.kind)).toEqual(['assigned']);
     expect((await listNotificationsImpl(db, carol.id)).map((n) => n.kind)).toEqual(['commented']);
   });
@@ -159,7 +160,7 @@ describe('issue events generate notifications', () => {
   it('unassigning notifies nobody about assignment', async () => {
     const issue = await makeIssue(bob.id); // bob gets the initial 'assigned'
     await markAllReadImpl(db, bob.id);
-    await updateIssueImpl(db, alice, { id: issue.id, notes: '', changes: { assignedToId: null } });
+    await updateIssueImpl(db, alice, { id: issue.id, notes: '', changes: { assignedToId: null } }, host);
     // No new 'assigned' notification from the unassign (null assignee).
     expect(await unreadCountImpl(db, bob.id)).toBe(0);
   });

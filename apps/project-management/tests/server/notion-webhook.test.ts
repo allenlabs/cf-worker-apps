@@ -1,4 +1,5 @@
 // Tests for the inbound notion-gateway webhook.
+import { host } from '~/host';
 //
 // The route shell (in `routes/api.notion-webhook.tsx`) is thin and runs
 // under TanStack Start's request handler — it's exercised by deploy smoke
@@ -14,7 +15,7 @@ import {
   verifyWebhookImpl,
 } from '~/server/notion-webhook';
 import { activities, issueCategories, issueStatuses, issues, journals, trackers, versions } from '@allenlabs/pm-core/db/schema';
-import { createIssueImpl, updateIssueImpl } from '~/server/issues';
+import { createIssueImpl, updateIssueImpl } from '@allenlabs/pm-core/server/issues';
 import { type CurrentUser } from '@allenlabs/pm-core/server/auth';
 import { type TestDB, insertProject, insertUser, makeTestDb } from '../_setup/db';
 import { makeTestEnv } from '../_setup/env';
@@ -257,7 +258,7 @@ describe('dispatchWebhookImpl', () => {
       subject: 'x',
       description: '',
       doneRatio: 0,
-    });
+    }, host);
     const r = await dispatchWebhookImpl(
       db,
       {
@@ -287,7 +288,7 @@ describe('dispatchWebhookImpl', () => {
       subject: 'orig',
       description: '',
       doneRatio: 0,
-    });
+    }, host);
     const r = await dispatchWebhookImpl(
       db,
       {
@@ -311,7 +312,7 @@ describe('dispatchWebhookImpl', () => {
       subject: 'x',
       description: '',
       doneRatio: 0,
-    });
+    }, host);
     const r = await dispatchWebhookImpl(
       db,
       {
@@ -331,7 +332,7 @@ describe('dispatchWebhookImpl', () => {
       subject: 'orig',
       description: '',
       doneRatio: 0,
-    });
+    }, host);
     const r = await dispatchWebhookImpl(
       db,
       {
@@ -361,7 +362,7 @@ describe('dispatchWebhookImpl', () => {
       subject: 'x',
       description: '',
       doneRatio: 0,
-    });
+    }, host);
     const r = await dispatchWebhookImpl(
       db,
       {
@@ -386,12 +387,12 @@ describe('updateIssueImpl notionOrigin flag', () => {
       subject: 'orig',
       description: '',
       doneRatio: 0,
-    });
+    }, host);
     await updateIssueImpl(db, alice, {
       id: issue.id,
       notes: '',
       changes: { subject: 'pm-side' },
-    });
+    }, host);
     const act = await db.query.activities.findFirst({
       where: eq(activities.kind, 'issue_updated'),
     });
@@ -405,11 +406,12 @@ describe('updateIssueImpl notionOrigin flag', () => {
       subject: 'orig',
       description: '',
       doneRatio: 0,
-    });
+    }, host);
     await updateIssueImpl(
       db,
       alice,
       { id: issue.id, notes: '', changes: { subject: 'webhook-side' } },
+      host,
       { notionOrigin: true },
     );
     const act = await db.query.activities.findFirst({
