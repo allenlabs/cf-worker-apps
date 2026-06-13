@@ -3,7 +3,7 @@ import {
   assertParentSameProjectImpl,
   assertValidParentImpl,
   rollupParentDoneRatioImpl,
-} from '~/server/subtasks';
+} from './server/subtasks';
 
 /** Parent/child subtask hierarchy: validation + done-ratio roll-up. */
 export const subtasksPlugin = definePmPlugin({

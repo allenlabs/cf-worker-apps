@@ -1,11 +1,15 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { host } from '~/host';
+import { createPmHost } from '@allenlabs/pm-core/host/create-host';
+import { subtasksPlugin } from '../src/subtasks.plugin';
 import { eq } from 'drizzle-orm';
-import { type TestDB, insertProject, insertUser, makeTestDb } from '../_setup/db';
+import { type TestDB, insertProject, insertUser, makeTestDb } from '@allenlabs/pm-core/testing/db';
 import { issues } from '@allenlabs/pm-core/db/schema';
 import { type CurrentUser } from '@allenlabs/pm-core/server/auth';
 import { createIssueImpl, getIssueImpl, updateIssueImpl } from '@allenlabs/pm-core/server/issues';
-import { assertValidParentImpl, rollupParentDoneRatioImpl } from '~/server/subtasks';
+import { assertValidParentImpl, rollupParentDoneRatioImpl } from '../src/server/subtasks';
+
+// Exercise the subtasks plugin in isolation.
+const host = createPmHost([subtasksPlugin]);
 
 let db: TestDB;
 let alice: CurrentUser;
