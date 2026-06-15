@@ -3,7 +3,7 @@ import { createServerFn } from '@tanstack/react-start';
 import { useState } from 'react';
 import { z } from 'zod';
 import { useT } from '@allenlabs/i18n/react';
-import { ProgressBar } from '~/components/badges';
+import { ProgressBar } from '@allenlabs/pm-ui';
 import { formatDate } from '@allenlabs/pm-core/lib/format';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { getProjectImpl } from '@allenlabs/pm-core/server/projects';

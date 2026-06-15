@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { useT } from '@allenlabs/i18n/react';
 import { users } from '@allenlabs/pm-core/db/schema';
 import { formatDateTime } from '@allenlabs/pm-core/lib/format';
-import { notifyError, notifySuccess } from '~/lib/toast';
+import { notifyError, notifySuccess } from '@allenlabs/pm-ui';
 import { getDb, requireAdmin } from '~/server/auth-runtime.server';
 
 const loadUsers = createServerFn({ method: 'GET' }).handler(async () => {

@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { z } from 'zod';
 import { useT } from '@allenlabs/i18n/react';
 import { displayName, formatDate, handle } from '@allenlabs/pm-core/lib/format';
-import { notifyError, notifySuccess } from '~/lib/toast';
+import { notifyError, notifySuccess } from '@allenlabs/pm-ui';
 import { buildAuthContext, getCurrentUser, getDb, getEnv } from '~/server/auth-runtime.server';
 import { inviteTeamMember, removeTeamMember, setTeamMemberRole } from '~/server/members';
 import { loadTeamMembersImpl, TEAM_ROLE_OPTIONS } from '@allenlabs/pm-core/server/members';

@@ -2,7 +2,7 @@ import { createFileRoute, redirect } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useT } from '@allenlabs/i18n/react';
 import { deriveProjectKey, slugify } from '@allenlabs/pm-core/lib/format';
-import { notifyError, notifySuccess } from '~/lib/toast';
+import { notifyError, notifySuccess } from '@allenlabs/pm-ui';
 import { getCurrentUser } from '~/server/auth-runtime.server';
 import { createProject } from '~/server/projects';
 

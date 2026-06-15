@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { issues, issueStatuses } from '@allenlabs/pm-core/db/schema';
 import { PM_FIELDS } from '@cf-worker-apps/notion-gateway/shared/src/types';
 import { useT } from '@allenlabs/i18n/react';
-import { notifyError, notifySuccess } from '~/lib/toast';
+import { notifyError, notifySuccess } from '@allenlabs/pm-ui';
 import { getDb, getEnv, requirePermission } from '~/server/auth-runtime.server';
 import * as notionGateway from '~/server/notion-gateway-client';
 import type {

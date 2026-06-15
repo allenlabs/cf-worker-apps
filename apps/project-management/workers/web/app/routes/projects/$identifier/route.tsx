@@ -2,7 +2,7 @@ import { Link, Outlet, createFileRoute, notFound } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start';
 import { z } from 'zod';
 import { useT } from '@allenlabs/i18n/react';
-import { ProjectSidebar } from '~/components/ProjectSidebar';
+import { ProjectSidebar } from '@allenlabs/pm-ui';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { getProjectImpl } from '@allenlabs/pm-core/server/projects';
 

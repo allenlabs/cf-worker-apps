@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { render } from '@testing-library/react';
-import { Markdown } from '~/components/Markdown';
+import { Markdown } from '../src/Markdown';
 
 describe('Markdown', () => {
   it('injects the provided html', () => {

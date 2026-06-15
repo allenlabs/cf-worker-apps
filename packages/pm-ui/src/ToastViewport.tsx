@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useT } from '@allenlabs/i18n/react';
-import { TOAST_EVENT, type ToastEventDetail, type ToastKind } from '~/lib/toast';
+import { TOAST_EVENT, type ToastEventDetail, type ToastKind } from './toast';
 
 interface Toast {
   id: number;

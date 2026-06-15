@@ -2,15 +2,15 @@ import type { ReactElement } from 'react';
 import { act, render as rtlRender, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { I18nProvider } from '@allenlabs/i18n/react';
-import { ToastViewport } from '~/components/ToastViewport';
-import { pmDict } from '~/i18n/dict';
-import { notifyError, notifySuccess, TOAST_EVENT, type ToastEventDetail } from '~/lib/toast';
+import { ToastViewport } from '../src/ToastViewport';
+import { pmUiStrings } from '../src/dict';
+import { notifyError, notifySuccess, TOAST_EVENT, type ToastEventDetail } from '../src/toast';
 
 // ToastViewport calls useT(); wrap every render in an English provider so the
 // component resolves translations and existing English-text assertions hold.
 function render(ui: ReactElement) {
   return rtlRender(
-    <I18nProvider locale="en" dict={pmDict}>
+    <I18nProvider locale="en" dict={pmUiStrings}>
       {ui}
     </I18nProvider>,
   );

@@ -8,14 +8,14 @@ import {
   createRouter,
   Outlet,
 } from '@tanstack/react-router';
-import { ProjectSidebar } from '~/components/ProjectSidebar';
+import { ProjectSidebar } from '../src/ProjectSidebar';
 import { I18nProvider } from '@allenlabs/i18n/react';
-import { pmDict } from '~/i18n/dict';
+import { pmUiStrings } from '../src/dict';
 
 function renderAt(path: string, modules: string[]) {
   const root = createRootRoute({
     component: () => (
-      <I18nProvider locale="en" dict={pmDict}>
+      <I18nProvider locale="en" dict={pmUiStrings}>
         <div>
           <ProjectSidebar identifier="demo" projectName="Demo" modules={modules} />
           <Outlet />

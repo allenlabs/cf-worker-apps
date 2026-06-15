@@ -6,7 +6,7 @@ import {
   ProgressBar,
   StatusBadge,
   TrackerBadge,
-} from '~/components/badges';
+} from '../src/badges';
 
 describe('StatusBadge', () => {
   it('renders the name and applies the color', () => {

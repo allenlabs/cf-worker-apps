@@ -1,0 +1,37 @@
+{
+  "name": "@allenlabs/pm-ui",
+  "version": "0.0.0",
+  "description": "Shared React UI components for the Allen Labs PM suite (badges, markdown, project sidebar, toast). Presentational; a thin app composes its own shell from these.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
+  },
+  "peerDependencies": {
+    "@allenlabs/i18n": "*",
+    "@tanstack/react-router": ">=1.170.0",
+    "react": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@allenlabs/i18n": "*",
+    "@tanstack/react-router": "1.170.8",
+    "@testing-library/dom": "^10.4.0",
+    "@testing-library/jest-dom": "^6.0.0",
+    "@testing-library/react": "^16.0.0",
+    "@types/react": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "@vitest/coverage-v8": "4.1.7",
+    "jsdom": "^25.0.0",
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
+    "typescript": "5.7.2",
+    "vitest": "4.1.7"
+  }
+}

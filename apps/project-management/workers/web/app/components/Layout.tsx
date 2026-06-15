@@ -1,6 +1,6 @@
 import { Link, useLocation } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
-import { ToastViewport } from '~/components/ToastViewport';
+import { ToastViewport } from '@allenlabs/pm-ui';
 import { CommandPalette } from '~/components/CommandPalette';
 import { useT } from '@allenlabs/i18n/react';
 import { LanguagePicker } from '~/i18n/picker';

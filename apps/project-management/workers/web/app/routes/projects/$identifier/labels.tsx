@@ -3,7 +3,7 @@ import { createServerFn } from '@tanstack/react-start';
 import { useState } from 'react';
 import { z } from 'zod';
 import { useT } from '@allenlabs/i18n/react';
-import { LabelChip } from '~/components/badges';
+import { LabelChip } from '@allenlabs/pm-ui';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { createLabel, deleteLabel } from '~/server/labels';
 import { listLabelsImpl } from '@allenlabs/pm-labels';

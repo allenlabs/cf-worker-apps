@@ -3,7 +3,7 @@ import { createServerFn } from '@tanstack/react-start';
 import { useState } from 'react';
 import { z } from 'zod';
 import { useT } from '@allenlabs/i18n/react';
-import { Markdown } from '~/components/Markdown';
+import { Markdown } from '@allenlabs/pm-ui';
 import { formatDateTime } from '@allenlabs/pm-core/lib/format';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { renderMarkdown } from '@allenlabs/pm-core/server/markdown';

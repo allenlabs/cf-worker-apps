@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { z } from 'zod';
 import { useT } from '@allenlabs/i18n/react';
 import { issueKey } from '@allenlabs/pm-core/lib/format';
-import { notifyError, notifySuccess } from '~/lib/toast';
+import { notifyError, notifySuccess } from '@allenlabs/pm-ui';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { listMembersImpl } from '@allenlabs/pm-core/server/members';
 import { createIssue } from '~/server/issues';

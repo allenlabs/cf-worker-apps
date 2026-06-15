@@ -1,8 +1,8 @@
 
 import { Link, createFileRoute, getRouteApi } from '@tanstack/react-router';
 import { useT } from '@allenlabs/i18n/react';
-import { ProgressBar } from '~/components/badges';
-import { Markdown } from '~/components/Markdown';
+import { ProgressBar } from '@allenlabs/pm-ui';
+import { Markdown } from '@allenlabs/pm-ui';
 import { renderMarkdown } from '@allenlabs/pm-core/server/markdown';
 import { timeAgo } from '@allenlabs/pm-core/lib/format';
 

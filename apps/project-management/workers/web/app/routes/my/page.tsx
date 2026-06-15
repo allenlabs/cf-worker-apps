@@ -2,7 +2,7 @@ import { Link, createFileRoute, redirect } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
 import { getRequest } from '@tanstack/react-start/server';
 import { useT } from '@allenlabs/i18n/react';
-import { PriorityBadge, StatusBadge, TrackerBadge } from '~/components/badges';
+import { PriorityBadge, StatusBadge, TrackerBadge } from '@allenlabs/pm-ui';
 import { formatDate, issueKey, timeAgo } from '@allenlabs/pm-core/lib/format';
 import { getAdapter, getDb, getEnv } from '~/server/auth-runtime.server';
 import { loadMyPageImpl } from '@allenlabs/pm-core/server/home';

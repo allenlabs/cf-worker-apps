@@ -51,7 +51,8 @@
     "@allenlabs/pm-subtasks": "*",
     "@allenlabs/pm-relations": "*",
     "@allenlabs/pm-labels": "*",
-    "@allenlabs/pm-notifications": "*"
+    "@allenlabs/pm-notifications": "*",
+    "@allenlabs/pm-ui": "*"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.2",

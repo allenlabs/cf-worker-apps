@@ -1,7 +1,7 @@
 import { Link, createFileRoute, getRouteApi, useRouter } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useT } from '@allenlabs/i18n/react';
-import { notifyError, notifySuccess } from '~/lib/toast';
+import { notifyError, notifySuccess } from '@allenlabs/pm-ui';
 import { deleteProject, updateProject } from '~/server/projects';
 
 const parentRoute = getRouteApi('/projects/$identifier');

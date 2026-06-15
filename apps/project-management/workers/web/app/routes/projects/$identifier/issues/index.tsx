@@ -2,7 +2,7 @@ import { Link, createFileRoute, getRouteApi } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
 import { z } from 'zod';
 import { useT } from '@allenlabs/i18n/react';
-import { LabelChip, PriorityBadge, StatusBadge, TrackerBadge } from '~/components/badges';
+import { LabelChip, PriorityBadge, StatusBadge, TrackerBadge } from '@allenlabs/pm-ui';
 import { formatDate, issueKey, timeAgo } from '@allenlabs/pm-core/lib/format';
 import { buildAuthContext, getCurrentUser, getDb } from '~/server/auth-runtime.server';
 import { countIssuesImpl, listIssuesImpl } from '@allenlabs/pm-core/server/issues';

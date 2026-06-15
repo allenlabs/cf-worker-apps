@@ -4,6 +4,7 @@
 
 import { mergeDicts, type Dict } from "@allenlabs/i18n";
 import { commonStrings } from "@allenlabs/i18n/dict/common";
+import { pmUiStrings } from "@allenlabs/pm-ui";
 
 const pm: Dict = {
   en: {
@@ -72,22 +73,7 @@ const pm: Dict = {
     "issue.statusClosed": "Closed",
     "issue.statusRejected": "Rejected",
 
-    "sidebar.overview": "Overview",
-    "sidebar.activity": "Activity",
-    "sidebar.issues": "Issues",
-    "sidebar.gantt": "Gantt",
-    "sidebar.roadmap": "Roadmap",
-    "sidebar.wiki": "Wiki",
-    "sidebar.files": "Files",
-    "sidebar.time": "Time",
-    "sidebar.configure": "Configure",
-    "sidebar.members": "Members",
-    "sidebar.versions": "Versions",
-    "sidebar.categories": "Categories",
-    "sidebar.labels": "Labels",
-    "sidebar.board": "Board",
     "board.title": "Board",
-    "sidebar.settings": "Settings",
 
     "filter.title": "Filters",
     "filter.status": "Status",
@@ -143,8 +129,6 @@ const pm: Dict = {
     "btn.dash": "—",
     "state.none": "None",
     "state.nothingYet": "Nothing yet.",
-    "toast.region": "Notifications",
-    "toast.dismiss": "Dismiss notification",
 
     // Home
     "home.welcomeTitle": "Welcome to Project Management",
@@ -522,22 +506,7 @@ const pm: Dict = {
     "issue.statusClosed": "닫힘",
     "issue.statusRejected": "거부됨",
 
-    "sidebar.overview": "개요",
-    "sidebar.activity": "활동",
-    "sidebar.issues": "이슈",
-    "sidebar.gantt": "간트",
-    "sidebar.roadmap": "로드맵",
-    "sidebar.wiki": "위키",
-    "sidebar.files": "파일",
-    "sidebar.time": "시간 추적",
-    "sidebar.configure": "설정",
-    "sidebar.members": "멤버",
-    "sidebar.versions": "버전",
-    "sidebar.categories": "카테고리",
-    "sidebar.labels": "라벨",
-    "sidebar.board": "보드",
     "board.title": "보드",
-    "sidebar.settings": "설정",
 
     "filter.title": "필터",
     "filter.status": "상태",
@@ -593,8 +562,6 @@ const pm: Dict = {
     "btn.dash": "—",
     "state.none": "없음",
     "state.nothingYet": "아직 없습니다.",
-    "toast.region": "알림",
-    "toast.dismiss": "알림 닫기",
 
     // Home
     "home.welcomeTitle": "프로젝트 관리에 오신 것을 환영합니다",
@@ -908,4 +875,4 @@ const pm: Dict = {
   },
 };
 
-export const pmDict: Dict = mergeDicts(commonStrings, pm);
+export const pmDict: Dict = mergeDicts(mergeDicts(commonStrings, pmUiStrings), pm);
