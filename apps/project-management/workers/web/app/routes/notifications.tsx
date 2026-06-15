@@ -3,11 +3,8 @@ import { createServerFn } from '@tanstack/react-start';
 import { useT } from '@allenlabs/i18n/react';
 import { issueKey, timeAgo } from '@allenlabs/pm-core/lib/format';
 import { getCurrentUser, getDb } from '~/server/auth-runtime.server';
-import {
-  listNotificationsImpl,
-  markAllNotificationsRead,
-  markNotificationRead,
-} from '~/server/notifications';
+import { markAllNotificationsRead, markNotificationRead } from '~/server/notifications';
+import { listNotificationsImpl } from '@allenlabs/pm-notifications';
 
 // Inline server fn — TanStack Start 1.168.9 dispatch bug workaround.
 const loadNotifications = createServerFn({ method: 'GET' }).handler(async () => {

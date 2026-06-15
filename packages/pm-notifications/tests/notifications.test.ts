@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { host } from '~/host';
-import { type TestDB, insertProject, insertUser, makeTestDb } from '../_setup/db';
+import { createPmHost } from '@allenlabs/pm-core/host/create-host';
+import { notificationsPlugin } from '../src/notifications.plugin';
+import { type TestDB, insertProject, insertUser, makeTestDb } from '@allenlabs/pm-core/testing/db';
 import { watchers } from '@allenlabs/pm-core/db/schema';
 import { type CurrentUser } from '@allenlabs/pm-core/server/auth';
 import { createIssueImpl, updateIssueImpl } from '@allenlabs/pm-core/server/issues';
@@ -10,7 +11,10 @@ import {
   markAllReadImpl,
   markReadImpl,
   unreadCountImpl,
-} from '~/server/notifications';
+} from '../src/server/notifications';
+
+// Exercise the notifications plugin in isolation (create/update fan-out).
+const host = createPmHost([notificationsPlugin]);
 
 let db: TestDB;
 let alice: CurrentUser; // actor
@@ -163,5 +167,13 @@ describe('issue events generate notifications', () => {
     await updateIssueImpl(db, alice, { id: issue.id, notes: '', changes: { assignedToId: null } }, host);
     // No new 'assigned' notification from the unassign (null assignee).
     expect(await unreadCountImpl(db, bob.id)).toBe(0);
+  });
+
+  it('a comment with no assignee change notifies watchers only', async () => {
+    const issue = await makeIssue();
+    await db.insert(watchers).values({ issueId: issue.id, userId: carol.id });
+    // No assignee change → the plugin passes newAssigneeId=undefined.
+    await updateIssueImpl(db, alice, { id: issue.id, notes: 'just a comment', changes: {} }, host);
+    expect((await listNotificationsImpl(db, carol.id)).map((n) => n.kind)).toEqual(['commented']);
   });
 });

@@ -1,5 +1,5 @@
 import { definePmPlugin } from '@allenlabs/pm-core/host/types';
-import { dispatchIssueNotificationsImpl } from '~/server/notifications';
+import { dispatchIssueNotificationsImpl } from './server/notifications';
 
 /** Fan issue events out as in-app notifications (assignment / @mention / watch). */
 export const notificationsPlugin = definePmPlugin({
