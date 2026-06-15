@@ -5,9 +5,11 @@
 import type { Env } from '@allenlabs/pm-core/lib/env';
 import type { AuthAdapter } from './types';
 import { betterAuthAdapter } from './adapters/better-auth';
+import { oidcAdapter } from './adapters/oidc';
 
 const ADAPTERS: Record<string, AuthAdapter> = {
   [betterAuthAdapter.id]: betterAuthAdapter,
+  [oidcAdapter.id]: oidcAdapter,
 };
 
 /** Register an additional adapter (called from a deployment's worker entry). */

@@ -6,12 +6,11 @@
 export interface Env {
   HYPERDRIVE: Hyperdrive;
   FILES: R2Bucket;
-  // Suite-wide JWT revocation list lives in the auth D1 (allenlabs-auth-d1,
-  // APAC). Each web worker binds it read+write; the `revoked_sessions` table
-  // (apps/auth/migrations-d1/0007_revoked_sessions.sql) is shared across the
-  // whole suite so a logout on one app blocks the JWT everywhere. Replaces
-  // the per-app SESSION_KV namespaces that lived in Workers KV.
-  AUTH_DB: D1Database;
+  // Suite-wide JWT revocation list (D1). Used ONLY by the `betterAuth` adapter's
+  // logout/revocation path; the `oidc` adapter never touches it, so it is
+  // optional — an OIDC-only deployment need not bind it. (session.server gates
+  // every access behind a presence check.)
+  AUTH_DB?: D1Database;
   ASSETS: Fetcher;
 
   // vars (from wrangler.toml [vars])
@@ -23,6 +22,27 @@ export interface Env {
   // The AUTH_WEB_URL/AUTH_API_URL/PM_ORG_HMAC_* below are the betterAuth adapter's
   // config — a second deployment points them at its own Better Auth auth-api.
   AUTH_ADAPTER?: string;
+
+  // ── `oidc` adapter (AUTH_ADAPTER=oidc) ──────────────────────────────────
+  // Standard OpenID Connect (Authorization Code + PKCE). Everything
+  // provider-specific is resolved from the discovery document at
+  // `${OIDC_ISSUER}/.well-known/openid-configuration` — no endpoints, JWKS
+  // paths, or signing algorithms are hardcoded. Reuses PUBLIC_BASE_URL for the
+  // redirect URI (`<PUBLIC_BASE_URL>/auth/callback`).
+  OIDC_ISSUER?: string; // discovery base, e.g. https://idp.example.com
+  OIDC_CLIENT_ID?: string; // also the expected id_token `aud`
+  OIDC_CLIENT_SECRET?: string; // omit/empty ⇒ public client (PKCE only)
+  OIDC_SCOPES?: string; // default "openid profile email"
+  // (session cookie is the fixed `pm_session`, mirroring betterAuth's fixed
+  // `cfr_session` — the AuthAdapter cookie setters receive no env to vary it.)
+  // Optional claim-name overrides for providers that don't use the standard
+  // OIDC claim names. Defaults: role→"role", username→"preferred_username",
+  // name→"name", email→"email", preferredName→"name".
+  OIDC_CLAIM_ROLE?: string;
+  OIDC_CLAIM_USERNAME?: string;
+  OIDC_CLAIM_NAME?: string;
+  OIDC_CLAIM_EMAIL?: string;
+  OIDC_CLAIM_PREFERRED?: string;
 
   // SSO — both must point at the same allenlabs-auth deployment. Sign-in
   // happens at AUTH_WEB_URL/sign-in; PM exchanges codes and verifies JWTs

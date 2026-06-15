@@ -42,7 +42,7 @@ export const betterAuthAdapter: AuthAdapter = {
     return toIdentity(payload);
   },
 
-  loginRedirect(env, _opts) {
+  async loginRedirect(env, _opts) {
     const callback = new URL('/auth/callback', env.PUBLIC_BASE_URL).href;
     const target = new URL('/sign-in', env.AUTH_WEB_URL);
     target.searchParams.set('return_to', callback);

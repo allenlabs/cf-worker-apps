@@ -52,8 +52,17 @@ export interface AuthAdapter {
   /** Verify the request's session cookie → identity, or null. JWT/crypto only — no DB. */
   verify(env: Env, cookieHeader: string | null): Promise<AuthIdentity | null>;
 
-  /** Build the redirect that starts sign-in at the provider. */
-  loginRedirect(env: Env, opts: { next?: string }): { href: string };
+  /**
+   * Build the redirect that starts sign-in at the provider. Async because some
+   * adapters resolve the authorization endpoint from OIDC discovery. May return
+   * a `setCookie` the login route must apply (e.g. an OIDC PKCE state cookie
+   * holding state/nonce/code_verifier). Adapters that need no pre-redirect
+   * state simply omit it.
+   */
+  loginRedirect(
+    env: Env,
+    opts: { next?: string },
+  ): Promise<{ href: string; setCookie?: string }>;
 
   /** Handle the provider callback (code → session token + identity). */
   handleCallback(

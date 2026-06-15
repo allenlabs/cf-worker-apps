@@ -64,11 +64,17 @@ describe('betterAuthAdapter.verify', () => {
   it('returns null for an unverifiable token', async () => {
     expect(await betterAuthAdapter.verify(env, cookie('not-a-jwt'))).toBeNull();
   });
+
+  it('verifies without AUTH_DB bound (no revocation list ⇒ never revoked)', async () => {
+    const token = await signTestJwt(env, { sub: 'no-db' });
+    const id = await betterAuthAdapter.verify({ ...env, AUTH_DB: undefined }, cookie(token));
+    expect(id?.subject).toBe('no-db');
+  });
 });
 
 describe('betterAuthAdapter.loginRedirect', () => {
-  it('points at the provider sign-in with a return_to callback', () => {
-    const { href } = betterAuthAdapter.loginRedirect(env, {});
+  it('points at the provider sign-in with a return_to callback', async () => {
+    const { href } = await betterAuthAdapter.loginRedirect(env, {});
     const u = new URL(href);
     expect(u.origin + u.pathname).toBe('https://auth.test/sign-in');
     expect(u.searchParams.get('return_to')).toBe('http://localhost:3000/auth/callback');
@@ -165,6 +171,12 @@ describe('betterAuthAdapter cookies + logout', () => {
     const token = await signTestJwt(env, { sub: 'ext-3' });
     const { href } = await betterAuthAdapter.logout(env, cookie(token));
     expect(href).toContain('/api/auth/sign-out');
+  });
+
+  it('skips revocation entirely when AUTH_DB is not bound', async () => {
+    const token = await signTestJwt(env, { sub: 'ext-nodb' });
+    const { setCookie } = await betterAuthAdapter.logout({ ...env, AUTH_DB: undefined }, cookie(token));
+    expect(setCookie).toContain('Max-Age=0');
   });
 
   it('swallows a revoke failure', async () => {

@@ -8,9 +8,11 @@ import { getAdapter, getEnv } from '~/server/auth-runtime.server';
  * happens before any React renders.
  */
 export const Route = createFileRoute('/auth/login')({
-  loader: () => {
+  loader: async () => {
     const env = getEnv();
-    const { href } = getAdapter(env).loginRedirect(env, {});
-    throw redirect({ href });
+    const { href, setCookie } = await getAdapter(env).loginRedirect(env, {});
+    // setCookie carries any pre-redirect state the adapter needs at callback
+    // (e.g. the OIDC PKCE state/nonce/verifier cookie).
+    throw redirect(setCookie ? { href, headers: { 'set-cookie': setCookie } } : { href });
   },
 });

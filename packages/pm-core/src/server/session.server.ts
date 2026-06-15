@@ -137,6 +137,9 @@ export function readSessionToken(cookieString: string | null): string | null {
  *     the same table.
  */
 export async function revokeSession(env: Env, token: string): Promise<void> {
+  // AUTH_DB is optional (only the betterAuth path uses revocation). Without it
+  // there's no revocation list to write to — the JWT is valid until its `exp`.
+  if (!env.AUTH_DB) return;
   const key = await tokenKey(token);
   await env.AUTH_DB.prepare(
     `INSERT INTO revoked_sessions(key, expires_at)
@@ -148,6 +151,8 @@ export async function revokeSession(env: Env, token: string): Promise<void> {
 }
 
 async function isRevoked(env: Env, token: string): Promise<boolean> {
+  // No revocation DB bound ⇒ nothing can be revoked (oidc deployments).
+  if (!env.AUTH_DB) return false;
   const key = await tokenKey(token);
   // `WHERE expires_at > unixepoch()` ignores rows that would already have
   // aged out, so an unvacuumed expired row doesn't keep a JWT blocked past
