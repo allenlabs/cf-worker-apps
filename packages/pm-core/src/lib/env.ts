@@ -29,6 +29,16 @@ export interface Env {
   // meaningful with PM_COOKIE_SAMESITE=none; ignored otherwise.
   PM_COOKIE_PARTITIONED?: string;
 
+  // ── PM-owned session (server/auth/pm-session.ts) ───────────────────────────
+  // After a successful login the OIDC flow is just the authentication event; PM
+  // then mints its OWN session token (HS256) with an independent lifetime, so the
+  // session is decoupled from the (short) id_token `exp`. Set PM_SESSION_SECRET to
+  // enable this. When UNSET, the oidc adapter falls back to the legacy behavior
+  // (the raw id_token as the session — bounded by its exp). Tenant-neutral.
+  PM_SESSION_SECRET?: string; // HS256 signing key; enables the PM-owned session
+  PM_SESSION_TTL?: string; // session lifetime in seconds (default 28800 = 8h)
+  PM_SESSION_MAX_TTL?: string; // optional absolute cap in seconds (bounds the TTL / future sliding renewal)
+
   // Selects the auth adapter (server/auth/registry.ts); defaults to 'betterAuth'.
   // The AUTH_WEB_URL/AUTH_API_URL/PM_ORG_HMAC_* below are the betterAuth adapter's
   // config — a second deployment points them at its own Better Auth auth-api.

@@ -11,6 +11,7 @@
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 import type { Env } from '@allenlabs/pm-core/lib/env';
 import { cookieAttrs } from '@allenlabs/pm-core/server/auth/cookies';
+import { mintPmSession, pmSessionTtl, verifyPmSession } from '../pm-session';
 import type { AuthAdapter, AuthIdentity, CallbackResult } from '../types';
 
 // ── discovery + JWKS caches (per isolate) ──────────────────────────────────
@@ -91,7 +92,9 @@ async function pkceChallenge(verifier: string): Promise<string> {
 // and the write side must agree on a constant. The cookie's *attributes* are
 // env-driven via cookieAttrs(env) (SameSite policy for embedded deployments).
 const SESSION_COOKIE = 'pm_session';
-const SESSION_MAX_AGE = 8 * 60 * 60; // 8h; verification still bounded by id_token exp.
+// Cookie Max-Age for the LEGACY path (no PM_SESSION_SECRET, cookie = id_token).
+// With a PM-owned session the cookie lifetime tracks pmSessionTtl(env) instead.
+const SESSION_MAX_AGE = 8 * 60 * 60; // 8h
 const STATE_COOKIE = 'pm_oidc_state';
 const STATE_MAX_AGE = 600; // 10 min — the login→callback round-trip window.
 const DEFAULT_SCOPES = 'openid profile email';
@@ -195,6 +198,12 @@ function redirectUri(env: Env): string {
 async function verifySessionCookie(env: Env, cookie: string | null): Promise<AuthIdentity | null> {
   const token = readCookie(cookie, SESSION_COOKIE);
   if (!token) return null;
+  // Default: the cookie is a PM-owned session JWT — validated locally (HS256),
+  // with its own lifetime, decoupled from the id_token's short exp. No IdP JWKS,
+  // no network on this hot path.
+  if (env.PM_SESSION_SECRET) return verifyPmSession(env, token);
+  // Backward-compat (no PM secret): the cookie is the raw id_token (legacy),
+  // verified against the IdP JWKS as before.
   try {
     const doc = await discover(env, fetch);
     return toIdentity(env, await verifyIdToken(env, doc, token));
@@ -281,11 +290,15 @@ async function exchangeAuthCode(
     throw new Response('OIDC nonce mismatch.', { status: 400 });
   }
 
-  return {
-    identity: toIdentity(env, payload),
-    sessionToken: tokens.id_token,
-    redirectTo: saved.next,
-  };
+  // The login is just the authentication event. When configured, PM mints its
+  // OWN session token (independent lifetime) instead of reusing the one-time
+  // id_token as a rolling session. Without PM_SESSION_SECRET, fall back to the
+  // id_token (legacy — the session is then bounded by its short exp).
+  const identity = toIdentity(env, payload);
+  const sessionToken = env.PM_SESSION_SECRET
+    ? await mintPmSession(env, identity)
+    : tokens.id_token;
+  return { identity, sessionToken, redirectTo: saved.next };
 }
 
 // ── the adapter ────────────────────────────────────────────────────────────
@@ -347,7 +360,10 @@ export const oidcAdapter: AuthAdapter = {
   },
 
   sessionCookie(env, token) {
-    return `${SESSION_COOKIE}=${token}; ${cookieAttrs(env)}; Max-Age=${SESSION_MAX_AGE}`;
+    // Cookie lifetime tracks the PM session TTL when PM-owned sessions are on;
+    // otherwise the legacy 8h (the id_token's own exp still bounds it).
+    const maxAge = env.PM_SESSION_SECRET ? pmSessionTtl(env) : SESSION_MAX_AGE;
+    return `${SESSION_COOKIE}=${token}; ${cookieAttrs(env)}; Max-Age=${maxAge}`;
   },
   clearSessionCookie(env) {
     return `${SESSION_COOKIE}=; ${cookieAttrs(env)}; Max-Age=0`;

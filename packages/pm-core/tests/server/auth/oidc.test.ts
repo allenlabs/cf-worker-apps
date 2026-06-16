@@ -71,6 +71,7 @@ beforeEach(async () => {
 afterEach(() => {
   _clearOidcCachesForTests();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 const sessionCookie = (token: string) => `pm_session=${token}`;
@@ -387,6 +388,52 @@ describe('oidcAdapter.handleCallback — token errors + idempotent duplicates', 
     expect(r1.sessionToken).toBe(idToken);
     expect(r2.sessionToken).toBe(idToken);
     expect(calls).toBe(1); // a single token exchange despite two callbacks
+  });
+});
+
+describe('oidcAdapter PM-owned session (PM_SESSION_SECRET set)', () => {
+  const pmEnv = (over: Partial<Env> = {}) =>
+    baseEnv({ PM_SESSION_SECRET: 'pm-secret-key-abcdefghijklmnopqrstuvwx', ...over });
+
+  it('handleCallback mints a PM session (not the raw id_token); verify validates it', async () => {
+    const e = pmEnv();
+    const { state, nonce, cookie } = await startLogin();
+    const idToken = await makeIdToken({ sub: 'cb-pm', email: 'p@m.test' }, { nonce });
+    const req = new Request(`https://pm.test/auth/callback?code=abc&state=${state}`, {
+      headers: { cookie },
+    });
+    const res = await oidcAdapter.handleCallback(e, req, { fetch: tokenEndpointFetch(idToken) });
+    expect(res.sessionToken).not.toBe(idToken); // PM-signed, not the id_token
+    const id = await oidcAdapter.verify(e, `pm_session=${res.sessionToken}`);
+    expect(id?.subject).toBe('cb-pm'); // verify reads the PM session, not the id_token
+  });
+
+  it('keeps the session valid past the id_token exp (decoupled lifetime)', async () => {
+    const e = pmEnv({ PM_SESSION_TTL: '28800' }); // 8h
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-16T00:00:00Z'));
+    const { state, nonce, cookie } = await startLogin();
+    const idToken = await makeIdToken({ sub: 'cb-pm2' }, { nonce }); // id_token exp ≈ now+1h
+    const req = new Request(`https://pm.test/auth/callback?code=abc&state=${state}`, {
+      headers: { cookie },
+    });
+    const res = await oidcAdapter.handleCallback(e, req, { fetch: tokenEndpointFetch(idToken) });
+    // 2h later — long past the id_token exp — the PM session is still valid.
+    vi.setSystemTime(new Date('2026-06-16T02:00:00Z'));
+    expect(await oidcAdapter.verify(e, `pm_session=${res.sessionToken}`)).not.toBeNull();
+  });
+
+  it('rejects a raw id_token presented as the cookie once PM sessions are on', async () => {
+    const e = pmEnv();
+    const idToken = await makeIdToken({ sub: 'x' });
+    // The id_token is EdDSA/IdP-signed — not a PM HS256 session — so it fails.
+    expect(await oidcAdapter.verify(e, `pm_session=${idToken}`)).toBeNull();
+  });
+
+  it('the session cookie Max-Age tracks the PM session TTL', () => {
+    expect(oidcAdapter.sessionCookie(pmEnv({ PM_SESSION_TTL: '3600' }), 'tok')).toContain(
+      'Max-Age=3600',
+    );
   });
 });
 
