@@ -85,6 +85,9 @@ export const projects = pm.table(
     // Better Auth team id (inside org_allenlabs) backing this project's
     // per-project collaborators. Set on create; nullable for legacy rows.
     authTeamId: text('auth_team_id'),
+    // Optional owning site (0013) — the top partition. NULL ⇒ siteless/legacy.
+    // Lazy ref: `sites` is declared later in this module.
+    siteId: integer('site_id').references(() => sites.id),
     // Optional group-tree association (0012). NULL ⇒ project-only RBAC.
     // Lazy ref: `groups` is declared later in this module.
     groupId: integer('group_id').references(() => groups.id),
@@ -104,6 +107,7 @@ export const projects = pm.table(
     keyIdx: uniqueIndex('projects_key_idx').on(t.key),
     parentIdx: index('projects_parent_idx').on(t.parentId),
     authTeamIdx: index('projects_auth_team_id_idx').on(t.authTeamId),
+    siteIdx: index('projects_site_idx').on(t.siteId),
   }),
 );
 
@@ -628,19 +632,75 @@ export const apiClients = pm.table(
 
 export type ApiClient = typeof apiClients.$inferSelect;
 
+// ---------- Sites (0013) ----------
+//
+// A site is the TOP partition of a single-DB, multi-site deployment — a
+// first-class, separately-managed entity that sits ABOVE the org/group tree.
+// Projects and groups optionally belong to a site (NULLABLE for siteless/legacy
+// single-site deployments). A site is NOT "the root group": groups (orgs/teams)
+// nest UNDER a site, and a site can be administered on its own (site_members).
+// `external_id` matches an IdP-provided site key during the optional claims sync.
+
+export const sites = pm.table(
+  'sites',
+  {
+    id: serial('id').primaryKey(),
+    slug: text('slug').notNull(),
+    name: text('name').notNull(),
+    externalId: text('external_id'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .default(sql`now()`),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => ({
+    slugIdx: uniqueIndex('sites_slug_idx').on(t.slug),
+    externalIdx: uniqueIndex('sites_external_id_idx').on(t.externalId),
+  }),
+);
+
+export const siteMembers = pm.table(
+  'site_members',
+  {
+    id: serial('id').primaryKey(),
+    siteId: integer('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    role: text('role').notNull().default('member'), // owner | admin | member
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => ({
+    uniq: uniqueIndex('site_members_unique_idx').on(t.siteId, t.userId),
+    userIdx: index('site_members_user_idx').on(t.userId),
+  }),
+);
+
+export type Site = typeof sites.$inferSelect;
+export type SiteMember = typeof siteMembers.$inferSelect;
+
 // ---------- Group tree (0012) ----------
 //
 // A single self-referential tree of arbitrary depth. A group is an
 // 'organization' or 'team' (the `kind` label); any group may contain child
-// groups. Projects optionally attach to a group (projects.group_id), and
-// membership on any node inherits down to all descendants. All optional — a
-// project with NULL group_id resolves exactly as before (project-only RBAC).
-// `external_id` matches IdP-provided ids during the optional claims sync.
+// groups. Groups nest under a site (groups.site_id, 0013). Projects optionally
+// attach to a group (projects.group_id), and membership on any node inherits
+// down to all descendants. All optional — a project with NULL group_id resolves
+// exactly as before (project-only RBAC). `external_id` matches IdP-provided ids
+// during the optional claims sync.
 
 export const groups = pm.table(
   'groups',
   {
     id: serial('id').primaryKey(),
+    // Owning site (0013); NULL ⇒ siteless/legacy. Lazy ref: `sites` above.
+    siteId: integer('site_id').references(() => sites.id, { onDelete: 'cascade' }),
     parentId: integer('parent_id'), // self-ref (lazy); NULL ⇒ root. FK in SQL.
     kind: text('kind', { enum: ['organization', 'team'] })
       .notNull()
@@ -658,6 +718,7 @@ export const groups = pm.table(
   (t) => ({
     parentSlugIdx: uniqueIndex('groups_parent_slug_idx').on(t.parentId, t.slug),
     parentIdx: index('groups_parent_idx').on(t.parentId),
+    siteIdx: index('groups_site_idx').on(t.siteId),
     externalIdx: uniqueIndex('groups_external_id_idx').on(t.externalId),
   }),
 );

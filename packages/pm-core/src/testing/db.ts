@@ -41,6 +41,7 @@ const MIGRATIONS = [
   '0010_notifications.sql',
   '0011_api_clients.sql',
   '0012_groups.sql',
+  '0013_sites.sql',
 ];
 
 export async function makeTestDb(opts?: { seed?: boolean }): Promise<TestDB> {

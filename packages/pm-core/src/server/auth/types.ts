@@ -27,10 +27,12 @@ export interface AuthIdentity {
   /** Per-project roles, if the provider carries them; empty ⇒ pm.members RBAC. */
   teamMemberships?: TeamMembershipClaim[];
   /**
-   * Opaque tenant key for physical (per-DB) isolation. The TenantResolver maps
-   * it to a database. Unset ⇒ the single default tenant (env.HYPERDRIVE).
+   * Opaque site key (the TOP partition of a single-DB multi-site deployment),
+   * if the provider carries one. On login the optional claims sync resolves it
+   * to a `pm.sites` row and scopes the user's synced groups to it. Unset ⇒
+   * siteless (the single implicit site).
    */
-  tenant?: string | null;
+  site?: string | null;
   /** Org memberships, if the provider carries them; drives the optional sync. */
   orgMemberships?: OrgMembershipClaim[];
 }

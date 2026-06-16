@@ -2,6 +2,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { type DB } from '@allenlabs/pm-core/db/client';
 import { groupMembers, groups } from '@allenlabs/pm-core/db/schema';
 import type { AuthIdentity } from './auth/types';
+import { findOrCreateSiteImpl, upsertSiteMemberImpl } from './sites';
 
 // The local group tree (0012) — the source of truth for org/team hierarchy.
 // When an auth identity carries org/team membership claims, `syncMembershipsImpl`
@@ -18,6 +19,8 @@ interface FindOrCreateGroupInput {
   kind?: GroupKind;
   /** Parent group id; undefined/null ⇒ a root group. */
   parentId?: number | null;
+  /** Owning site (0013); undefined/null ⇒ siteless. */
+  siteId?: number | null;
 }
 
 /**
@@ -63,6 +66,7 @@ export async function findOrCreateGroupImpl(
   input: FindOrCreateGroupInput,
 ): Promise<typeof groups.$inferSelect> {
   const parentId = input.parentId ?? null;
+  const siteId = input.siteId ?? null;
   if (input.externalId) {
     const byExt = await db.query.groups.findFirst({
       where: eq(groups.externalId, input.externalId),
@@ -77,10 +81,12 @@ export async function findOrCreateGroupImpl(
       return byExt;
     }
   }
-  // Sibling-unique (parent_id, slug): reuse a same-named sibling if present.
+  // Sibling-unique within a site (site_id, parent_id, slug): reuse a same-named
+  // sibling under the same site/parent if present.
   const bySibling = await db.query.groups.findFirst({
     where: and(
       parentId == null ? isNull(groups.parentId) : eq(groups.parentId, parentId),
+      siteId == null ? isNull(groups.siteId) : eq(groups.siteId, siteId),
       eq(groups.slug, input.slug),
     ),
   });
@@ -88,6 +94,7 @@ export async function findOrCreateGroupImpl(
   const [created] = await db
     .insert(groups)
     .values({
+      siteId,
       parentId,
       kind: input.kind ?? 'organization',
       slug: input.slug,
@@ -116,16 +123,33 @@ export async function upsertGroupMemberImpl(
 }
 
 /**
- * Mirror an identity's org/team membership claims into the group tree. Org
- * claims become 'organization' groups; team claims become 'team' groups nested
- * under their org (when the claim carries one) or flat roots otherwise. A no-op
- * when the identity carries no memberships (the tables stay authoritative).
+ * Mirror an identity's site + org/team membership claims into the local tables.
+ *
+ * When the identity carries a `site` key (the top partition), it is resolved to
+ * a `pm.sites` row, the user is recorded as a plain site member, and every group
+ * synced below is scoped to that site. Site owner/admin (which grants broad
+ * project access) is intentionally NOT derived from a login claim — a site is
+ * administered separately. Org claims become 'organization' groups; team claims
+ * become 'team' groups nested under their org (when the claim carries one) or
+ * flat roots otherwise. A no-op when the identity carries no claims at all (the
+ * tables stay authoritative).
  */
 export async function syncMembershipsImpl(
   db: DB,
   userId: number,
   identity: AuthIdentity,
 ): Promise<void> {
+  let siteId: number | undefined;
+  if (identity.site) {
+    const site = await findOrCreateSiteImpl(db, {
+      externalId: identity.site,
+      slug: identity.site,
+      name: identity.site,
+    });
+    siteId = site.id;
+    // Plain membership only — owner/admin is managed out of band.
+    await upsertSiteMemberImpl(db, site.id, userId, 'member');
+  }
   for (const m of identity.orgMemberships ?? []) {
     const slug = m.orgSlug ?? m.orgId;
     const org = await findOrCreateGroupImpl(db, {
@@ -133,6 +157,7 @@ export async function syncMembershipsImpl(
       slug,
       name: m.orgName ?? slug,
       kind: 'organization',
+      siteId,
     });
     await upsertGroupMemberImpl(db, org.id, userId, m.role);
   }
@@ -145,6 +170,7 @@ export async function syncMembershipsImpl(
         slug: orgSlug,
         name: orgSlug,
         kind: 'organization',
+        siteId,
       });
       parentId = org.id;
     }
@@ -154,6 +180,7 @@ export async function syncMembershipsImpl(
       name: t.teamName ?? t.teamId,
       kind: 'team',
       parentId,
+      siteId,
     });
     await upsertGroupMemberImpl(db, team.id, userId, t.role);
   }

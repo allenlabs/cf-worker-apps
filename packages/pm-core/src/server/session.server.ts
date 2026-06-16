@@ -59,8 +59,9 @@ export interface SessionPayload extends JWTPayload {
   preferredName?: string | null;
   role?: string | null; // platform role: 'admin' | 'user'
   banned?: boolean | number | null;
-  // Opaque tenant key for physical (per-DB) isolation, if the IdP carries one.
-  tenant?: string | null;
+  // Opaque site key (top partition of a single-DB multi-site deployment), if
+  // the IdP carries one.
+  site?: string | null;
   memberships?: OrgMembershipClaim[];
   // Per-team (= per-project) memberships with the user's role on each team.
   teamMemberships?: TeamMembershipClaim[];

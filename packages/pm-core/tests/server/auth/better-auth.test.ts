@@ -43,7 +43,7 @@ describe('betterAuthAdapter.verify', () => {
       locale: 'ko',
       isPlatformAdmin: true,
       teamMemberships: [{ teamId: 't1', role: 'owner' }],
-      tenant: null,
+      site: null,
       orgMemberships: [],
     });
   });
@@ -60,7 +60,7 @@ describe('betterAuthAdapter.verify', () => {
       locale: null,
       isPlatformAdmin: false,
       teamMemberships: [],
-      tenant: null,
+      site: null,
       orgMemberships: [],
     });
   });
@@ -69,14 +69,14 @@ describe('betterAuthAdapter.verify', () => {
     expect(await betterAuthAdapter.verify(env, cookie('not-a-jwt'))).toBeNull();
   });
 
-  it('carries a tenant key + org memberships when the JWT has them', async () => {
+  it('carries a site key + org memberships when the JWT has them', async () => {
     const token = await signTestJwt(env, {
       sub: 'ext-t',
-      tenant: 'acme',
+      site: 'acme',
       memberships: [{ orgId: 'o1', role: 'admin' }],
     });
     const id = await betterAuthAdapter.verify(env, cookie(token));
-    expect(id?.tenant).toBe('acme');
+    expect(id?.site).toBe('acme');
     expect(id?.orgMemberships).toEqual([{ orgId: 'o1', role: 'admin' }]);
   });
 

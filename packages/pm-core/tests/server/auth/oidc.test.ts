@@ -99,7 +99,7 @@ describe('oidcAdapter.verify (EdDSA, discovery-driven)', () => {
       locale: 'ko',
       isPlatformAdmin: true,
       teamMemberships: [],
-      tenant: null,
+      site: null,
     });
   });
 
@@ -115,7 +115,7 @@ describe('oidcAdapter.verify (EdDSA, discovery-driven)', () => {
       locale: null,
       isPlatformAdmin: false, // role absent ⇒ not admin
       teamMemberships: [], // no team claim ⇒ pm.members RBAC
-      tenant: null,
+      site: null,
     });
   });
 
@@ -147,11 +147,11 @@ describe('oidcAdapter.verify (EdDSA, discovery-driven)', () => {
     expect(await oidcAdapter.verify(env, sessionCookie('not-a-jwt'))).toBeNull();
   });
 
-  it('reads the tenant key from a configurable claim', async () => {
-    const e = baseEnv({ OIDC_CLAIM_TENANT: 'org_id' });
+  it('reads the site key from a configurable claim', async () => {
+    const e = baseEnv({ OIDC_CLAIM_SITE: 'org_id' });
     const token = await makeIdToken({ sub: 't1', email: 'a@b.test', org_id: 'acme' });
     const id = await oidcAdapter.verify(e, sessionCookie(token));
-    expect(id?.tenant).toBe('acme');
+    expect(id?.site).toBe('acme');
   });
 });
 

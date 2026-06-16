@@ -158,6 +158,27 @@ export function permissionsForGroupRole(role: string): Set<Permission> {
   return new Set(GROUP_ROLE_PERMISSIONS[role as GroupRole] ?? []);
 }
 
+// ---- Site role → permission mapping (0013 top partition) ----
+//
+// A site is the TOP partition; it sits ABOVE the group tree. A site
+// owner/admin manages EVERY project in the site (full project-manager perms);
+// a plain site `member` only *belongs* to the site — it grants no broad
+// project access on its own (project/group membership still applies). This is
+// deliberately narrower than a group role: site membership is the partition
+// boundary, not a blanket grant.
+export type SiteRole = 'owner' | 'admin' | 'member';
+
+const SITE_ROLE_PERMISSIONS: Record<SiteRole, Permission[]> = {
+  owner: ALL_PERMISSIONS,
+  admin: ALL_PERMISSIONS,
+  member: [],
+};
+
+/** PM permissions for a site_members role (unknown/member ⇒ none — fail-closed). */
+export function permissionsForSiteRole(role: string): Set<Permission> {
+  return new Set(SITE_ROLE_PERMISSIONS[role as SiteRole] ?? []);
+}
+
 export function hasPermission(
   ctx: AuthContext,
   projectId: number,

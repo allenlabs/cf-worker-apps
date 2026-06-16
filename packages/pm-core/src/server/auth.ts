@@ -6,6 +6,7 @@ import {
   members,
   projects,
   roles,
+  siteMembers,
   users,
 } from '@allenlabs/pm-core/db/schema';
 import type { Env } from '@allenlabs/pm-core/lib/env';
@@ -16,6 +17,7 @@ import {
   UnauthorizedError,
   hasPermission,
   permissionsForGroupRole,
+  permissionsForSiteRole,
   permissionsForTeamRole,
 } from '@allenlabs/pm-core/lib/permissions';
 import { type TeamMembershipClaim } from './session.server';
@@ -156,6 +158,36 @@ export async function buildAuthContextImpl(
         const role = roleByGroup.get(cursor);
         if (role) add(p.id, permissionsForGroupRole(role));
         cursor = parentOf.get(cursor) ?? null;
+      }
+    }
+  }
+
+  // 4. Site membership (0013). A site is the TOP partition; an owner/admin on a
+  //    site manages every project belonging to it, while a plain `member` only
+  //    belongs (no broad grant — that comes from project/group membership). So
+  //    we collect the sites where the user holds a perms-granting role and union
+  //    those perms onto every project in each such site. No-op when the user has
+  //    no site rows, or only plain-member rows.
+  const siteMemRows = await db
+    .select({ siteId: siteMembers.siteId, role: siteMembers.role })
+    .from(siteMembers)
+    .where(eq(siteMembers.userId, userId));
+  if (siteMemRows.length > 0) {
+    const permsBySite = new Map<number, Set<Permission>>();
+    for (const s of siteMemRows) {
+      const perms = permissionsForSiteRole(s.role);
+      if (perms.size > 0) permsBySite.set(s.siteId, perms);
+    }
+    if (permsBySite.size > 0) {
+      const siteIds = [...permsBySite.keys()];
+      const siteProjects = await db
+        .select({ id: projects.id, siteId: projects.siteId })
+        .from(projects)
+        .where(inArray(projects.siteId, siteIds));
+      for (const p of siteProjects) {
+        /* v8 ignore next */
+        if (p.siteId == null) continue; // inArray guarantees non-null
+        add(p.id, permsBySite.get(p.siteId)!); // siteId ∈ permsBySite keys
       }
     }
   }
