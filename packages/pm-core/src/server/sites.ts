@@ -1,6 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import { type DB } from '@allenlabs/pm-core/db/client';
 import { siteMembers, sites, users } from '@allenlabs/pm-core/db/schema';
+import { ForbiddenError, canManageSiteRole } from '@allenlabs/pm-core/lib/permissions';
 
 // Sites (0013) — the TOP partition of a single-DB multi-site deployment. A site
 // is a first-class, separately-managed entity sitting ABOVE the org/group tree
@@ -124,4 +125,64 @@ export async function removeSiteMemberImpl(
   await db
     .delete(siteMembers)
     .where(and(eq(siteMembers.siteId, siteId), eq(siteMembers.userId, userId)));
+}
+
+/** The user's current site role, or null when they're not a member (or the
+ *  stored value isn't a recognized site role). */
+async function siteRoleOfImpl(
+  db: DB,
+  siteId: number,
+  userId: number,
+): Promise<SiteRoleName | null> {
+  const [row] = await db
+    .select({ role: siteMembers.role })
+    .from(siteMembers)
+    .where(and(eq(siteMembers.siteId, siteId), eq(siteMembers.userId, userId)))
+    .limit(1);
+  return row && isSiteRole(row.role) ? row.role : null;
+}
+
+// ── Delegated administration (a site owner/admin managing their own site) ─────
+//
+// The `*As*` variants enforce the site role hierarchy from the ACTING user's
+// own site role (see canManageSiteRole): owner manages owners; admin tops out at
+// admin and cannot touch owners. A global service admin should NOT route through
+// these — they use the unrestricted setSiteMemberRoleImpl / removeSiteMemberImpl
+// (gate those on the global users.admin flag instead).
+
+/**
+ * Set `targetUserId`'s site role AS `actorUserId` — authorized by the actor's
+ * own site role. Throws ForbiddenError when the actor outranks neither the
+ * target's current role nor the role being granted; rejects an unknown role.
+ */
+export async function setSiteMemberRoleAsImpl(
+  db: DB,
+  input: { siteId: number; actorUserId: number; targetUserId: number; role: SiteRoleName },
+): Promise<void> {
+  const { siteId, actorUserId, targetUserId, role } = input;
+  if (!isSiteRole(role)) throw new Error(`Unknown site role "${role}".`);
+  const actorRole = await siteRoleOfImpl(db, siteId, actorUserId);
+  const currentRole = await siteRoleOfImpl(db, siteId, targetUserId);
+  if (!canManageSiteRole(actorRole, currentRole, role)) {
+    throw new ForbiddenError('Insufficient site role to assign this role.');
+  }
+  await upsertSiteMemberImpl(db, siteId, targetUserId, role);
+}
+
+/**
+ * Remove `targetUserId` from the site AS `actorUserId`. Throws ForbiddenError
+ * when the actor does not outrank (or match) the target's current role — e.g.
+ * an admin cannot evict an owner.
+ */
+export async function removeSiteMemberAsImpl(
+  db: DB,
+  input: { siteId: number; actorUserId: number; targetUserId: number },
+): Promise<void> {
+  const { siteId, actorUserId, targetUserId } = input;
+  const actorRole = await siteRoleOfImpl(db, siteId, actorUserId);
+  const currentRole = await siteRoleOfImpl(db, siteId, targetUserId);
+  if (!canManageSiteRole(actorRole, currentRole, null)) {
+    throw new ForbiddenError('Insufficient site role to remove this member.');
+  }
+  await removeSiteMemberImpl(db, siteId, targetUserId);
 }

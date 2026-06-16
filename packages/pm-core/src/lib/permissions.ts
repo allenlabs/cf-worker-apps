@@ -179,6 +179,38 @@ export function permissionsForSiteRole(role: string): Set<Permission> {
   return new Set(SITE_ROLE_PERMISSIONS[role as SiteRole] ?? []);
 }
 
+// Delegated site administration. Site roles form a rank: owner > admin > member.
+const SITE_ROLE_RANK: Record<SiteRole, number> = { owner: 2, admin: 1, member: 0 };
+
+/**
+ * May an actor holding `actorRole` on a site assign `newRole` to (or remove) a
+ * member who currently holds `currentRole`?
+ *
+ *   - Only owner/admin manage anyone (a plain `member` manages no one).
+ *   - You may only act on members at or below your own rank — an admin cannot
+ *     touch an owner; an owner may manage owners.
+ *   - You may only grant a role at or below your own rank — an admin cannot mint
+ *     an owner; an owner may grant owner. (So admin tops out at admin.)
+ *
+ * Pass `newRole = null` for a removal (only the current-role check applies), and
+ * `currentRole = null` when the target is not yet a site member. A `null`
+ * `actorRole` (the actor isn't a site member) can manage no one. This governs
+ * DELEGATED grants only — a global service admin bypasses it (use the
+ * unrestricted setSiteMemberRoleImpl / removeSiteMemberImpl).
+ */
+export function canManageSiteRole(
+  actorRole: SiteRole | null,
+  currentRole: SiteRole | null,
+  newRole: SiteRole | null,
+): boolean {
+  if (actorRole == null) return false;
+  const actorRank = SITE_ROLE_RANK[actorRole];
+  if (actorRank < SITE_ROLE_RANK.admin) return false; // members manage no one
+  if (currentRole != null && actorRank < SITE_ROLE_RANK[currentRole]) return false;
+  if (newRole != null && actorRank < SITE_ROLE_RANK[newRole]) return false;
+  return true;
+}
+
 export function hasPermission(
   ctx: AuthContext,
   projectId: number,

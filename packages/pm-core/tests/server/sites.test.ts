@@ -14,10 +14,13 @@ import {
   isSiteRole,
   listSiteMembersImpl,
   listSitesImpl,
+  removeSiteMemberAsImpl,
   removeSiteMemberImpl,
+  setSiteMemberRoleAsImpl,
   setSiteMemberRoleImpl,
   upsertSiteMemberImpl,
 } from '@allenlabs/pm-core/server/sites';
+import { canManageSiteRole } from '@allenlabs/pm-core/lib/permissions';
 import { syncMembershipsImpl } from '@allenlabs/pm-core/server/groups';
 import { buildAuthContextImpl } from '@allenlabs/pm-core/server/auth';
 import { hasPermission, permissionsForSiteRole } from '@allenlabs/pm-core/lib/permissions';
@@ -108,6 +111,90 @@ describe('site administration impls', () => {
     await setSiteMemberRoleImpl(db, site.id, userId, 'admin');
     await removeSiteMemberImpl(db, site.id, userId);
     expect(await listSiteMembersImpl(db, site.id)).toEqual([]);
+  });
+});
+
+describe('canManageSiteRole (delegated policy)', () => {
+  it('owner manages owners; admin tops out at admin', () => {
+    // owner can do everything
+    expect(canManageSiteRole('owner', 'owner', 'owner')).toBe(true);
+    expect(canManageSiteRole('owner', null, 'member')).toBe(true);
+    // admin manages admin + member, but never owners
+    expect(canManageSiteRole('admin', 'admin', 'admin')).toBe(true);
+    expect(canManageSiteRole('admin', null, 'member')).toBe(true);
+    expect(canManageSiteRole('admin', 'admin', 'owner')).toBe(false); // can't grant owner
+    expect(canManageSiteRole('admin', 'owner', 'member')).toBe(false); // can't touch an owner
+    // members + non-members manage no one
+    expect(canManageSiteRole('member', null, 'member')).toBe(false);
+    expect(canManageSiteRole(null, null, 'member')).toBe(false);
+    // removal (newRole = null) only checks the current-role rung
+    expect(canManageSiteRole('owner', 'admin', null)).toBe(true);
+    expect(canManageSiteRole('admin', 'owner', null)).toBe(false);
+  });
+});
+
+describe('delegated site administration impls', () => {
+  let site: { id: number };
+  let owner: number;
+  let admin: number;
+  let target: number;
+
+  beforeEach(async () => {
+    site = await findOrCreateSiteImpl(db, { slug: 'acme', name: 'Acme' });
+    owner = userId; // the user seeded in the outer beforeEach
+    admin = (await insertUser(db, { login: 'adm', email: 'adm@x.test' })).id;
+    target = (await insertUser(db, { login: 'tgt', email: 'tgt@x.test' })).id;
+    await upsertSiteMemberImpl(db, site.id, owner, 'owner');
+    await upsertSiteMemberImpl(db, site.id, admin, 'admin');
+  });
+
+  const roleOf = async (uid: number) =>
+    (await listSiteMembersImpl(db, site.id)).find((m) => m.userId === uid)?.role;
+
+  it('an owner can add/promote another owner', async () => {
+    await setSiteMemberRoleAsImpl(db, { siteId: site.id, actorUserId: owner, targetUserId: target, role: 'owner' });
+    expect(await roleOf(target)).toBe('owner');
+  });
+
+  it('an admin can add an admin/member but cannot mint an owner', async () => {
+    await setSiteMemberRoleAsImpl(db, { siteId: site.id, actorUserId: admin, targetUserId: target, role: 'admin' });
+    expect(await roleOf(target)).toBe('admin');
+    await expect(
+      setSiteMemberRoleAsImpl(db, { siteId: site.id, actorUserId: admin, targetUserId: target, role: 'owner' }),
+    ).rejects.toThrow(/Insufficient site role/);
+  });
+
+  it('an admin cannot modify or evict an owner', async () => {
+    await expect(
+      setSiteMemberRoleAsImpl(db, { siteId: site.id, actorUserId: admin, targetUserId: owner, role: 'member' }),
+    ).rejects.toThrow(/Insufficient site role/);
+    await expect(
+      removeSiteMemberAsImpl(db, { siteId: site.id, actorUserId: admin, targetUserId: owner }),
+    ).rejects.toThrow(/Insufficient site role/);
+    expect(await roleOf(owner)).toBe('owner'); // untouched
+  });
+
+  it('an owner can evict an admin', async () => {
+    await removeSiteMemberAsImpl(db, { siteId: site.id, actorUserId: owner, targetUserId: admin });
+    expect(await roleOf(admin)).toBeUndefined();
+  });
+
+  it('a non-member actor is forbidden', async () => {
+    await expect(
+      setSiteMemberRoleAsImpl(db, { siteId: site.id, actorUserId: target, targetUserId: admin, role: 'member' }),
+    ).rejects.toThrow(/Insufficient site role/);
+  });
+
+  it('rejects an unknown role string', async () => {
+    await expect(
+      setSiteMemberRoleAsImpl(db, { siteId: site.id, actorUserId: owner, targetUserId: target, role: 'root' as never }),
+    ).rejects.toThrow(/Unknown site role/);
+  });
+
+  it('treats a junk stored role as "not a member" (an owner can re-set it)', async () => {
+    await upsertSiteMemberImpl(db, site.id, target, 'bogus'); // junk current role
+    await setSiteMemberRoleAsImpl(db, { siteId: site.id, actorUserId: owner, targetUserId: target, role: 'member' });
+    expect(await roleOf(target)).toBe('member');
   });
 });
 
