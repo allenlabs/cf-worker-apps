@@ -163,6 +163,16 @@ export async function setSiteMemberRoleAsImpl(
   if (!isSiteRole(role)) throw new Error(`Unknown site role "${role}".`);
   const actorRole = await siteRoleOfImpl(db, siteId, actorUserId);
   const currentRole = await siteRoleOfImpl(db, siteId, targetUserId);
+  // You cannot demote yourself (lower your own rank) — a step-down must be done
+  // by a higher/peer site admin (or a global service admin). A lower SITE_ROLES
+  // index = higher rank, so a larger index for the new role is a demotion.
+  if (
+    actorUserId === targetUserId &&
+    currentRole != null &&
+    SITE_ROLES.indexOf(role) > SITE_ROLES.indexOf(currentRole)
+  ) {
+    throw new ForbiddenError('You cannot demote yourself.');
+  }
   if (!canManageSiteRole(actorRole, currentRole, role)) {
     throw new ForbiddenError('Insufficient site role to assign this role.');
   }
@@ -179,6 +189,11 @@ export async function removeSiteMemberAsImpl(
   input: { siteId: number; actorUserId: number; targetUserId: number },
 ): Promise<void> {
   const { siteId, actorUserId, targetUserId } = input;
+  // You cannot remove yourself — an eviction must come from another site admin
+  // (or a global service admin via the unrestricted removeSiteMemberImpl).
+  if (actorUserId === targetUserId) {
+    throw new ForbiddenError('You cannot remove yourself from a site.');
+  }
   const actorRole = await siteRoleOfImpl(db, siteId, actorUserId);
   const currentRole = await siteRoleOfImpl(db, siteId, targetUserId);
   if (!canManageSiteRole(actorRole, currentRole, null)) {

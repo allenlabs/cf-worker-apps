@@ -196,6 +196,31 @@ describe('delegated site administration impls', () => {
     await setSiteMemberRoleAsImpl(db, { siteId: site.id, actorUserId: owner, targetUserId: target, role: 'member' });
     expect(await roleOf(target)).toBe('member');
   });
+
+  it('forbids demoting yourself', async () => {
+    await expect(
+      setSiteMemberRoleAsImpl(db, { siteId: site.id, actorUserId: owner, targetUserId: owner, role: 'admin' }),
+    ).rejects.toThrow(/demote yourself/);
+    expect(await roleOf(owner)).toBe('owner'); // unchanged
+  });
+
+  it('allows re-setting your own role to the same level (no-op)', async () => {
+    await setSiteMemberRoleAsImpl(db, { siteId: site.id, actorUserId: owner, targetUserId: owner, role: 'owner' });
+    expect(await roleOf(owner)).toBe('owner');
+  });
+
+  it('forbids removing yourself', async () => {
+    await expect(
+      removeSiteMemberAsImpl(db, { siteId: site.id, actorUserId: owner, targetUserId: owner }),
+    ).rejects.toThrow(/remove yourself/);
+    expect(await roleOf(owner)).toBe('owner'); // still a member
+  });
+
+  it('a non-member acting on themselves is forbidden (insufficient role)', async () => {
+    await expect(
+      setSiteMemberRoleAsImpl(db, { siteId: site.id, actorUserId: target, targetUserId: target, role: 'member' }),
+    ).rejects.toThrow(/Insufficient site role/);
+  });
 });
 
 describe('syncMembershipsImpl → site scoping', () => {
