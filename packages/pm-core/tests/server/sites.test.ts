@@ -9,7 +9,15 @@ import {
 } from '../../src/testing/db';
 import { groups, siteMembers, sites } from '@allenlabs/pm-core/db/schema';
 import type { AuthIdentity } from '@allenlabs/pm-core/server/auth/types';
-import { findOrCreateSiteImpl, upsertSiteMemberImpl } from '@allenlabs/pm-core/server/sites';
+import {
+  findOrCreateSiteImpl,
+  isSiteRole,
+  listSiteMembersImpl,
+  listSitesImpl,
+  removeSiteMemberImpl,
+  setSiteMemberRoleImpl,
+  upsertSiteMemberImpl,
+} from '@allenlabs/pm-core/server/sites';
 import { syncMembershipsImpl } from '@allenlabs/pm-core/server/groups';
 import { buildAuthContextImpl } from '@allenlabs/pm-core/server/auth';
 import { hasPermission, permissionsForSiteRole } from '@allenlabs/pm-core/lib/permissions';
@@ -66,6 +74,40 @@ describe('upsertSiteMemberImpl', () => {
     const rows = await db.query.siteMembers.findMany({ where: eq(siteMembers.userId, userId) });
     expect(rows.length).toBe(1);
     expect(rows[0]?.role).toBe('admin');
+  });
+});
+
+describe('site administration impls', () => {
+  it('lists sites ordered by slug', async () => {
+    await findOrCreateSiteImpl(db, { slug: 'zeta', name: 'Z' });
+    await findOrCreateSiteImpl(db, { slug: 'alpha', name: 'A' });
+    const rows = await listSitesImpl(db);
+    expect(rows.map((s) => s.slug)).toEqual(['alpha', 'zeta']);
+  });
+
+  it('validates assignable roles', () => {
+    expect(isSiteRole('owner')).toBe(true);
+    expect(isSiteRole('admin')).toBe(true);
+    expect(isSiteRole('member')).toBe(true);
+    expect(isSiteRole('superuser')).toBe(false);
+  });
+
+  it('setSiteMemberRoleImpl grants a role and rejects an unknown one', async () => {
+    const site = await findOrCreateSiteImpl(db, { slug: 'acme', name: 'Acme' });
+    await setSiteMemberRoleImpl(db, site.id, userId, 'owner'); // service-admin grant
+    const members = await listSiteMembersImpl(db, site.id);
+    expect(members).toEqual([{ userId, login: 'u', email: 'u@x.test', role: 'owner' }]);
+    // A typo can't silently create a no-perms grant.
+    await expect(
+      setSiteMemberRoleImpl(db, site.id, userId, 'superuser' as never),
+    ).rejects.toThrow(/Unknown site role/);
+  });
+
+  it('removeSiteMemberImpl revokes the grant', async () => {
+    const site = await findOrCreateSiteImpl(db, { slug: 'acme', name: 'Acme' });
+    await setSiteMemberRoleImpl(db, site.id, userId, 'admin');
+    await removeSiteMemberImpl(db, site.id, userId);
+    expect(await listSiteMembersImpl(db, site.id)).toEqual([]);
   });
 });
 
