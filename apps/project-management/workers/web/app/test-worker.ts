@@ -47,7 +47,7 @@ export default {
         name?: string;
       };
       await findOrCreateUserBySsoImpl(db, { subject: sub, email: email ?? '', displayName: name });
-      return json({ ok: true }, { headers: { 'set-cookie': cookieHeader(token) } });
+      return json({ ok: true }, { headers: { 'set-cookie': cookieHeader(env, token) } });
     }
 
     if (url.pathname === '/api/sessions/verify' && req.method === 'GET') {

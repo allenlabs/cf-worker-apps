@@ -172,8 +172,8 @@ describe('betterAuthAdapter.handleCallback', () => {
 
 describe('betterAuthAdapter cookies + logout', () => {
   it('session/clear cookie helpers carry the session cookie name', () => {
-    expect(betterAuthAdapter.sessionCookie('tok')).toContain('cfr_session=tok');
-    expect(betterAuthAdapter.clearSessionCookie()).toContain('cfr_session=');
+    expect(betterAuthAdapter.sessionCookie(env, 'tok')).toContain('cfr_session=tok');
+    expect(betterAuthAdapter.clearSessionCookie(env)).toContain('cfr_session=');
   });
 
   it('logout with no cookie still returns the sign-out redirect + clear cookie', async () => {

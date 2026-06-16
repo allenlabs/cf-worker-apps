@@ -75,11 +75,11 @@ export const betterAuthAdapter: AuthAdapter = {
     return { identity: toIdentity(payload), sessionToken: token, redirectTo: next };
   },
 
-  sessionCookie(token) {
-    return cookieHeader(token);
+  sessionCookie(env, token) {
+    return cookieHeader(env, token);
   },
-  clearSessionCookie() {
-    return clearCookieHeader();
+  clearSessionCookie(env) {
+    return clearCookieHeader(env);
   },
 
   async logout(env, cookie) {
@@ -94,7 +94,7 @@ export const betterAuthAdapter: AuthAdapter = {
     }
     return {
       href: new URL('/api/auth/sign-out', env.AUTH_API_URL).href,
-      setCookie: clearCookieHeader(),
+      setCookie: clearCookieHeader(env),
     };
   },
 

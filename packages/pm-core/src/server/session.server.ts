@@ -1,5 +1,6 @@
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 import type { Env } from '@allenlabs/pm-core/lib/env';
+import { cookieAttrs } from '@allenlabs/pm-core/server/auth/cookies';
 
 /**
  * Session handling for the post-SSO world.
@@ -110,12 +111,12 @@ export async function verifySessionToken(
   }
 }
 
-export function cookieHeader(token: string, maxAge = SESSION_MAX_AGE_SECONDS): string {
-  return `${SESSION_COOKIE}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
+export function cookieHeader(env: Env, token: string, maxAge = SESSION_MAX_AGE_SECONDS): string {
+  return `${SESSION_COOKIE}=${token}; ${cookieAttrs(env)}; Max-Age=${maxAge}`;
 }
 
-export function clearCookieHeader(): string {
-  return `${SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
+export function clearCookieHeader(env: Env): string {
+  return `${SESSION_COOKIE}=; ${cookieAttrs(env)}; Max-Age=0`;
 }
 
 export function readSessionToken(cookieString: string | null): string | null {

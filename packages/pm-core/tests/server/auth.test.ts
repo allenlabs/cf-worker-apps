@@ -144,14 +144,14 @@ describe('userFromSessionImpl', () => {
 
   it('returns null when cookie present but token invalid', async () => {
     const env = makeTestEnv();
-    expect(await userFromSessionImpl(db, betterAuthAdapter, env, cookieHeader('not-a-real-jwt'))).toBeNull();
+    expect(await userFromSessionImpl(db, betterAuthAdapter, env, cookieHeader(env, 'not-a-real-jwt'))).toBeNull();
   });
 
   it('returns the user when JWT.sub matches better_auth_user_id', async () => {
     const u = await insertUser(db, { betterAuthUserId: 'ba-user-1' });
     const env = makeTestEnv();
     const token = await signTestJwt(env, { sub: 'ba-user-1', email: u.email });
-    const me = await userFromSessionImpl(db, betterAuthAdapter, env, cookieHeader(token));
+    const me = await userFromSessionImpl(db, betterAuthAdapter, env, cookieHeader(env, token));
     expect(me?.id).toBe(u.id);
     expect(me?.login).toBe(u.login);
   });
@@ -163,7 +163,7 @@ describe('userFromSessionImpl', () => {
       sub: 'ba-team',
       teamMemberships: [{ teamId: 'team_z', role: 'contributor' }],
     });
-    const me = await userFromSessionImpl(db, betterAuthAdapter, env, cookieHeader(token));
+    const me = await userFromSessionImpl(db, betterAuthAdapter, env, cookieHeader(env, token));
     expect(me?.teamMemberships).toEqual([{ teamId: 'team_z', role: 'contributor' }]);
   });
 
@@ -175,7 +175,7 @@ describe('userFromSessionImpl', () => {
       username: 'newhandle',
       preferredName: 'Preferred',
     });
-    const me = await userFromSessionImpl(db, betterAuthAdapter, env, cookieHeader(token));
+    const me = await userFromSessionImpl(db, betterAuthAdapter, env, cookieHeader(env, token));
     expect(me?.username).toBe('newhandle');
     expect(me?.preferredName).toBe('Preferred');
     const refreshed = await db.query.users.findFirst({ where: eq(users.id, u.id) });
@@ -196,7 +196,7 @@ describe('userFromSessionImpl', () => {
       sub: 'ba-partial',
       preferredName: 'ChangedPreferred',
     });
-    const me = await userFromSessionImpl(db, betterAuthAdapter, env, cookieHeader(token));
+    const me = await userFromSessionImpl(db, betterAuthAdapter, env, cookieHeader(env, token));
     expect(me?.username).toBe('keep');
     expect(me?.preferredName).toBe('ChangedPreferred');
     const refreshed = await db.query.users.findFirst({ where: eq(users.id, u.id) });
@@ -216,7 +216,7 @@ describe('userFromSessionImpl', () => {
       sub: 'ba-uname-only',
       username: 'newname',
     });
-    const me = await userFromSessionImpl(db, betterAuthAdapter, env, cookieHeader(token));
+    const me = await userFromSessionImpl(db, betterAuthAdapter, env, cookieHeader(env, token));
     expect(me?.username).toBe('newname');
     expect(me?.preferredName).toBe('StayPreferred');
     const refreshed = await db.query.users.findFirst({ where: eq(users.id, u.id) });
@@ -235,7 +235,7 @@ describe('userFromSessionImpl', () => {
       username: 'same',
       preferredName: 'Same',
     });
-    const me = await userFromSessionImpl(db, betterAuthAdapter, env, cookieHeader(token));
+    const me = await userFromSessionImpl(db, betterAuthAdapter, env, cookieHeader(env, token));
     expect(me?.username).toBe('same');
     expect(me?.teamMemberships).toEqual([]);
   });
@@ -244,7 +244,7 @@ describe('userFromSessionImpl', () => {
     await insertUser(db, { betterAuthUserId: 'ba-user-1' });
     const env = makeTestEnv();
     const token = await signTestJwt(env, { sub: 'unlinked-ba-user' });
-    expect(await userFromSessionImpl(db, betterAuthAdapter, env, cookieHeader(token))).toBeNull();
+    expect(await userFromSessionImpl(db, betterAuthAdapter, env, cookieHeader(env, token))).toBeNull();
   });
 
   it('defaults teamMemberships to [] when the identity omits them', async () => {
@@ -263,7 +263,7 @@ describe('userFromSessionImpl', () => {
     await insertUser(db, { betterAuthUserId: 'ba-user-1', status: 'locked' });
     const env = makeTestEnv();
     const token = await signTestJwt(env, { sub: 'ba-user-1' });
-    expect(await userFromSessionImpl(db, betterAuthAdapter, env, cookieHeader(token))).toBeNull();
+    expect(await userFromSessionImpl(db, betterAuthAdapter, env, cookieHeader(env, token))).toBeNull();
   });
 });
 

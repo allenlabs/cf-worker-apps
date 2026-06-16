@@ -83,10 +83,11 @@ export interface AuthAdapter {
     deps?: { fetch?: typeof fetch },
   ): Promise<CallbackResult>;
 
-  /** Set-Cookie value establishing the session. */
-  sessionCookie(token: string): string;
-  /** Set-Cookie value clearing the session. */
-  clearSessionCookie(): string;
+  /** Set-Cookie value establishing the session. `env` supplies the SameSite
+   *  policy (PM_COOKIE_SAMESITE) so embedded/iframe deployments work. */
+  sessionCookie(env: Env, token: string): string;
+  /** Set-Cookie value clearing the session (same attributes as sessionCookie). */
+  clearSessionCookie(env: Env): string;
 
   /** Revoke server-side state (if any) and return the post-logout redirect. */
   logout(env: Env, cookieHeader: string | null): Promise<{ href: string; setCookie: string }>;

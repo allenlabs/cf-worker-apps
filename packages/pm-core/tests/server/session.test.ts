@@ -123,7 +123,7 @@ describe('revokeSession', () => {
 
 describe('cookie helpers', () => {
   it('cookieHeader produces a Secure HttpOnly Lax cookie', () => {
-    const h = cookieHeader('xyz');
+    const h = cookieHeader(makeTestEnv(), 'xyz');
     expect(h).toContain(`${SESSION_COOKIE}=xyz`);
     expect(h).toContain('HttpOnly');
     expect(h).toContain('Secure');
@@ -133,11 +133,11 @@ describe('cookie helpers', () => {
   });
 
   it('cookieHeader honours a custom max-age', () => {
-    expect(cookieHeader('xyz', 120)).toContain('Max-Age=120');
+    expect(cookieHeader(makeTestEnv(), 'xyz', 120)).toContain('Max-Age=120');
   });
 
   it('clearCookieHeader emits Max-Age=0', () => {
-    expect(clearCookieHeader()).toContain('Max-Age=0');
+    expect(clearCookieHeader(makeTestEnv())).toContain('Max-Age=0');
   });
 
   it('readSessionToken extracts the token, ignoring other cookies', () => {

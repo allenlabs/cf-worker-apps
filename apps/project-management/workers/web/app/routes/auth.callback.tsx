@@ -19,7 +19,7 @@ export const Route = createFileRoute('/auth/callback')({
     await findOrCreateUserBySsoImpl(getDb(env), identity);
     throw redirect({
       href: redirectTo,
-      headers: { 'set-cookie': adapter.sessionCookie(sessionToken) },
+      headers: { 'set-cookie': adapter.sessionCookie(env, sessionToken) },
     });
   },
 });

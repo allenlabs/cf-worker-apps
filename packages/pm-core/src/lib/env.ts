@@ -20,6 +20,15 @@ export interface Env {
   DEFAULT_LANGUAGE: string;
   ATTACHMENT_TTL_DAYS?: string;
 
+  // Auth-cookie SameSite policy (server/auth/cookies.ts). Default 'lax' (today's
+  // behavior). Set 'none' to let the app run EMBEDDED in an iframe / cross-origin
+  // context (the session cookie survives in-frame navigations); 'none' is always
+  // emitted with Secure (browsers reject SameSite=None without it).
+  PM_COOKIE_SAMESITE?: 'lax' | 'none' | 'strict';
+  // '1'|'true' ⇒ append '; Partitioned' (CHIPS) to the auth cookies. Only
+  // meaningful with PM_COOKIE_SAMESITE=none; ignored otherwise.
+  PM_COOKIE_PARTITIONED?: string;
+
   // Selects the auth adapter (server/auth/registry.ts); defaults to 'betterAuth'.
   // The AUTH_WEB_URL/AUTH_API_URL/PM_ORG_HMAC_* below are the betterAuth adapter's
   // config — a second deployment points them at its own Better Auth auth-api.

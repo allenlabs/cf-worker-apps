@@ -301,9 +301,9 @@ describe('oidcAdapter.handleCallback', () => {
 
 describe('oidcAdapter cookies + logout + onProjectCreated', () => {
   it('session/clear cookie helpers carry the fixed pm_session name', () => {
-    expect(oidcAdapter.sessionCookie('tok')).toContain('pm_session=tok');
-    expect(oidcAdapter.sessionCookie('tok')).toContain('HttpOnly');
-    expect(oidcAdapter.clearSessionCookie()).toContain('Max-Age=0');
+    expect(oidcAdapter.sessionCookie(env, 'tok')).toContain('pm_session=tok');
+    expect(oidcAdapter.sessionCookie(env, 'tok')).toContain('HttpOnly');
+    expect(oidcAdapter.clearSessionCookie(env)).toContain('Max-Age=0');
   });
 
   it('logout redirects to the discovered end_session_endpoint with hints', async () => {

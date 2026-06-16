@@ -10,6 +10,7 @@
 
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 import type { Env } from '@allenlabs/pm-core/lib/env';
+import { cookieAttrs } from '@allenlabs/pm-core/server/auth/cookies';
 import type { AuthAdapter, AuthIdentity } from '../types';
 
 // ── discovery + JWKS caches (per isolate) ──────────────────────────────────
@@ -77,9 +78,9 @@ async function pkceChallenge(verifier: string): Promise<string> {
 
 // ── session + state cookies ────────────────────────────────────────────────
 
-// Fixed cookie name (like betterAuth's `cfr_session`): the AuthAdapter
-// sessionCookie/clearSessionCookie setters receive no env, so the read side
-// (verify) and the write side must agree on a constant.
+// Fixed cookie NAME (like betterAuth's `cfr_session`): the read side (verify)
+// and the write side must agree on a constant. The cookie's *attributes* are
+// env-driven via cookieAttrs(env) (SameSite policy for embedded deployments).
 const SESSION_COOKIE = 'pm_session';
 const SESSION_MAX_AGE = 8 * 60 * 60; // 8h; verification still bounded by id_token exp.
 const STATE_COOKIE = 'pm_oidc_state';
@@ -120,11 +121,13 @@ function decodeState(value: string | null): OidcState | null {
   }
 }
 
-// The state cookie is HttpOnly+Secure+SameSite=Lax, so it cannot be read or
-// forged by script; CSRF protection comes from the `state` echo matching the
-// cookie, replay protection from the `nonce`, and code protection from PKCE.
-function stateCookie(value: string): string {
-  return `${STATE_COOKIE}=${value}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${STATE_MAX_AGE}`;
+// The state cookie is HttpOnly+Secure (and SameSite per PM_COOKIE_SAMESITE), so
+// it cannot be read or forged by script; CSRF protection comes from the `state`
+// echo matching the cookie, replay protection from the `nonce`, and code
+// protection from PKCE. In an embedded (iframe) flow the OAuth round-trip is
+// cross-origin within the frame, so it needs SameSite=None too — hence env.
+function stateCookie(env: Env, value: string): string {
+  return `${STATE_COOKIE}=${value}; ${cookieAttrs(env)}; Max-Age=${STATE_MAX_AGE}`;
 }
 
 // ── claim mapping (standard OIDC claims, with env overrides) ────────────────
@@ -215,7 +218,7 @@ export const oidcAdapter: AuthAdapter = {
 
     return {
       href: authUrl.href,
-      setCookie: stateCookie(encodeState({ state, nonce, verifier, next })),
+      setCookie: stateCookie(env, encodeState({ state, nonce, verifier, next })),
     };
   },
 
@@ -273,15 +276,15 @@ export const oidcAdapter: AuthAdapter = {
     };
   },
 
-  sessionCookie(token) {
-    return `${SESSION_COOKIE}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${SESSION_MAX_AGE}`;
+  sessionCookie(env, token) {
+    return `${SESSION_COOKIE}=${token}; ${cookieAttrs(env)}; Max-Age=${SESSION_MAX_AGE}`;
   },
-  clearSessionCookie() {
-    return `${SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
+  clearSessionCookie(env) {
+    return `${SESSION_COOKIE}=; ${cookieAttrs(env)}; Max-Age=0`;
   },
 
   async logout(env, cookie) {
-    const clear = `${SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
+    const clear = `${SESSION_COOKIE}=; ${cookieAttrs(env)}; Max-Age=0`;
     // If the provider advertises RP-initiated logout, send the browser there
     // (with id_token_hint + post_logout_redirect_uri); otherwise just go home.
     let href = env.PUBLIC_BASE_URL;
