@@ -1,6 +1,13 @@
-import { eq, inArray } from 'drizzle-orm';
+import { eq, inArray, isNotNull } from 'drizzle-orm';
 import { type DB } from '@allenlabs/pm-core/db/client';
-import { members, projects, roles, users } from '@allenlabs/pm-core/db/schema';
+import {
+  groupMembers,
+  groups,
+  members,
+  projects,
+  roles,
+  users,
+} from '@allenlabs/pm-core/db/schema';
 import type { Env } from '@allenlabs/pm-core/lib/env';
 import {
   type AuthContext,
@@ -8,10 +15,12 @@ import {
   ForbiddenError,
   UnauthorizedError,
   hasPermission,
+  permissionsForGroupRole,
   permissionsForTeamRole,
 } from '@allenlabs/pm-core/lib/permissions';
 import { type TeamMembershipClaim } from './session.server';
 import type { AuthAdapter, AuthIdentity } from './auth/types';
+import { syncMembershipsImpl } from './groups';
 
 export interface CurrentUser {
   id: number;
@@ -118,6 +127,39 @@ export async function buildAuthContextImpl(
     add(m.projectId, m.permissions as Permission[]);
   }
 
+  // 3. Group-tree membership (0012). Membership on a group inherits DOWN to all
+  //    descendant groups + their projects, so for each project attached to a
+  //    group we walk UP the ancestor chain and union the perms of any group the
+  //    user belongs to. No-op for deployments with no group rows. Ancestry is
+  //    resolved in-memory from a parent map (no recursive CTE); the `seen` set
+  //    bounds the walk so a (defensively-handled) data cycle can't hang it.
+  const groupMemRows = await db
+    .select({ groupId: groupMembers.groupId, role: groupMembers.role })
+    .from(groupMembers)
+    .where(eq(groupMembers.userId, userId));
+  if (groupMemRows.length > 0) {
+    const roleByGroup = new Map(groupMemRows.map((g) => [g.groupId, g.role]));
+    const allGroups = await db.select({ id: groups.id, parentId: groups.parentId }).from(groups);
+    const parentOf = new Map(allGroups.map((g) => [g.id, g.parentId]));
+    const groupProjects = await db
+      .select({ id: projects.id, groupId: projects.groupId })
+      .from(projects)
+      .where(isNotNull(projects.groupId));
+    for (const p of groupProjects) {
+      /* v8 ignore next */
+      if (p.groupId == null) continue; // isNotNull guarantees non-null
+      let cursor: number | null = p.groupId;
+      const seen = new Set<number>();
+      while (cursor != null) {
+        if (seen.has(cursor)) break; // pre-existing data cycle — stop walking
+        seen.add(cursor);
+        const role = roleByGroup.get(cursor);
+        if (role) add(p.id, permissionsForGroupRole(role));
+        cursor = parentOf.get(cursor) ?? null;
+      }
+    }
+  }
+
   return { userId, isAdmin, permissionsByProject };
 }
 
@@ -135,6 +177,18 @@ export async function userFromSessionImpl(
 ): Promise<CurrentUser | null> {
   const identity = await adapter.verify(env, cookie);
   if (!identity) return null;
+  return userFromIdentityImpl(db, identity);
+}
+
+/**
+ * Resolve the local users row for an already-verified identity. Split out so a
+ * tenant-aware runtime can verify first (cheap, JWT-only), pick the tenant DB
+ * from the identity, then do the lookup against that DB.
+ */
+export async function userFromIdentityImpl(
+  db: DB,
+  identity: AuthIdentity,
+): Promise<CurrentUser | null> {
   const row = await db.query.users.findFirst({
     where: eq(users.betterAuthUserId, identity.subject),
   });
@@ -187,6 +241,17 @@ export async function userFromSessionImpl(
  *                                              instance bootstrap)
  */
 export async function findOrCreateUserBySsoImpl(
+  db: DB,
+  identity: AuthIdentity,
+): Promise<CurrentUser> {
+  const user = await findOrCreateUserRowImpl(db, identity);
+  // Mirror any org/team membership claims into the local tables (no-op when the
+  // identity carries none — the tables stay authoritative).
+  await syncMembershipsImpl(db, user.id, identity);
+  return user;
+}
+
+async function findOrCreateUserRowImpl(
   db: DB,
   identity: AuthIdentity,
 ): Promise<CurrentUser> {

@@ -152,6 +152,8 @@ function toIdentity(env: Env, payload: JWTPayload): AuthIdentity {
     isPlatformAdmin: payload[roleClaim] === 'admin',
     // Plain OIDC carries no team/org claim ⇒ empty; PM falls back to pm.members.
     teamMemberships: [],
+    // Opaque tenant key from a configurable claim (default unset ⇒ single tenant).
+    tenant: env.OIDC_CLAIM_TENANT ? str(payload, env.OIDC_CLAIM_TENANT) : null,
   };
 }
 

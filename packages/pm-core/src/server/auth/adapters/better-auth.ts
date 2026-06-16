@@ -28,6 +28,8 @@ function toIdentity(p: SessionPayload): AuthIdentity {
     locale: typeof p.locale === 'string' ? p.locale : null,
     isPlatformAdmin: p.role === 'admin',
     teamMemberships: p.teamMemberships ?? [],
+    tenant: typeof p.tenant === 'string' ? p.tenant : null,
+    orgMemberships: p.memberships ?? [],
   };
 }
 

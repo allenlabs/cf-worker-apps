@@ -4,6 +4,10 @@
 // the bindings configured in wrangler.toml and `wrangler secret put`.
 
 export interface Env {
+  // Default-tenant database. Additional per-tenant databases are bound as
+  // `HYPERDRIVE_<TENANTKEY>` (uppercased) and reached via the binding-map
+  // TenantResolver; see server/tenancy.ts. Index access (`env[name]`) is used
+  // for those, so they need not be enumerated here.
   HYPERDRIVE: Hyperdrive;
   FILES: R2Bucket;
   // Suite-wide JWT revocation list (D1). Used ONLY by the `betterAuth` adapter's
@@ -22,6 +26,14 @@ export interface Env {
   // The AUTH_WEB_URL/AUTH_API_URL/PM_ORG_HMAC_* below are the betterAuth adapter's
   // config — a second deployment points them at its own Better Auth auth-api.
   AUTH_ADAPTER?: string;
+
+  // Selects the TenantResolver (server/tenancy.ts); defaults to the single-DB
+  // 'default' resolver (env.HYPERDRIVE). 'binding-map' routes a tenant key to
+  // the `HYPERDRIVE_<KEY>` binding. A consumer may register a custom one.
+  TENANT_RESOLVER?: string;
+  // OIDC adapter: the claim to read the opaque tenant key from (default unset
+  // ⇒ single tenant). e.g. 'org_id' or a namespaced claim.
+  OIDC_CLAIM_TENANT?: string;
 
   // ── `oidc` adapter (AUTH_ADAPTER=oidc) ──────────────────────────────────
   // Standard OpenID Connect (Authorization Code + PKCE). Everything

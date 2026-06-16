@@ -172,17 +172,17 @@ function makeRetryingPendingQuery(
   return wrapper;
 }
 
-// Per-request drizzle instance cache.  WeakMap keyed on the in-flight
-// Request so every `makeDb()` inside a single request shares one client
-// (and therefore one connection pool, ~3 sockets max) — but the entry
-// drops as soon as the request handler exits.
-const dbByRequest = new WeakMap<
-  Request,
-  ReturnType<typeof drizzle<typeof schema>>
->();
+// Per-request, per-tenant drizzle instance cache. WeakMap keyed on the in-flight
+// Request → a map of tenantKey → client, so every `makeDb()`/tenant DB lookup
+// inside a single request reuses one client per tenant (one pool); the whole
+// entry drops as soon as the request handler exits. A request only ever touches
+// one tenant in practice (one identity), but keying by tenant is correct and
+// cheap.
+type DrizzleDb = ReturnType<typeof drizzle<typeof schema>>;
+const dbByRequest = new WeakMap<Request, Map<string, DrizzleDb>>();
 
-function buildClient(env: { HYPERDRIVE: Hyperdrive }) {
-  const raw = postgres(env.HYPERDRIVE.connectionString, {
+function connect(connectionString: string): DrizzleDb {
+  const raw = postgres(connectionString, {
     // Big enough to run every page's parallel fan-out in one batch — the
     // hottest route (my/page) issues 4 simultaneous queries plus the auth
     // lookup the route prelude has already kicked off.  Hyperdrive
@@ -197,12 +197,11 @@ function buildClient(env: { HYPERDRIVE: Hyperdrive }) {
     idle_timeout: 5,
     connection: { search_path: 'pm, public' },
   });
-  return wrapWithColdStartRetry(raw);
+  return drizzle(wrapWithColdStartRetry(raw), { schema });
 }
 
-export function makeDb(env: { HYPERDRIVE: Hyperdrive }) {
-  // Inside an SSR request lifecycle, reuse the same client across nested
-  // `makeDb()` calls so the auth-runtime + route loaders share a pool.
+/** Build (or reuse, per request) a DB for `tenantKey` from a connection string. */
+function cachedForRequest(tenantKey: string, connectionString: string): DrizzleDb {
   let req: Request | undefined;
   try {
     req = getRequest();
@@ -211,15 +210,76 @@ export function makeDb(env: { HYPERDRIVE: Hyperdrive }) {
        background ctx.waitUntil work) — fall through to per-call client. */
   }
   if (req) {
-    const cached = dbByRequest.get(req);
+    let byTenant = dbByRequest.get(req);
+    if (!byTenant) {
+      byTenant = new Map();
+      dbByRequest.set(req, byTenant);
+    }
+    const cached = byTenant.get(tenantKey);
     if (cached) return cached;
-    const fresh = drizzle(buildClient(env), { schema });
-    dbByRequest.set(req, fresh);
+    const fresh = connect(connectionString);
+    byTenant.set(tenantKey, fresh);
     return fresh;
   }
-  return drizzle(buildClient(env), { schema });
+  return connect(connectionString);
+}
+
+/** Default-tenant DB (env.HYPERDRIVE). Backward-compatible entry point. */
+export function makeDb(env: { HYPERDRIVE: Hyperdrive }): DrizzleDb {
+  return cachedForRequest('default', env.HYPERDRIVE.connectionString);
+}
+
+/** Per-tenant DB from a specific Hyperdrive binding (used by TenantResolvers). */
+export function makeDbForBinding(binding: Hyperdrive, tenantKey: string): DrizzleDb {
+  return cachedForRequest(tenantKey, binding.connectionString);
 }
 
 export type DB = ReturnType<typeof makeDb>;
+
+// ---------- Tenancy seam (physical, per-DB isolation) ----------
+//
+// A TenantResolver answers two questions, injected by the consumer exactly like
+// the AuthAdapter: which tenant does this identity belong to, and which DB does
+// that tenant use. The default resolver is single-tenant (env.HYPERDRIVE), so a
+// deployment that configures nothing is unchanged. The concrete resolvers live
+// here (the connection layer); registration/selection lives in server/tenancy.
+
+import type { AuthIdentity } from '@allenlabs/pm-core/server/auth/types';
+import type { Env } from '@allenlabs/pm-core/lib/env';
+
+export interface TenantResolver {
+  readonly id: string;
+  /** Opaque tenant key for an identity (null for unauthenticated/public). */
+  resolveTenant(identity: AuthIdentity | null, env: Env): { tenantKey: string };
+  /** The DB for a tenant key. */
+  resolveDb(tenantKey: string, env: Env): DB;
+}
+
+/** Single-DB default: every identity → the one `env.HYPERDRIVE`. */
+export const defaultTenantResolver: TenantResolver = {
+  id: 'default',
+  resolveTenant: (identity) => ({ tenantKey: identity?.tenant || 'default' }),
+  resolveDb: (_tenantKey, env) => makeDb(env),
+};
+
+/**
+ * Binding-map resolver: routes a tenant key to the Cloudflare Hyperdrive binding
+ * `HYPERDRIVE_<KEY>` (uppercased, non-alphanumerics → `_`), or to an explicit
+ * `{ tenantKey: bindingName }` map. The 'default' key (or an unmapped key) falls
+ * back to `env.HYPERDRIVE`. Lets a consumer go multi-DB by config alone.
+ */
+export function createBindingMapTenantResolver(map?: Record<string, string>): TenantResolver {
+  return {
+    id: 'binding-map',
+    resolveTenant: (identity) => ({ tenantKey: identity?.tenant || 'default' }),
+    resolveDb: (tenantKey, env) => {
+      if (tenantKey === 'default') return makeDb(env);
+      const bindingName = map?.[tenantKey] ?? `HYPERDRIVE_${tenantKey.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`;
+      const binding = (env as unknown as Record<string, unknown>)[bindingName] as Hyperdrive | undefined;
+      if (!binding) throw new Error(`No Hyperdrive binding "${bindingName}" for tenant "${tenantKey}".`);
+      return makeDbForBinding(binding, tenantKey);
+    },
+  };
+}
 
 export { schema };

@@ -85,6 +85,9 @@ export const projects = pm.table(
     // Better Auth team id (inside org_allenlabs) backing this project's
     // per-project collaborators. Set on create; nullable for legacy rows.
     authTeamId: text('auth_team_id'),
+    // Optional group-tree association (0012). NULL ⇒ project-only RBAC.
+    // Lazy ref: `groups` is declared later in this module.
+    groupId: integer('group_id').references(() => groups.id),
     parentId: integer('parent_id'),
     status: text('status', { enum: ['active', 'closed', 'archived'] })
       .notNull()
@@ -624,6 +627,64 @@ export const apiClients = pm.table(
 );
 
 export type ApiClient = typeof apiClients.$inferSelect;
+
+// ---------- Group tree (0012) ----------
+//
+// A single self-referential tree of arbitrary depth. A group is an
+// 'organization' or 'team' (the `kind` label); any group may contain child
+// groups. Projects optionally attach to a group (projects.group_id), and
+// membership on any node inherits down to all descendants. All optional — a
+// project with NULL group_id resolves exactly as before (project-only RBAC).
+// `external_id` matches IdP-provided ids during the optional claims sync.
+
+export const groups = pm.table(
+  'groups',
+  {
+    id: serial('id').primaryKey(),
+    parentId: integer('parent_id'), // self-ref (lazy); NULL ⇒ root. FK in SQL.
+    kind: text('kind', { enum: ['organization', 'team'] })
+      .notNull()
+      .default('organization'),
+    slug: text('slug').notNull(),
+    name: text('name').notNull(),
+    externalId: text('external_id'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .default(sql`now()`),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => ({
+    parentSlugIdx: uniqueIndex('groups_parent_slug_idx').on(t.parentId, t.slug),
+    parentIdx: index('groups_parent_idx').on(t.parentId),
+    externalIdx: uniqueIndex('groups_external_id_idx').on(t.externalId),
+  }),
+);
+
+export const groupMembers = pm.table(
+  'group_members',
+  {
+    id: serial('id').primaryKey(),
+    groupId: integer('group_id')
+      .notNull()
+      .references(() => groups.id, { onDelete: 'cascade' }),
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    role: text('role').notNull().default('member'), // owner | admin | lead | member
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => ({
+    uniq: uniqueIndex('group_members_unique_idx').on(t.groupId, t.userId),
+    userIdx: index('group_members_user_idx').on(t.userId),
+  }),
+);
+
+export type Group = typeof groups.$inferSelect;
+export type GroupMember = typeof groupMembers.$inferSelect;
 
 // ---------- Notion integration ----------
 //

@@ -5,7 +5,7 @@
 // tests/workers/ (they exercise the same code paths via real HTTP requests).
 /* v8 ignore start */
 import { getRequest } from '@tanstack/react-start/server';
-import { type DB, makeDb } from '@allenlabs/pm-core/db/client';
+import { type DB } from '@allenlabs/pm-core/db/client';
 import type { Env } from '@allenlabs/pm-core/lib/env';
 import {
   type AuthContext,
@@ -17,10 +17,24 @@ import {
   buildAuthContextImpl,
   checkPermission,
   type CurrentUser,
-  userFromSessionImpl,
+  userFromIdentityImpl,
 } from '@allenlabs/pm-core/server/auth';
 import { type AuthAdapter } from '@allenlabs/pm-core/server/auth/types';
 import { selectAdapter } from '@allenlabs/pm-core/server/auth/registry';
+import { resolveTenantDb, tenantKeyFor } from '@allenlabs/pm-core/server/tenancy';
+
+function currentRequest(): Request | undefined {
+  try {
+    return getRequest();
+  } catch {
+    return undefined;
+  }
+}
+
+// The tenant key resolved (once) from the verified identity by getCurrentUser,
+// keyed per in-flight Request so every getDb() in that request hits the same
+// tenant DB. Unset (public/unauthenticated) ⇒ the default tenant.
+const requestTenantKey = new WeakMap<Request, string>();
 
 export function getEnv(): Env {
   const req = getRequest();
@@ -33,8 +47,13 @@ export function getEnv(): Env {
   return env;
 }
 
+// Tenant-aware: returns the DB for the request's resolved tenant (set by
+// getCurrentUser from the verified identity), or the default tenant before/
+// without an identity. With the default resolver this is exactly env.HYPERDRIVE.
 export function getDb(env: Env = getEnv()): DB {
-  return makeDb(env);
+  const req = currentRequest();
+  const key = (req && requestTenantKey.get(req)) || 'default';
+  return resolveTenantDb(env, key);
 }
 
 export function getAdapter(env: Env = getEnv()): AuthAdapter {
@@ -50,17 +69,33 @@ export function getAdapter(env: Env = getEnv()): AuthAdapter {
 const userCache = new WeakMap<Request, Promise<CurrentUser | null>>();
 const ctxCache = new WeakMap<Request, Map<number, Promise<AuthContext>>>();
 
+// Verify the cookie → identity (JWT-only), pin the request's tenant key from it,
+// then look the user up in that tenant's DB. Verifying before touching a DB is
+// what makes per-tenant routing possible (we never resolve a DB before we know
+// the identity).
+async function resolveCurrentUser(
+  env: Env,
+  cookie: string | null,
+  req: Request | undefined,
+): Promise<CurrentUser | null> {
+  const identity = await getAdapter(env).verify(env, cookie);
+  if (!identity) return null;
+  const key = tenantKeyFor(env, identity);
+  if (req) requestTenantKey.set(req, key);
+  return userFromIdentityImpl(resolveTenantDb(env, key), identity);
+}
+
 export function getCurrentUser(): Promise<CurrentUser | null> {
-  const req = getRequest();
+  const req = currentRequest();
   if (!req) {
     const env = getEnv();
-    return userFromSessionImpl(getDb(env), getAdapter(env), env, null);
+    return resolveCurrentUser(env, null, undefined);
   }
   let p = userCache.get(req);
   if (!p) {
     const env = getEnv();
     const cookie = req.headers.get('cookie') ?? null;
-    p = userFromSessionImpl(getDb(env), getAdapter(env), env, cookie);
+    p = resolveCurrentUser(env, cookie, req);
     userCache.set(req, p);
   }
   return p;

@@ -4,7 +4,10 @@
 // deployment plugs in its own adapter + config with no core edits.
 
 import type { Env } from '@allenlabs/pm-core/lib/env';
-import type { TeamMembershipClaim } from '@allenlabs/pm-core/server/session.server';
+import type {
+  OrgMembershipClaim,
+  TeamMembershipClaim,
+} from '@allenlabs/pm-core/server/session.server';
 
 /**
  * Backend-neutral identity the core consumes. An adapter's `verify` turns a
@@ -23,6 +26,13 @@ export interface AuthIdentity {
   isPlatformAdmin?: boolean;
   /** Per-project roles, if the provider carries them; empty ⇒ pm.members RBAC. */
   teamMemberships?: TeamMembershipClaim[];
+  /**
+   * Opaque tenant key for physical (per-DB) isolation. The TenantResolver maps
+   * it to a database. Unset ⇒ the single default tenant (env.HYPERDRIVE).
+   */
+  tenant?: string | null;
+  /** Org memberships, if the provider carries them; drives the optional sync. */
+  orgMemberships?: OrgMembershipClaim[];
 }
 
 /** Result of handling the provider's sign-in callback. */

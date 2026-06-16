@@ -43,6 +43,8 @@ describe('betterAuthAdapter.verify', () => {
       locale: 'ko',
       isPlatformAdmin: true,
       teamMemberships: [{ teamId: 't1', role: 'owner' }],
+      tenant: null,
+      orgMemberships: [],
     });
   });
 
@@ -58,11 +60,24 @@ describe('betterAuthAdapter.verify', () => {
       locale: null,
       isPlatformAdmin: false,
       teamMemberships: [],
+      tenant: null,
+      orgMemberships: [],
     });
   });
 
   it('returns null for an unverifiable token', async () => {
     expect(await betterAuthAdapter.verify(env, cookie('not-a-jwt'))).toBeNull();
+  });
+
+  it('carries a tenant key + org memberships when the JWT has them', async () => {
+    const token = await signTestJwt(env, {
+      sub: 'ext-t',
+      tenant: 'acme',
+      memberships: [{ orgId: 'o1', role: 'admin' }],
+    });
+    const id = await betterAuthAdapter.verify(env, cookie(token));
+    expect(id?.tenant).toBe('acme');
+    expect(id?.orgMemberships).toEqual([{ orgId: 'o1', role: 'admin' }]);
   });
 
   it('verifies without AUTH_DB bound (no revocation list ⇒ never revoked)', async () => {

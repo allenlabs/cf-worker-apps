@@ -131,6 +131,33 @@ export function permissionsForTeamRole(role: string): Set<Permission> {
   return new Set(perms ?? []);
 }
 
+// ---- Group-tree role → permission mapping (0012 logical hierarchy) ----
+//
+// A user's effective permissions on a project are the UNION (most-permissive)
+// of: the project-member role (legacy pm.members, authoritative when present)
+// and the group roles the user holds on the project's group OR any of its
+// ANCESTORS (membership inherits DOWN the tree). Groups are additive — a
+// project with no group resolves from pm.members exactly as before.
+//
+// Precedence is moot because we union sets — a user gets every permission any
+// applicable role grants. The role strength:
+//   owner | admin → full project-manager perms across the whole subtree
+//   lead          → full project-manager perms for its subtree
+//   member        → contributor (create/edit issues, wiki, versions, time, …)
+export type GroupRole = 'owner' | 'admin' | 'lead' | 'member';
+
+const GROUP_ROLE_PERMISSIONS: Record<GroupRole, Permission[]> = {
+  owner: ALL_PERMISSIONS,
+  admin: ALL_PERMISSIONS,
+  lead: ALL_PERMISSIONS,
+  member: CONTRIBUTOR_PERMS,
+};
+
+/** PM permissions for a group_members role (unknown ⇒ none — fail-closed). */
+export function permissionsForGroupRole(role: string): Set<Permission> {
+  return new Set(GROUP_ROLE_PERMISSIONS[role as GroupRole] ?? []);
+}
+
 export function hasPermission(
   ctx: AuthContext,
   projectId: number,
