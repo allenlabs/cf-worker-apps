@@ -204,6 +204,19 @@ function tokenEndpointFetch(idToken: string | null, status = 200): typeof fetch 
     })) as unknown as typeof fetch;
 }
 
+// A token endpoint that fails with a standard OAuth error body (or a non-JSON
+// body when `nonJson` is set, to exercise the fallback).
+function tokenErrorFetch(
+  error: string,
+  status = 400,
+  opts: { nonJson?: boolean } = {},
+): typeof fetch {
+  return (async () =>
+    new Response(opts.nonJson ? 'Bad Request' : JSON.stringify({ error, error_description: `${error} detail` }), {
+      status,
+    })) as unknown as typeof fetch;
+}
+
 describe('oidcAdapter.handleCallback', () => {
   it('exchanges the code (PKCE), verifies id_token + nonce, returns identity', async () => {
     const { state, nonce, cookie } = await startLogin('/projects');
@@ -234,14 +247,16 @@ describe('oidcAdapter.handleCallback', () => {
     ).rejects.toMatchObject({ status: 400 });
   });
 
-  it('400 when the token exchange fails', async () => {
+  it('propagates the token-endpoint status (401) when the exchange fails, no session', async () => {
     const { state, cookie } = await startLogin();
     const req = new Request(`https://pm.test/auth/callback?code=abc&state=${state}`, {
       headers: { cookie },
     });
-    await expect(
-      oidcAdapter.handleCallback(env, req, { fetch: tokenEndpointFetch(null, 401) }),
-    ).rejects.toMatchObject({ status: 400 });
+    const err = await oidcAdapter
+      .handleCallback(env, req, { fetch: tokenEndpointFetch(null, 401) })
+      .catch((e) => e);
+    expect(err.status).toBe(401);
+    expect(await err.text()).toContain('OIDC token exchange failed: 401');
   });
 
   it('500 when the token response has no id_token', async () => {
@@ -296,6 +311,82 @@ describe('oidcAdapter.handleCallback', () => {
     });
     await oidcAdapter.handleCallback(e, req, { fetch: fetchFn });
     expect(seenAuth).toBe(`Basic ${btoa(`${CLIENT_ID}:s3cret`)}`);
+  });
+});
+
+describe('oidcAdapter.handleCallback — token errors + idempotent duplicates', () => {
+  it('surfaces the token-endpoint error (invalid_grant) in the thrown message', async () => {
+    const { state, cookie } = await startLogin();
+    const req = new Request(`https://pm.test/auth/callback?code=abc&state=${state}`, {
+      headers: { cookie },
+    });
+    const err = await oidcAdapter
+      .handleCallback(env, req, { fetch: tokenErrorFetch('invalid_grant') })
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(Response);
+    expect(err.status).toBe(400);
+    const body = await err.text();
+    expect(body).toContain('OIDC token exchange failed');
+    expect(body).toContain('invalid_grant');
+  });
+
+  it('falls back to the status alone when the token error body is not JSON', async () => {
+    const { state, cookie } = await startLogin();
+    const req = new Request(`https://pm.test/auth/callback?code=abc&state=${state}`, {
+      headers: { cookie },
+    });
+    const err = await oidcAdapter
+      .handleCallback(env, req, { fetch: tokenErrorFetch('', 400, { nonJson: true }) })
+      .catch((e) => e);
+    expect(err.status).toBe(400);
+    expect(await err.text()).toBe('OIDC token exchange failed: 400');
+  });
+
+  it('is idempotent: a duplicate callback with a valid session re-issues it + redirects home', async () => {
+    const { state, cookie } = await startLogin('/dash');
+    // The first callback already succeeded → the browser carries pm_session.
+    const idToken = await makeIdToken({ sub: 'dup-1', email: 'd@u.test' });
+    const req = new Request(`https://pm.test/auth/callback?code=abc&state=${state}`, {
+      headers: { cookie: `${cookie}; pm_session=${idToken}` },
+    });
+    // The reused code fails exchange, but the existing session is valid ⇒ no throw.
+    const res = await oidcAdapter.handleCallback(env, req, {
+      fetch: tokenErrorFetch('invalid_grant'),
+    });
+    expect(res.sessionToken).toBe(idToken); // existing session re-issued
+    expect(res.identity.subject).toBe('dup-1');
+    expect(res.redirectTo).toBe('/dash');
+  });
+
+  it('still throws the detailed error when the existing session cookie is invalid', async () => {
+    const { state, cookie } = await startLogin();
+    const req = new Request(`https://pm.test/auth/callback?code=abc&state=${state}`, {
+      headers: { cookie: `${cookie}; pm_session=not-a-jwt` },
+    });
+    const err = await oidcAdapter
+      .handleCallback(env, req, { fetch: tokenErrorFetch('invalid_grant') })
+      .catch((e) => e);
+    expect(err.status).toBe(400);
+    expect(await err.text()).toContain('invalid_grant');
+  });
+
+  it('coalesces two simultaneous callbacks with the same code into one exchange', async () => {
+    const { state, nonce, cookie } = await startLogin();
+    const idToken = await makeIdToken({ sub: 'race-1' }, { nonce });
+    let calls = 0;
+    const fetchFn = (async () => {
+      calls++;
+      return new Response(JSON.stringify({ id_token: idToken }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const mk = () =>
+      new Request(`https://pm.test/auth/callback?code=abc&state=${state}`, { headers: { cookie } });
+    const [r1, r2] = await Promise.all([
+      oidcAdapter.handleCallback(env, mk(), { fetch: fetchFn }),
+      oidcAdapter.handleCallback(env, mk(), { fetch: fetchFn }),
+    ]);
+    expect(r1.sessionToken).toBe(idToken);
+    expect(r2.sessionToken).toBe(idToken);
+    expect(calls).toBe(1); // a single token exchange despite two callbacks
   });
 });
 

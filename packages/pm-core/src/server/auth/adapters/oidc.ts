@@ -11,7 +11,7 @@
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 import type { Env } from '@allenlabs/pm-core/lib/env';
 import { cookieAttrs } from '@allenlabs/pm-core/server/auth/cookies';
-import type { AuthAdapter, AuthIdentity } from '../types';
+import type { AuthAdapter, AuthIdentity, CallbackResult } from '../types';
 
 // ── discovery + JWKS caches (per isolate) ──────────────────────────────────
 
@@ -25,6 +25,15 @@ interface OidcDiscovery {
 
 const discoveryCache = new Map<string, OidcDiscovery>();
 const jwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
+
+// In-flight token exchanges keyed on the single-use authorization `code`. An
+// embedded (iframe) deployment can fire `/auth/callback` twice for one login;
+// caching the in-flight promise coalesces near-simultaneous duplicates onto one
+// exchange (the OAuth code is single-use, so a second real exchange would fail).
+// Per-isolate + only held while in flight (evicted on settle) — just enough to
+// catch the ~ms-apart double-fire; later duplicates are handled idempotently in
+// exchangeAuthCode via an existing valid session.
+const exchangeByCode = new Map<string, Promise<CallbackResult>>();
 
 function requireConfig(env: Env): { issuer: string; clientId: string } {
   if (!env.OIDC_ISSUER) throw new Error('OIDC_ISSUER is not configured.');
@@ -181,20 +190,111 @@ function redirectUri(env: Env): string {
   return new URL('/auth/callback', env.PUBLIC_BASE_URL).href;
 }
 
+/** Verify the session cookie → identity (the read side; also reused to detect an
+ *  already-authenticated request during an idempotent duplicate callback). */
+async function verifySessionCookie(env: Env, cookie: string | null): Promise<AuthIdentity | null> {
+  const token = readCookie(cookie, SESSION_COOKIE);
+  if (!token) return null;
+  try {
+    const doc = await discover(env, fetch);
+    return toIdentity(env, await verifyIdToken(env, doc, token));
+  } catch {
+    return null;
+  }
+}
+
+/** Summarize a non-ok token-endpoint response — `<status> <error> <description>`
+ *  from the standard OAuth `{error, error_description}` JSON — so the real cause
+ *  (e.g. invalid_grant vs invalid_request) is queryable downstream. Truncated;
+ *  falls back to the status alone for a non-JSON body. */
+async function readTokenError(res: Response): Promise<string> {
+  let error = '';
+  let desc = '';
+  try {
+    const j = (await res.json()) as { error?: unknown; error_description?: unknown };
+    if (typeof j.error === 'string') error = j.error;
+    if (typeof j.error_description === 'string') desc = j.error_description;
+  } catch {
+    // Non-JSON / empty body — the status alone is the signal.
+  }
+  return `${res.status} ${error} ${desc}`.replace(/\s+/g, ' ').trim().slice(0, 200);
+}
+
+/** The code→token exchange (PKCE), id_token verification, and the idempotent
+ *  duplicate-callback fallback. Factored out so handleCallback can coalesce
+ *  concurrent duplicates on `code`. */
+async function exchangeAuthCode(
+  env: Env,
+  fetchFn: typeof fetch,
+  code: string,
+  saved: OidcState,
+  cookie: string | null,
+): Promise<CallbackResult> {
+  const { clientId } = requireConfig(env);
+  const doc = await discover(env, fetchFn);
+  const body = new URLSearchParams({
+    grant_type: 'authorization_code',
+    code,
+    redirect_uri: redirectUri(env),
+    client_id: clientId,
+    code_verifier: saved.verifier,
+  });
+  const headers: Record<string, string> = {
+    'content-type': 'application/x-www-form-urlencoded',
+  };
+  // Confidential client ⇒ HTTP Basic auth; public client ⇒ PKCE only.
+  if (env.OIDC_CLIENT_SECRET) {
+    headers.authorization = `Basic ${btoa(`${clientId}:${env.OIDC_CLIENT_SECRET}`)}`;
+  }
+
+  const tokenRes = await fetchFn(doc.token_endpoint, { method: 'POST', headers, body });
+  if (!tokenRes.ok) {
+    const detail = await readTokenError(tokenRes);
+    // Idempotent duplicate: the single-use code is already spent, but a valid
+    // session already exists (the first callback succeeded) ⇒ treat as success,
+    // re-issue the existing session, and go home instead of erroring the user
+    // out. Only when `verify` confirms a valid identity from the existing cookie
+    // (never weakens auth — a bad/absent session still surfaces the real error).
+    const existingToken = readCookie(cookie, SESSION_COOKIE);
+    if (existingToken) {
+      const identity = await verifySessionCookie(env, cookie);
+      if (identity) {
+        return { identity, sessionToken: existingToken, redirectTo: saved.next };
+      }
+    }
+    throw new Response(`OIDC token exchange failed: ${detail}`, {
+      status: tokenRes.status === 401 ? 401 : 400,
+    });
+  }
+  const tokens = (await tokenRes.json()) as { id_token?: string };
+  if (!tokens.id_token) {
+    throw new Response('OIDC token response had no id_token.', { status: 500 });
+  }
+
+  let payload: JWTPayload;
+  try {
+    payload = await verifyIdToken(env, doc, tokens.id_token);
+  } catch {
+    throw new Response('OIDC id_token failed verification.', { status: 500 });
+  }
+  if (payload.nonce !== saved.nonce) {
+    throw new Response('OIDC nonce mismatch.', { status: 400 });
+  }
+
+  return {
+    identity: toIdentity(env, payload),
+    sessionToken: tokens.id_token,
+    redirectTo: saved.next,
+  };
+}
+
 // ── the adapter ────────────────────────────────────────────────────────────
 
 export const oidcAdapter: AuthAdapter = {
   id: 'oidc',
 
-  async verify(env, cookie) {
-    const token = readCookie(cookie, SESSION_COOKIE);
-    if (!token) return null;
-    try {
-      const doc = await discover(env, fetch);
-      return toIdentity(env, await verifyIdToken(env, doc, token));
-    } catch {
-      return null;
-    }
+  verify(env, cookie) {
+    return verifySessionCookie(env, cookie);
   },
 
   async loginRedirect(env, opts) {
@@ -224,56 +324,26 @@ export const oidcAdapter: AuthAdapter = {
 
   async handleCallback(env, request, deps) {
     const fetchFn = deps?.fetch ?? fetch;
-    const { clientId } = requireConfig(env);
     const url = new URL(request.url);
     const code = url.searchParams.get('code');
     const returnedState = url.searchParams.get('state');
-    const saved = decodeState(readCookie(request.headers.get('cookie'), STATE_COOKIE));
+    const cookie = request.headers.get('cookie');
+    const saved = decodeState(readCookie(cookie, STATE_COOKIE));
 
     if (!code || !returnedState || !saved || returnedState !== saved.state) {
       throw new Response('Invalid OIDC callback (state mismatch).', { status: 400 });
     }
 
-    const doc = await discover(env, fetchFn);
-    const body = new URLSearchParams({
-      grant_type: 'authorization_code',
-      code,
-      redirect_uri: redirectUri(env),
-      client_id: clientId,
-      code_verifier: saved.verifier,
-    });
-    const headers: Record<string, string> = {
-      'content-type': 'application/x-www-form-urlencoded',
-    };
-    // Confidential client ⇒ HTTP Basic auth; public client ⇒ PKCE only.
-    if (env.OIDC_CLIENT_SECRET) {
-      headers.authorization = `Basic ${btoa(`${clientId}:${env.OIDC_CLIENT_SECRET}`)}`;
-    }
-
-    const tokenRes = await fetchFn(doc.token_endpoint, { method: 'POST', headers, body });
-    if (!tokenRes.ok) {
-      throw new Response('OIDC token exchange failed.', { status: 400 });
-    }
-    const tokens = (await tokenRes.json()) as { id_token?: string };
-    if (!tokens.id_token) {
-      throw new Response('OIDC token response had no id_token.', { status: 500 });
-    }
-
-    let payload: JWTPayload;
+    // Coalesce a near-simultaneous duplicate callback onto the first exchange.
+    const inflight = exchangeByCode.get(code);
+    if (inflight) return inflight;
+    const p = exchangeAuthCode(env, fetchFn, code, saved, cookie);
+    exchangeByCode.set(code, p);
     try {
-      payload = await verifyIdToken(env, doc, tokens.id_token);
-    } catch {
-      throw new Response('OIDC id_token failed verification.', { status: 500 });
+      return await p;
+    } finally {
+      exchangeByCode.delete(code);
     }
-    if (payload.nonce !== saved.nonce) {
-      throw new Response('OIDC nonce mismatch.', { status: 400 });
-    }
-
-    return {
-      identity: toIdentity(env, payload),
-      sessionToken: tokens.id_token,
-      redirectTo: saved.next,
-    };
   },
 
   sessionCookie(env, token) {
@@ -323,4 +393,5 @@ export function _setOidcJwksForTests(
 export function _clearOidcCachesForTests(): void {
   discoveryCache.clear();
   jwksCache.clear();
+  exchangeByCode.clear();
 }
