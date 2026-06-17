@@ -8,6 +8,7 @@ import {
   mintPmSession,
   pmSessionMaxTtl,
   pmSessionTtl,
+  readPmSessionIdToken,
   verifyPmSession,
 } from '@allenlabs/pm-core/server/auth/pm-session';
 
@@ -118,6 +119,43 @@ describe('mintPmSession + verifyPmSession', () => {
 
   it('throws when minting without a configured secret', async () => {
     await expect(mintPmSession(makeTestEnv(), identity())).rejects.toThrow(/PM_SESSION_SECRET/);
+  });
+});
+
+describe('id_token retention for RP-initiated logout (idt claim)', () => {
+  it('round-trips an embedded id_token', async () => {
+    const t = await mintPmSession(env(), identity(), 'the-id-token');
+    expect(await readPmSessionIdToken(env(), t)).toBe('the-id-token');
+  });
+
+  it('returns null when no id_token was embedded', async () => {
+    const t = await mintPmSession(env(), identity());
+    expect(await readPmSessionIdToken(env(), t)).toBeNull();
+  });
+
+  it('treats an empty embedded id_token as absent', async () => {
+    const t = await new SignJWT({ idt: '' })
+      .setProtectedHeader({ alg: 'HS256' })
+      .setSubject('u')
+      .setIssuer('pm')
+      .setAudience('pm')
+      .setIssuedAt()
+      .setExpirationTime('1h')
+      .sign(key);
+    expect(await readPmSessionIdToken(env(), t)).toBeNull();
+  });
+
+  it('returns null for an invalid token', async () => {
+    expect(await readPmSessionIdToken(env(), 'not-a-jwt')).toBeNull();
+  });
+
+  it('extracts the id_token even from an EXPIRED PM session (clockTolerance)', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-16T00:00:00Z'));
+    const t = await mintPmSession(env({ PM_SESSION_TTL: '3600' }), identity(), 'idt-x'); // 1h
+    vi.setSystemTime(new Date('2026-06-16T05:00:00Z')); // long past exp
+    expect(await verifyPmSession(env(), t)).toBeNull(); // the session itself is expired
+    expect(await readPmSessionIdToken(env(), t)).toBe('idt-x'); // but the id_token is still extractable
   });
 });
 

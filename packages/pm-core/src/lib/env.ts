@@ -69,6 +69,20 @@ export interface Env {
   OIDC_CLAIM_NAME?: string;
   OIDC_CLAIM_EMAIL?: string;
   OIDC_CLAIM_PREFERRED?: string;
+  // Logout behaviour for the `oidc` adapter:
+  //   "local" (default) — clear the PM session cookie and return home. No IdP
+  //                       round-trip ⇒ never errors, but the IdP (SSO) session
+  //                       lives on, so the next visit may silently re-auth.
+  //                       Complete sign-out then requires ending the IdP session
+  //                       by other means (deployment-specific).
+  //   "rp"             — RP-initiated logout: also redirect to the discovery
+  //                       `end_session_endpoint` with a real `id_token_hint`
+  //                       (+ post_logout_redirect_uri) so the IdP session ends
+  //                       too. Needs the original id_token retained at login (it
+  //                       is embedded in the PM session JWT). Falls back to local
+  //                       when no id_token is available (e.g. it has expired and
+  //                       the OP rejects an expired hint).
+  OIDC_LOGOUT_MODE?: string; // "local" | "rp" (default "local")
 
   // SSO — both must point at the same allenlabs-auth deployment. Sign-in
   // happens at AUTH_WEB_URL/sign-in; PM exchanges codes and verifies JWTs

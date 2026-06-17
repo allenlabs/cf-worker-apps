@@ -11,7 +11,7 @@
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 import type { Env } from '@allenlabs/pm-core/lib/env';
 import { cookieAttrs } from '@allenlabs/pm-core/server/auth/cookies';
-import { mintPmSession, pmSessionTtl, verifyPmSession } from '../pm-session';
+import { mintPmSession, pmSessionTtl, readPmSessionIdToken, verifyPmSession } from '../pm-session';
 import type { AuthAdapter, AuthIdentity, CallbackResult } from '../types';
 
 // ── discovery + JWKS caches (per isolate) ──────────────────────────────────
@@ -212,6 +212,15 @@ async function verifySessionCookie(env: Env, cookie: string | null): Promise<Aut
   }
 }
 
+/** The original IdP id_token for RP-initiated logout (`id_token_hint`): from the
+ *  PM session's `idt` claim (PM-owned path), or the cookie itself (legacy
+ *  id_token-as-session). Never returns a PM session JWT as if it were an id_token. */
+async function readSessionIdToken(env: Env, cookie: string | null): Promise<string | null> {
+  const token = readCookie(cookie, SESSION_COOKIE);
+  if (!token) return null;
+  return env.PM_SESSION_SECRET ? readPmSessionIdToken(env, token) : token;
+}
+
 /** Summarize a non-ok token-endpoint response — `<status> <error> <description>`
  *  from the standard OAuth `{error, error_description}` JSON — so the real cause
  *  (e.g. invalid_grant vs invalid_request) is queryable downstream. Truncated;
@@ -295,8 +304,11 @@ async function exchangeAuthCode(
   // id_token as a rolling session. Without PM_SESSION_SECRET, fall back to the
   // id_token (legacy — the session is then bounded by its short exp).
   const identity = toIdentity(env, payload);
+  // Retain the original id_token inside the PM session (the `idt` claim) so an
+  // opt-in RP-initiated logout can use it as `id_token_hint`. Legacy path: the
+  // cookie IS the id_token already.
   const sessionToken = env.PM_SESSION_SECRET
-    ? await mintPmSession(env, identity)
+    ? await mintPmSession(env, identity, tokens.id_token)
     : tokens.id_token;
   return { identity, sessionToken, redirectTo: saved.next };
 }
@@ -371,22 +383,37 @@ export const oidcAdapter: AuthAdapter = {
 
   async logout(env, cookie) {
     const clear = `${SESSION_COOKIE}=; ${cookieAttrs(env)}; Max-Age=0`;
-    // If the provider advertises RP-initiated logout, send the browser there
-    // (with id_token_hint + post_logout_redirect_uri); otherwise just go home.
-    let href = env.PUBLIC_BASE_URL;
+    const home = env.PUBLIC_BASE_URL;
+    const mode = (env.OIDC_LOGOUT_MODE ?? 'local').toLowerCase();
+
+    // Default "local": drop only the PM session and go home. No IdP round-trip,
+    // so it can never error — but the IdP (SSO) session lives on, so a return
+    // visit may silently re-authenticate (ending the IdP session is then a
+    // deployment concern). Opt into "rp" for a full RP-initiated sign-out.
+    if (mode !== 'rp') {
+      return { href: home, setCookie: clear };
+    }
+
+    // "rp": also end the IdP session via the discovery end_session_endpoint —
+    // but ONLY with a real id_token as the hint (never the PM session JWT). If
+    // none is available (e.g. expired and the OP rejects it, or discovery
+    // fails), fall back to a local clear so the user never sees an error.
     try {
       const doc = await discover(env, fetch);
-      if (doc.end_session_endpoint) {
+      const idToken = await readSessionIdToken(env, cookie);
+      if (doc.end_session_endpoint && idToken) {
         const end = new URL(doc.end_session_endpoint);
-        const token = readCookie(cookie, SESSION_COOKIE);
-        if (token) end.searchParams.set('id_token_hint', token);
-        end.searchParams.set('post_logout_redirect_uri', env.PUBLIC_BASE_URL);
-        href = end.href;
+        end.searchParams.set('id_token_hint', idToken);
+        end.searchParams.set('post_logout_redirect_uri', home);
+        // Some OPs also accept client_id — harmless to include.
+        const { clientId } = requireConfig(env);
+        end.searchParams.set('client_id', clientId);
+        return { href: end.href, setCookie: clear };
       }
     } catch {
-      // Discovery unavailable at logout ⇒ best-effort local clear + home.
+      // Discovery/config unavailable ⇒ best-effort local clear + home.
     }
-    return { href, setCookie: clear };
+    return { href: home, setCookie: clear };
   },
 
   async onProjectCreated(_env, _ctx) {

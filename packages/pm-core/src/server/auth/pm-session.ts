@@ -64,7 +64,11 @@ function claimsToIdentity(payload: JWTPayload): AuthIdentity {
  * at PM_SESSION_MAX_TTL when set. `auth_time` records the original login instant
  * (anchor for a future sliding-renewal absolute cap). Throws if no secret.
  */
-export async function mintPmSession(env: Env, identity: AuthIdentity): Promise<string> {
+export async function mintPmSession(
+  env: Env,
+  identity: AuthIdentity,
+  idToken?: string,
+): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const ttl = pmSessionTtl(env);
   const maxTtl = pmSessionMaxTtl(env);
@@ -77,6 +81,9 @@ export async function mintPmSession(env: Env, identity: AuthIdentity): Promise<s
     locale: identity.locale ?? undefined,
     role: identity.isPlatformAdmin ? 'admin' : undefined,
     site: identity.site ?? undefined,
+    // Original IdP id_token, retained ONLY for RP-initiated logout
+    // (id_token_hint). Omitted unless provided.
+    idt: idToken || undefined,
     auth_time: now,
   })
     .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
@@ -101,6 +108,26 @@ export async function verifyPmSession(env: Env, token: string): Promise<AuthIden
     });
     if (typeof payload.sub !== 'string') return null;
     return claimsToIdentity(payload);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Extract the original IdP `id_token` embedded at login (the `idt` claim) — for
+ * RP-initiated logout (`id_token_hint`). Verifies the PM signature + iss/aud but
+ * IGNORES expiry (a PM session outlives the short id_token, so at logout the
+ * embedded id_token is usually expired; the OP is expected to accept an expired
+ * hint per the RP-Initiated Logout spec). Returns null if missing/invalid.
+ */
+export async function readPmSessionIdToken(env: Env, token: string): Promise<string | null> {
+  try {
+    const { payload } = await jwtVerify(token, secretKey(env), {
+      issuer: PM_SESSION_ISS,
+      audience: PM_SESSION_AUD,
+      clockTolerance: Number.MAX_SAFE_INTEGER, // accept an expired PM session — we only want `idt`
+    });
+    return typeof payload.idt === 'string' && payload.idt ? payload.idt : null;
   } catch {
     return null;
   }

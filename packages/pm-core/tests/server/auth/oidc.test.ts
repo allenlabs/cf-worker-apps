@@ -14,6 +14,7 @@ import {
   _setOidcJwksForTests,
   oidcAdapter,
 } from '@allenlabs/pm-core/server/auth/adapters/oidc';
+import { mintPmSession } from '@allenlabs/pm-core/server/auth/pm-session';
 
 // ── fixtures: a fake OIDC provider signed with EdDSA (NOT RS256) ────────────
 // The JWKS lives at a NON-root path to prove the adapter resolves it from
@@ -444,20 +445,68 @@ describe('oidcAdapter cookies + logout + onProjectCreated', () => {
     expect(oidcAdapter.clearSessionCookie(env)).toContain('Max-Age=0');
   });
 
-  it('logout redirects to the discovered end_session_endpoint with hints', async () => {
-    const token = await makeIdToken({ sub: 'lo-1' });
+  it('logout (mode=local, default) clears the session + goes home — no IdP round-trip', async () => {
+    const token = await makeIdToken({ sub: 'lo-0' });
     const { href, setCookie } = await oidcAdapter.logout(env, sessionCookie(token));
-    const u = new URL(href);
-    expect(u.origin + u.pathname).toBe('https://idp.test/end-session');
-    expect(u.searchParams.get('id_token_hint')).toBe(token);
-    expect(u.searchParams.get('post_logout_redirect_uri')).toBe('http://localhost:3000');
+    expect(href).toBe('http://localhost:3000'); // home, NOT end_session, even though discovery advertises it
     expect(setCookie).toContain('Max-Age=0');
   });
 
-  it('logout falls back to home when no end_session_endpoint is advertised', async () => {
+  it('logout (mode=rp, legacy id_token cookie) redirects to end_session with the id_token hint', async () => {
+    const e = baseEnv({ OIDC_LOGOUT_MODE: 'rp' });
+    const token = await makeIdToken({ sub: 'lo-1' });
+    const { href, setCookie } = await oidcAdapter.logout(e, sessionCookie(token));
+    const u = new URL(href);
+    expect(u.origin + u.pathname).toBe('https://idp.test/end-session');
+    expect(u.searchParams.get('id_token_hint')).toBe(token); // legacy cookie IS the id_token
+    expect(u.searchParams.get('post_logout_redirect_uri')).toBe('http://localhost:3000');
+    expect(u.searchParams.get('client_id')).toBe(CLIENT_ID);
+    expect(setCookie).toContain('Max-Age=0');
+  });
+
+  it('logout (mode=rp) falls back to home when no end_session_endpoint is advertised', async () => {
     _clearOidcCachesForTests();
     _setOidcDiscoveryForTests(ISSUER, { ...DISCOVERY, end_session_endpoint: undefined });
-    const { href } = await oidcAdapter.logout(env, null);
+    const token = await makeIdToken({ sub: 'lo-2' });
+    const { href } = await oidcAdapter.logout(baseEnv({ OIDC_LOGOUT_MODE: 'rp' }), sessionCookie(token));
+    expect(href).toBe('http://localhost:3000');
+  });
+
+  it('logout (mode=rp) falls back to home when discovery fails', async () => {
+    _clearOidcCachesForTests();
+    vi.stubGlobal('fetch', (async () => new Response('no', { status: 404 })) as unknown as typeof fetch);
+    const token = await makeIdToken({ sub: 'lo-3' });
+    const { href } = await oidcAdapter.logout(baseEnv({ OIDC_LOGOUT_MODE: 'rp' }), sessionCookie(token));
+    expect(href).toBe('http://localhost:3000');
+  });
+
+  it('logout (mode=rp, PM session) uses the EMBEDDED id_token as the hint, never the PM JWT', async () => {
+    const e = baseEnv({ PM_SESSION_SECRET: 'pm-secret-key-abcdefghijklmnopqrstuvwx', OIDC_LOGOUT_MODE: 'rp' });
+    const { state, nonce, cookie } = await startLogin();
+    const idToken = await makeIdToken({ sub: 'lo-pm' }, { nonce });
+    const req = new Request(`https://pm.test/auth/callback?code=abc&state=${state}`, { headers: { cookie } });
+    const res = await oidcAdapter.handleCallback(e, req, { fetch: tokenEndpointFetch(idToken) });
+    const { href } = await oidcAdapter.logout(e, `pm_session=${res.sessionToken}`);
+    const u = new URL(href);
+    expect(u.origin + u.pathname).toBe('https://idp.test/end-session');
+    expect(u.searchParams.get('id_token_hint')).toBe(idToken); // the real id_token...
+    expect(u.searchParams.get('id_token_hint')).not.toBe(res.sessionToken); // ...not the PM session JWT
+  });
+
+  it('logout (mode=rp, PM session with no embedded id_token) falls back to home', async () => {
+    const e = baseEnv({ PM_SESSION_SECRET: 'pm-secret-key-abcdefghijklmnopqrstuvwx', OIDC_LOGOUT_MODE: 'rp' });
+    const pm = await mintPmSession(e, {
+      subject: 'u',
+      email: 'u@x.test',
+      displayName: null,
+      username: null,
+      preferredName: null,
+      locale: null,
+      isPlatformAdmin: false,
+      teamMemberships: [],
+      site: null,
+    }); // no id_token argument ⇒ no `idt` claim
+    const { href } = await oidcAdapter.logout(e, `pm_session=${pm}`);
     expect(href).toBe('http://localhost:3000');
   });
 
@@ -573,11 +622,10 @@ describe('oidcAdapter edge cases', () => {
     expect(res.identity.subject).toBe('gf-1');
   });
 
-  it('logout with end_session but no session cookie omits id_token_hint', async () => {
-    const { href } = await oidcAdapter.logout(env, null);
-    const u = new URL(href);
-    expect(u.origin + u.pathname).toBe('https://idp.test/end-session');
-    expect(u.searchParams.get('id_token_hint')).toBeNull();
-    expect(u.searchParams.get('post_logout_redirect_uri')).toBe('http://localhost:3000');
+  it('logout (mode=rp) with no session cookie falls back to home (no id_token ⇒ no hint sent)', async () => {
+    // Without a real id_token we must NOT hit end_session (the OP requires the
+    // hint), so we fall back to a local clear + home.
+    const { href } = await oidcAdapter.logout(baseEnv({ OIDC_LOGOUT_MODE: 'rp' }), null);
+    expect(href).toBe('http://localhost:3000');
   });
 });
