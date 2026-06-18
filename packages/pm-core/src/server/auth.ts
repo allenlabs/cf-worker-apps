@@ -1,4 +1,4 @@
-import { eq, inArray, isNotNull } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull } from 'drizzle-orm';
 import { type DB } from '@allenlabs/pm-core/db/client';
 import {
   groupMembers,
@@ -70,6 +70,7 @@ export async function buildAuthContextImpl(
   db: DB,
   userIdOrCurrent: number | CurrentUser,
   teamMemberships?: TeamMembershipClaim[],
+  siteId?: number,
 ): Promise<AuthContext> {
   let userId: number;
   let isAdmin: boolean;
@@ -167,11 +168,17 @@ export async function buildAuthContextImpl(
   //    belongs (no broad grant — that comes from project/group membership). So
   //    we collect the sites where the user holds a perms-granting role and union
   //    those perms onto every project in each such site. No-op when the user has
-  //    no site rows, or only plain-member rows.
+  //    no site rows, or only plain-member rows. When a current `siteId` is given
+  //    (URL-scoped request) only THAT site's role is considered — so a user's
+  //    owner/admin role elsewhere never leaks into the site they're viewing.
   const siteMemRows = await db
     .select({ siteId: siteMembers.siteId, role: siteMembers.role })
     .from(siteMembers)
-    .where(eq(siteMembers.userId, userId));
+    .where(
+      siteId == null
+        ? eq(siteMembers.userId, userId)
+        : and(eq(siteMembers.userId, userId), eq(siteMembers.siteId, siteId)),
+    );
   if (siteMemRows.length > 0) {
     const permsBySite = new Map<number, Set<Permission>>();
     for (const s of siteMemRows) {

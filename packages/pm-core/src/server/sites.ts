@@ -1,6 +1,6 @@
 import { and, eq } from 'drizzle-orm';
 import { type DB } from '@allenlabs/pm-core/db/client';
-import { siteMembers, sites, users } from '@allenlabs/pm-core/db/schema';
+import { type Site, siteMembers, sites, users } from '@allenlabs/pm-core/db/schema';
 import { ForbiddenError, canManageSiteRole } from '@allenlabs/pm-core/lib/permissions';
 
 // Sites (0013) — the TOP partition of a single-DB multi-site deployment. A site
@@ -56,6 +56,59 @@ export async function upsertSiteMemberImpl(
       target: [siteMembers.siteId, siteMembers.userId],
       set: { role },
     });
+}
+
+// ── URL site-scoping (resolve + authorize the current site per request) ──────
+//
+// A consuming app puts the current site in the URL (e.g. /s/<slug>/…). Each
+// request resolves that slug to a site and authorizes membership ONCE via
+// resolveSiteAccessImpl, then threads the returned `site.id` into the scoped
+// domain impls (listProjectsImpl, loadHomeImpl, …) as `siteId`.
+
+/** Resolve a URL slug to its site, or null when no such site exists. */
+export async function getSiteBySlugImpl(db: DB, slug: string): Promise<Site | null> {
+  const row = await db.query.sites.findFirst({ where: eq(sites.slug, slug) });
+  return row ?? null;
+}
+
+/**
+ * The sites a user belongs to, each with their role — for the consumer's landing
+ * decision (0 ⇒ onboarding, 1 ⇒ auto-enter, 2+ ⇒ selector). An unrecognized
+ * stored role is coerced to the least-privilege `member` so a site is never
+ * hidden from a member.
+ */
+export async function listSitesForUserImpl(
+  db: DB,
+  userId: number,
+): Promise<Array<{ site: Site; role: SiteRoleName }>> {
+  const rows = await db
+    .select({ site: sites, role: siteMembers.role })
+    .from(siteMembers)
+    .innerJoin(sites, eq(sites.id, siteMembers.siteId))
+    .where(eq(siteMembers.userId, userId))
+    .orderBy(sites.slug);
+  return rows.map((r) => ({ site: r.site, role: isSiteRole(r.role) ? r.role : 'member' }));
+}
+
+/**
+ * The single per-request entry point for site-scoping: resolve `slug` → site and
+ * authorize the user. Returns `{ site, role }` for a member (`role` is their site
+ * role); `null` when the site doesn't exist OR the user isn't a member — the
+ * consumer turns null into a 404/redirect. A platform admin (global users.admin)
+ * may be allowed through as a non-member via opts (role `null`).
+ */
+export async function resolveSiteAccessImpl(
+  db: DB,
+  slug: string,
+  userId: number,
+  opts: { allowPlatformAdmin?: boolean; isPlatformAdmin?: boolean } = {},
+): Promise<{ site: Site; role: SiteRoleName | null } | null> {
+  const site = await getSiteBySlugImpl(db, slug);
+  if (!site) return null;
+  const role = await siteRoleOfImpl(db, site.id, userId);
+  if (role != null) return { site, role };
+  if (opts.allowPlatformAdmin && opts.isPlatformAdmin) return { site, role: null };
+  return null;
 }
 
 // ── Administration ──────────────────────────────────────────────────────────

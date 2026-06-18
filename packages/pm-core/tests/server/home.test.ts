@@ -10,6 +10,7 @@ import {
 import { activities, issues, watchers } from '@allenlabs/pm-core/db/schema';
 import { loadHomeImpl, loadMyPageImpl } from '../../src/server/home';
 import { createIssueImpl } from '../../src/server/issues';
+import { findOrCreateSiteImpl } from '../../src/server/sites';
 import { createPmHost } from '../../src/host/create-host';
 import { type CurrentUser } from '@allenlabs/pm-core/server/auth';
 
@@ -188,5 +189,47 @@ describe('loadMyPageImpl', () => {
       status: 'locked',
     });
     expect(await loadMyPageImpl(db, 'sub-locked')).toBeNull();
+  });
+});
+
+describe('home site scoping (siteId arg)', () => {
+  it('loadHomeImpl limits projects + recent activity to the site', async () => {
+    const alice = await insertUser(db, { betterAuthUserId: 'sub-s', login: 'al', email: 'al@x' });
+    const site = await findOrCreateSiteImpl(db, { slug: 'acme', name: 'Acme' });
+    const inSite = await insertProject(db, { identifier: 'in', name: 'In', isPublic: true, siteId: site.id });
+    await insertProject(db, { identifier: 'out', name: 'Out', isPublic: true }); // siteless
+    await db.insert(activities).values({ projectId: inSite.id, userId: alice.id, kind: 'project_created', title: 'in-act' });
+    await db.insert(activities).values({ projectId: null, userId: alice.id, kind: 'project_created', title: 'orphan' });
+
+    const data = await loadHomeImpl(db, 'sub-s', site.id);
+    expect(data!.projects.map((p) => p.identifier)).toEqual(['in']);
+    expect(data!.activities.map((a) => a.title)).toEqual(['in-act']); // siteless/orphan excluded
+  });
+
+  it('loadMyPageImpl limits assigned/reported/watched/recent to the site', async () => {
+    const alice = await insertUser(db, { betterAuthUserId: 'sub-s', login: 'al', email: 'al@x' });
+    const site = await findOrCreateSiteImpl(db, { slug: 'acme', name: 'Acme' });
+    const inSite = await insertProject(db, { identifier: 'in', name: 'In', isPublic: true, siteId: site.id });
+    const out = await insertProject(db, { identifier: 'out', name: 'Out', isPublic: true }); // siteless
+
+    const inIssue = await createIssueImpl(db, asCurrentUser(alice), {
+      projectId: inSite.id, trackerId: 1, subject: 'in-issue', description: '', doneRatio: 0,
+    }, host);
+    const outIssue = await createIssueImpl(db, asCurrentUser(alice), {
+      projectId: out.id, trackerId: 1, subject: 'out-issue', description: '', doneRatio: 0,
+    }, host);
+    // assign + watch both, in both projects
+    await db.update(issues).set({ assignedToId: alice.id }).where(eq(issues.id, inIssue.id));
+    await db.update(issues).set({ assignedToId: alice.id }).where(eq(issues.id, outIssue.id));
+    await db.insert(watchers).values({ issueId: inIssue.id, userId: alice.id });
+    await db.insert(watchers).values({ issueId: outIssue.id, userId: alice.id });
+
+    const data = await loadMyPageImpl(db, 'sub-s', site.id);
+    expect(data!.myReported.map((i) => i.subject)).toEqual(['in-issue']);
+    expect(data!.myAssigned.map((i) => i.subject)).toEqual(['in-issue']);
+    expect(data!.watched.map((i) => i.subject)).toEqual(['in-issue']);
+    // recent activity (issue_created from createIssueImpl) is scoped to the site too
+    expect(data!.recent.every((a) => a.projectId === inSite.id)).toBe(true);
+    expect(data!.recent.length).toBeGreaterThan(0);
   });
 });

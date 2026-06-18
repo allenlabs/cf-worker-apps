@@ -11,11 +11,14 @@ import { groups, siteMembers, sites } from '@allenlabs/pm-core/db/schema';
 import type { AuthIdentity } from '@allenlabs/pm-core/server/auth/types';
 import {
   findOrCreateSiteImpl,
+  getSiteBySlugImpl,
   isSiteRole,
   listSiteMembersImpl,
+  listSitesForUserImpl,
   listSitesImpl,
   removeSiteMemberAsImpl,
   removeSiteMemberImpl,
+  resolveSiteAccessImpl,
   setSiteMemberRoleAsImpl,
   setSiteMemberRoleImpl,
   upsertSiteMemberImpl,
@@ -309,5 +312,89 @@ describe('buildAuthContextImpl site RBAC', () => {
     await upsertSiteMemberImpl(db, site.id, userId, 'owner');
     const c = await buildAuthContextImpl(db, userId);
     expect(hasPermission(c, p.id, 'manage_members')).toBe(true);
+  });
+});
+
+describe('URL site-scoping helpers', () => {
+  it('getSiteBySlugImpl resolves a slug or returns null', async () => {
+    await findOrCreateSiteImpl(db, { slug: 'acme', name: 'Acme' });
+    expect((await getSiteBySlugImpl(db, 'acme'))?.slug).toBe('acme');
+    expect(await getSiteBySlugImpl(db, 'nope')).toBeNull();
+  });
+
+  it('listSitesForUserImpl returns the user’s sites + roles (ordered by slug)', async () => {
+    const a = await findOrCreateSiteImpl(db, { slug: 'aaa', name: 'A' });
+    const b = await findOrCreateSiteImpl(db, { slug: 'bbb', name: 'B' });
+    await findOrCreateSiteImpl(db, { slug: 'ccc', name: 'C' }); // not a member
+    await upsertSiteMemberImpl(db, b.id, userId, 'owner');
+    await upsertSiteMemberImpl(db, a.id, userId, 'member');
+    const rows = await listSitesForUserImpl(db, userId);
+    expect(rows.map((r) => [r.site.slug, r.role])).toEqual([
+      ['aaa', 'member'],
+      ['bbb', 'owner'],
+    ]);
+  });
+
+  it('listSitesForUserImpl coerces an unknown stored role to member (never hides a site)', async () => {
+    const a = await findOrCreateSiteImpl(db, { slug: 'aaa', name: 'A' });
+    await upsertSiteMemberImpl(db, a.id, userId, 'bogus');
+    const rows = await listSitesForUserImpl(db, userId);
+    expect(rows).toEqual([{ site: expect.objectContaining({ slug: 'aaa' }), role: 'member' }]);
+  });
+
+  describe('resolveSiteAccessImpl', () => {
+    it('returns null for an unknown slug', async () => {
+      expect(await resolveSiteAccessImpl(db, 'nope', userId)).toBeNull();
+    });
+
+    it('returns {site, role} for a member', async () => {
+      const a = await findOrCreateSiteImpl(db, { slug: 'acme', name: 'Acme' });
+      await upsertSiteMemberImpl(db, a.id, userId, 'admin');
+      const r = await resolveSiteAccessImpl(db, 'acme', userId);
+      expect(r?.site.id).toBe(a.id);
+      expect(r?.role).toBe('admin');
+    });
+
+    it('returns null for a non-member', async () => {
+      await findOrCreateSiteImpl(db, { slug: 'acme', name: 'Acme' });
+      expect(await resolveSiteAccessImpl(db, 'acme', userId)).toBeNull();
+    });
+
+    it('lets a platform admin through as a non-member when opted in (role null)', async () => {
+      const a = await findOrCreateSiteImpl(db, { slug: 'acme', name: 'Acme' });
+      const r = await resolveSiteAccessImpl(db, 'acme', userId, {
+        allowPlatformAdmin: true,
+        isPlatformAdmin: true,
+      });
+      expect(r).toEqual({ site: expect.objectContaining({ id: a.id }), role: null });
+    });
+
+    it('does not let a non-admin through even with allowPlatformAdmin', async () => {
+      await findOrCreateSiteImpl(db, { slug: 'acme', name: 'Acme' });
+      expect(
+        await resolveSiteAccessImpl(db, 'acme', userId, { allowPlatformAdmin: true, isPlatformAdmin: false }),
+      ).toBeNull();
+    });
+  });
+});
+
+describe('buildAuthContextImpl current-site scoping (siteId arg)', () => {
+  it('applies only the CURRENT site role — an owner role elsewhere does not leak', async () => {
+    const siteA = await findOrCreateSiteImpl(db, { slug: 'a', name: 'A' });
+    const siteB = await findOrCreateSiteImpl(db, { slug: 'b', name: 'B' });
+    const pA = await insertProject(db, { identifier: 'pa', siteId: siteA.id });
+    const pB = await insertProject(db, { identifier: 'pb', siteId: siteB.id });
+    await upsertSiteMemberImpl(db, siteA.id, userId, 'owner'); // owner of A
+    await upsertSiteMemberImpl(db, siteB.id, userId, 'member'); // plain member of B
+
+    // Scoped to site B: the owner-of-A role must NOT grant manager on A's
+    // project, and plain B membership grants nothing broad.
+    const ctxB = await buildAuthContextImpl(db, userId, undefined, siteB.id);
+    expect(hasPermission(ctxB, pA.id, 'manage_members')).toBe(false);
+    expect(hasPermission(ctxB, pB.id, 'view_project')).toBe(false);
+
+    // Scoped to site A: the owner role applies to A's project.
+    const ctxA = await buildAuthContextImpl(db, userId, undefined, siteA.id);
+    expect(hasPermission(ctxA, pA.id, 'manage_members')).toBe(true);
   });
 });

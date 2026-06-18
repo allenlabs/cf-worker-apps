@@ -27,6 +27,7 @@ import {
   listProjectsImpl,
   updateProjectImpl,
 } from '../../src/server/projects';
+import { findOrCreateSiteImpl } from '../../src/server/sites';
 
 let db: TestDB;
 
@@ -436,5 +437,51 @@ describe('deleteProjectImpl', () => {
     const p = await insertProject(db);
     await deleteProjectImpl(db, p.id);
     expect(await db.query.projects.findFirst({ where: eq(projects.id, p.id) })).toBeUndefined();
+  });
+});
+
+describe('site scoping (siteId arg)', () => {
+  it('listProjectsImpl filters to the site for unauth / admin / regular; siteless excluded', async () => {
+    const site = await findOrCreateSiteImpl(db, { slug: 'acme', name: 'Acme' });
+    await insertProject(db, { identifier: 'in-a', isPublic: true, siteId: site.id });
+    await insertProject(db, { identifier: 'siteless', isPublic: true }); // NULL site_id
+    // unauthenticated
+    expect((await listProjectsImpl(db, null, null, site.id)).map((p) => p.identifier)).toEqual(['in-a']);
+    // platform admin (strict isolation — even admin only sees the site)
+    expect(
+      (await listProjectsImpl(db, makeUser({ isAdmin: true }), null, site.id)).map((p) => p.identifier),
+    ).toEqual(['in-a']);
+    // regular member of a private in-site project
+    const u = await insertUser(db);
+    const priv = await insertProject(db, { identifier: 'priv', isPublic: false, siteId: site.id });
+    await addManager(db, u.id, priv.id);
+    const list = await listProjectsImpl(
+      db,
+      makeUser({ id: u.id }),
+      makeCtx({ [priv.id]: ['view_project'] }),
+      site.id,
+    );
+    expect(list.map((p) => p.identifier).sort()).toEqual(['in-a', 'priv']);
+  });
+
+  it('getProjectImpl resolves a same-site identifier but not a cross-site one', async () => {
+    const a = await findOrCreateSiteImpl(db, { slug: 'a', name: 'A' });
+    const b = await findOrCreateSiteImpl(db, { slug: 'b', name: 'B' });
+    await insertProject(db, { identifier: 'shared', isPublic: true, siteId: a.id });
+    expect((await getProjectImpl(db, null, null, 'shared', a.id)).identifier).toBe('shared');
+    await expect(getProjectImpl(db, null, null, 'shared', b.id)).rejects.toThrow(/not found/i);
+  });
+
+  it('createProjectImpl stores the site_id', async () => {
+    const site = await findOrCreateSiteImpl(db, { slug: 'acme', name: 'Acme' });
+    const u = await insertUser(db);
+    const p = await createProjectImpl(
+      db,
+      makeUser({ id: u.id, login: u.login }),
+      { identifier: 'x', name: 'X', description: '', homepage: '', isPublic: false },
+      undefined,
+      site.id,
+    );
+    expect(p.siteId).toBe(site.id);
   });
 });

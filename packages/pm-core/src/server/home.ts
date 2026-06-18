@@ -27,8 +27,16 @@ export interface HomePayload {
   }>;
 }
 
-export async function loadHomeImpl(db: DB, sub: string | null): Promise<HomePayload | null> {
+export async function loadHomeImpl(
+  db: DB,
+  sub: string | null,
+  siteId?: number,
+): Promise<HomePayload | null> {
   if (!sub) return null;
+  // Site scoping: limit projects/activity to the current site. Siteless ⇒ no
+  // filter (the fragments are empty and the query is unchanged).
+  const projectSiteAnd = siteId == null ? sql`` : sql` AND p.site_id = ${siteId}`;
+  const recentSiteWhere = siteId == null ? sql`` : sql` WHERE p.site_id = ${siteId}`;
   const result = (await db.execute(
     sql`
   WITH
@@ -48,7 +56,7 @@ export async function loadHomeImpl(db: DB, sub: string | null): Promise<HomePayl
           INNER JOIN pm.roles r ON r.id = m.role_id
           WHERE m.user_id = (SELECT id FROM me) AND m.project_id = p.id
         )
-      )
+      )${projectSiteAnd}
     ORDER BY p.name
   ),
   recent AS (
@@ -57,7 +65,7 @@ export async function loadHomeImpl(db: DB, sub: string | null): Promise<HomePayl
            p.name AS "projectName"
     FROM pm.activities a
     JOIN pm.users u ON u.id = a.user_id
-    LEFT JOIN pm.projects p ON p.id = a.project_id
+    LEFT JOIN pm.projects p ON p.id = a.project_id${recentSiteWhere}
     ORDER BY a.created_at DESC LIMIT 20
   )
   SELECT json_build_object(
@@ -135,8 +143,16 @@ export interface MyPagePayload {
   }>;
 }
 
-export async function loadMyPageImpl(db: DB, sub: string | null): Promise<MyPagePayload | null> {
+export async function loadMyPageImpl(
+  db: DB,
+  sub: string | null,
+  siteId?: number,
+): Promise<MyPagePayload | null> {
   if (!sub) return null;
+  // Site scoping: every issue/activity CTE joins projects as `p`, so the same
+  // `AND p.site_id = …` fragment scopes them all. Siteless ⇒ empty (unchanged).
+  const siteAnd = siteId == null ? sql`` : sql` AND p.site_id = ${siteId}`;
+  const recentSiteWhere = siteId == null ? sql`` : sql` WHERE p.site_id = ${siteId}`;
   const result = (await db.execute(
     sql`
   WITH
@@ -160,7 +176,7 @@ export async function loadMyPageImpl(db: DB, sub: string | null): Promise<MyPage
     JOIN pm.trackers t ON t.id = i.tracker_id
     JOIN pm.issue_statuses s ON s.id = i.status_id
     JOIN pm.issue_priorities pr ON pr.id = i.priority_id
-    WHERE i.assigned_to_id = (SELECT id FROM me) AND s.is_closed = false
+    WHERE i.assigned_to_id = (SELECT id FROM me) AND s.is_closed = false${siteAnd}
     ORDER BY i.updated_at DESC LIMIT 50
   ),
   my_reported AS (
@@ -172,7 +188,7 @@ export async function loadMyPageImpl(db: DB, sub: string | null): Promise<MyPage
     FROM pm.issues i
     JOIN pm.projects p ON p.id = i.project_id
     JOIN pm.issue_statuses s ON s.id = i.status_id
-    WHERE i.author_id = (SELECT id FROM me) AND s.is_closed = false
+    WHERE i.author_id = (SELECT id FROM me) AND s.is_closed = false${siteAnd}
     ORDER BY i.updated_at DESC LIMIT 20
   ),
   watched AS (
@@ -185,7 +201,7 @@ export async function loadMyPageImpl(db: DB, sub: string | null): Promise<MyPage
     JOIN pm.issues i ON i.id = w.issue_id
     JOIN pm.projects p ON p.id = i.project_id
     JOIN pm.issue_statuses s ON s.id = i.status_id
-    WHERE w.user_id = (SELECT id FROM me)
+    WHERE w.user_id = (SELECT id FROM me)${siteAnd}
     ORDER BY i.updated_at DESC LIMIT 20
   ),
   recent AS (
@@ -197,7 +213,7 @@ export async function loadMyPageImpl(db: DB, sub: string | null): Promise<MyPage
       u.login AS "userLogin"
     FROM pm.activities a
     LEFT JOIN pm.projects p ON p.id = a.project_id
-    JOIN pm.users u ON u.id = a.user_id
+    JOIN pm.users u ON u.id = a.user_id${recentSiteWhere}
     ORDER BY a.created_at DESC LIMIT 15
   )
   SELECT json_build_object(

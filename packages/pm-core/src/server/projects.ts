@@ -73,12 +73,17 @@ export async function listProjectsImpl(
   db: DB,
   me: CurrentUser | null,
   ctx: AuthContext | null,
+  siteId?: number,
 ): Promise<Array<typeof projects.$inferSelect>> {
   const rows = await db.select().from(projects).orderBy(projects.name);
-  if (!me) return rows.filter((p) => p.isPublic && p.status === 'active');
-  if (me.isAdmin) return rows;
+  // Site scoping: when a current site is given, only its projects are visible
+  // (strict isolation — siteless/NULL-site projects are excluded too). When
+  // omitted, behavior is unchanged (no site filter).
+  const inSite = (p: typeof projects.$inferSelect) => siteId == null || p.siteId === siteId;
+  if (!me) return rows.filter((p) => inSite(p) && p.isPublic && p.status === 'active');
+  if (me.isAdmin) return rows.filter(inSite);
   return rows.filter(
-    (p) => p.isPublic || ctx?.permissionsByProject[p.id]?.has('view_project'),
+    (p) => inSite(p) && (p.isPublic || ctx?.permissionsByProject[p.id]?.has('view_project')),
   );
 }
 
@@ -87,7 +92,12 @@ export async function getProjectImpl(
   me: CurrentUser | null,
   ctx: AuthContext | null,
   identifier: string,
+  siteId?: number,
 ) {
+  // Site scoping: a project identifier in another site must not resolve. Adding
+  // the site predicate to the lookup means a cross-site identifier yields no row
+  // ⇒ the existing "Project not found" path. Omitted ⇒ unchanged (no filter).
+  const siteCond = siteId == null ? sql`` : sql` AND site_id = ${siteId}`;
   // One CTE pulls the project row, related lookups, and issue counts in
   // a single Hetzner round-trip.  Previously ~7 sequential / parallel
   // queries — ~200 ms savings per warm hit.
@@ -100,7 +110,7 @@ export async function getProjectImpl(
           is_public AS "isPublic", parent_id AS "parentId", status,
           created_at AS "createdAt", updated_at AS "updatedAt"
         FROM pm.projects
-        WHERE identifier = ${identifier}
+        WHERE identifier = ${identifier}${siteCond}
         LIMIT 1
       ),
       tracker_rows AS (
@@ -249,6 +259,7 @@ export async function createProjectImpl(
   user: CurrentUser,
   data: CreateProjectInput,
   provision?: ProjectProvision,
+  siteId?: number,
 ): Promise<typeof projects.$inferSelect> {
   const existing = await db.query.projects.findFirst({
     where: eq(projects.identifier, data.identifier),
@@ -289,6 +300,8 @@ export async function createProjectImpl(
       homepage: data.homepage,
       isPublic: data.isPublic,
       authTeamId,
+      // Bind the project to the current site (NULL ⇒ siteless deployment).
+      siteId: siteId ?? null,
     })
     .returning();
   /* v8 ignore next */

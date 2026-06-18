@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { type TestDB, insertProject, insertUser, makeTestDb } from '../../src/testing/db';
 import { listActivitiesImpl, logActivityImpl } from '../../src/server/activities';
+import { findOrCreateSiteImpl } from '../../src/server/sites';
 
 let db: TestDB;
 
@@ -65,3 +66,20 @@ describe('logActivityImpl + listActivitiesImpl', () => {
     expect(await listActivitiesImpl(db, { limit: 2 })).toHaveLength(2);
   });
 });
+
+describe('listActivitiesImpl site scoping (siteId arg)', () => {
+  it('filters to activities whose project belongs to the site (and combines with projectId)', async () => {
+    const u = await insertUser(db);
+    const site = await findOrCreateSiteImpl(db, { slug: 'acme', name: 'Acme' });
+    const inP = await insertProject(db, { identifier: 'in', siteId: site.id });
+    const outP = await insertProject(db, { identifier: 'out' }); // siteless
+    await logActivityImpl(db, { projectId: inP.id, userId: u.id, kind: 'project_created', title: 'in' });
+    await logActivityImpl(db, { projectId: outP.id, userId: u.id, kind: 'project_created', title: 'out' });
+    expect((await listActivitiesImpl(db, { siteId: site.id })).map((a) => a.title)).toEqual(['in']);
+    // combined site + project filter
+    expect(
+      (await listActivitiesImpl(db, { siteId: site.id, projectId: inP.id })).map((a) => a.title),
+    ).toEqual(['in']);
+  });
+});
+

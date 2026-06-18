@@ -18,6 +18,7 @@ import {
   watchIssueImpl,
 } from '../../src/server/issues';
 import { createPmHost } from '../../src/host/create-host';
+import { findOrCreateSiteImpl } from '../../src/server/sites';
 
 // issues.ts is host-agnostic; a plugin-less host exercises the dispatch points
 // (no-ops) while keeping this suite focused on the core issue logic. Feature
@@ -403,3 +404,20 @@ describe('deleteIssueImpl', () => {
     expect(await db.query.issues.findFirst({ where: eq(issues.id, i.id) })).toBeUndefined();
   });
 });
+
+describe('getIssueImpl site scoping (siteId arg)', () => {
+  it('enforces the current site — a cross-site issue id resolves to not found', async () => {
+    const site = await findOrCreateSiteImpl(db, { slug: 'acme', name: 'Acme' });
+    const other = await findOrCreateSiteImpl(db, { slug: 'b', name: 'B' });
+    const sp = await insertProject(db, { identifier: 'sp', key: 'SP', siteId: site.id });
+    const issue = await createIssueImpl(db, alice, {
+      projectId: sp.id, trackerId: 1, subject: 'scoped', description: '', doneRatio: 0,
+    }, host);
+    // same site → resolves
+    const r = await getIssueImpl(db, issue.id, host, null, site.id);
+    expect(r.issue.id).toBe(issue.id);
+    // different site → not found
+    await expect(getIssueImpl(db, issue.id, host, null, other.id)).rejects.toThrow(/not found/i);
+  });
+});
+

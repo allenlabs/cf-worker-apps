@@ -188,6 +188,7 @@ export async function getIssueImpl(
   id: number,
   host: PmHost,
   actingUser: CurrentUser | null = null,
+  siteId?: number,
 ) {
   const issue = await db.query.issues.findFirst({ where: eq(issues.id, id) });
   if (!issue) throw new Error('Issue not found');
@@ -248,6 +249,10 @@ export async function getIssueImpl(
       .orderBy(journals.createdAt),
     db.select({ userId: watchers.userId }).from(watchers).where(eq(watchers.issueId, issue.id)),
   ]);
+
+  // Site scoping (defense in depth for direct issue-id access): the issue's
+  // project must belong to the current site. Siteless ⇒ no check (unchanged).
+  if (siteId != null && project?.siteId !== siteId) throw new Error('Issue not found');
 
   const journalIds = journalRows.map((j) => j.id);
   const details = journalIds.length
