@@ -45,7 +45,9 @@ export const betterAuthAdapter: AuthAdapter = {
   },
 
   async loginRedirect(env, _opts) {
-    const callback = new URL('/auth/callback', env.PUBLIC_BASE_URL).href;
+    // Preserve any path prefix in PUBLIC_BASE_URL (path-scoped deployments) —
+    // `new URL('/auth/callback', base)` would keep only the origin.
+    const callback = `${env.PUBLIC_BASE_URL.replace(/\/+$/, '')}/auth/callback`;
     const target = new URL('/sign-in', env.AUTH_WEB_URL);
     target.searchParams.set('return_to', callback);
     return { href: target.href };

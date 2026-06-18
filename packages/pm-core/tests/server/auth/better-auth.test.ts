@@ -94,6 +94,14 @@ describe('betterAuthAdapter.loginRedirect', () => {
     expect(u.origin + u.pathname).toBe('https://auth.test/sign-in');
     expect(u.searchParams.get('return_to')).toBe('http://localhost:3000/auth/callback');
   });
+
+  it('preserves a path-scoped PUBLIC_BASE_URL in the return_to callback', async () => {
+    const e = makeTestEnv({ PUBLIC_BASE_URL: 'https://host.example.com/projects/prod/site/' });
+    const { href } = await betterAuthAdapter.loginRedirect(e, {});
+    expect(new URL(href).searchParams.get('return_to')).toBe(
+      'https://host.example.com/projects/prod/site/auth/callback',
+    );
+  });
 });
 
 describe('betterAuthAdapter.handleCallback', () => {

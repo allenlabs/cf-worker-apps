@@ -13,6 +13,7 @@ import {
   _setOidcDiscoveryForTests,
   _setOidcJwksForTests,
   oidcAdapter,
+  redirectUri,
 } from '@allenlabs/pm-core/server/auth/adapters/oidc';
 import { mintPmSession } from '@allenlabs/pm-core/server/auth/pm-session';
 
@@ -627,5 +628,35 @@ describe('oidcAdapter edge cases', () => {
     // hint), so we fall back to a local clear + home.
     const { href } = await oidcAdapter.logout(baseEnv({ OIDC_LOGOUT_MODE: 'rp' }), null);
     expect(href).toBe('http://localhost:3000');
+  });
+});
+
+describe('redirectUri (preserves a path-scoped PUBLIC_BASE_URL)', () => {
+  it('root base ⇒ <origin>/auth/callback (no regression)', () => {
+    expect(redirectUri(baseEnv({ PUBLIC_BASE_URL: 'https://projects.example.com' }))).toBe(
+      'https://projects.example.com/auth/callback',
+    );
+  });
+
+  it('path-scoped base keeps the prefix', () => {
+    expect(
+      redirectUri(baseEnv({ PUBLIC_BASE_URL: 'https://host.example.com/projects/prod/site' })),
+    ).toBe('https://host.example.com/projects/prod/site/auth/callback');
+  });
+
+  it('normalizes a trailing slash to the same result', () => {
+    expect(
+      redirectUri(baseEnv({ PUBLIC_BASE_URL: 'https://host.example.com/projects/prod/site/' })),
+    ).toBe('https://host.example.com/projects/prod/site/auth/callback');
+  });
+
+  it('loginRedirect carries the path-scoped redirect_uri in the authorize URL', async () => {
+    const { href } = await oidcAdapter.loginRedirect(
+      baseEnv({ PUBLIC_BASE_URL: 'https://host.example.com/projects/prod/site' }),
+      {},
+    );
+    expect(new URL(href).searchParams.get('redirect_uri')).toBe(
+      'https://host.example.com/projects/prod/site/auth/callback',
+    );
   });
 });

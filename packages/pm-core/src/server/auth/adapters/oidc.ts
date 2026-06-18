@@ -189,8 +189,15 @@ async function verifyIdToken(
   return payload;
 }
 
-function redirectUri(env: Env): string {
-  return new URL('/auth/callback', env.PUBLIC_BASE_URL).href;
+/**
+ * The OAuth redirect_uri. Must PRESERVE any path prefix in PUBLIC_BASE_URL — a
+ * path-scoped deployment (e.g. `https://host/projects/prod/site`) is served
+ * under that prefix, so the callback lives at `<base>/auth/callback`.
+ * `new URL('/auth/callback', base)` would drop the base's path (an absolute path
+ * keeps only the origin), so we string-join instead. Exported for unit tests.
+ */
+export function redirectUri(env: Env): string {
+  return `${env.PUBLIC_BASE_URL.replace(/\/+$/, '')}/auth/callback`;
 }
 
 /** Verify the session cookie → identity (the read side; also reused to detect an
