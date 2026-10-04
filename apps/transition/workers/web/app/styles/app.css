@@ -1,0 +1,34 @@
+@import 'tailwindcss';
+
+/* Transition palette — emerald.  Calm transition, gentle hand-off. */
+@theme {
+  --color-transition-50:  #ecfdf5;
+  --color-transition-100: #d1fae5;
+  --color-transition-200: #a7f3d0;
+  --color-transition-300: #6ee7b7;
+  --color-transition-400: #34d399;
+  --color-transition-500: #10b981;
+  --color-transition-600: #059669;
+  --color-transition-700: #047857;
+  --color-transition-800: #065f46;
+  --color-transition-900: #064e3b;
+}
+
+@layer base {
+  html, body, #app {
+    height: 100%;
+  }
+  body {
+    @apply bg-slate-950 text-slate-100 antialiased;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  a {
+    @apply text-transition-400 hover:underline;
+  }
+  .card {
+    @apply rounded border border-slate-800 bg-slate-900;
+  }
+  code, pre, kbd, samp {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+}

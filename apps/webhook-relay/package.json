@@ -1,0 +1,33 @@
+{
+  "name": "@cf-worker-apps/webhook-relay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Receive webhooks, queue them, and relay to subscribers with retries via Cloudflare Workflows.",
+  "type": "module",
+  "scripts": {
+    "dev:ingest": "wrangler dev --config workers/ingest/wrangler.toml",
+    "dev:relay": "wrangler dev --config workers/relay/wrangler.toml",
+    "deploy:ingest": "wrangler deploy --config workers/ingest/wrangler.toml",
+    "deploy:relay": "wrangler deploy --config workers/relay/wrangler.toml",
+    "deploy": "npm run deploy:ingest && npm run deploy:relay",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "hono": "4.6.20",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.16.7",
+    "@cloudflare/workers-types": "4.20260521.1",
+    "@vitest/coverage-v8": "4.1.7",
+    "typescript": "5.7.2",
+    "vitest": "4.1.7",
+    "wrangler": "4.93.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

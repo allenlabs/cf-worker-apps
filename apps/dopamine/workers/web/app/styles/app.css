@@ -1,0 +1,34 @@
+@import 'tailwindcss';
+
+/* Dopamine palette — warm amber.  Celebration, reward, glow. */
+@theme {
+  --color-dopamine-50:  #fffbeb;
+  --color-dopamine-100: #fef3c7;
+  --color-dopamine-200: #fde68a;
+  --color-dopamine-300: #fcd34d;
+  --color-dopamine-400: #fbbf24;
+  --color-dopamine-500: #f59e0b;
+  --color-dopamine-600: #d97706;
+  --color-dopamine-700: #b45309;
+  --color-dopamine-800: #92400e;
+  --color-dopamine-900: #78350f;
+}
+
+@layer base {
+  html, body, #app {
+    height: 100%;
+  }
+  body {
+    @apply bg-slate-950 text-slate-100 antialiased;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  a {
+    @apply text-dopamine-400 hover:underline;
+  }
+  .card {
+    @apply rounded border border-slate-800 bg-slate-900;
+  }
+  code, pre, kbd, samp {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+}

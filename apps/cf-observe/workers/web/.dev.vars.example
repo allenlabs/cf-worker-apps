@@ -1,0 +1,4 @@
+# LOCAL DEVELOPMENT ONLY. Replace with two different random secrets.
+# Generate each value using: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+INGEST_TOKEN="replace-with-a-random-ingest-secret-at-least-32-characters"
+VIEWER_TOKEN="replace-with-a-different-random-viewer-secret-at-least-32-characters"

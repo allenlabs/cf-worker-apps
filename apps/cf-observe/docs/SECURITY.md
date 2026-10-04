@@ -1,0 +1,15 @@
+# Security scope
+
+This is a **single-dataset, trusted internal explorer**, not a multi-tenant SaaS with granular roles. Every holder of VIEWER_TOKEN can read every stored record; every holder of INGEST_TOKEN can write records into the dataset. Do not give either token to browser applications used by untrusted customers. Use an authenticated application backend to emit telemetry.
+
+Implemented boundaries: independent high-entropy read/write tokens; hash-based token comparison; HMAC sessions/cursors; dataset/purpose/expiry binding; HttpOnly/SameSite=Strict cookie; Secure cookie in HTTPS; same-origin WebSocket and browser API checks; nonpersistent browser token handling; private R2 via binding; no raw-payload logging; fixed query templates rather than arbitrary SQL; wire/decompression/event/query/backlog limits; textContent-based display and CSP; no unauthenticated query or storage paths.
+
+Login token entry is a shared-secret administration model. Sessions last eight hours. Logout removes the browser cookie but cannot revoke an already-copied session independently. Rotating VIEWER_TOKEN invalidates future HTTP verifications; an existing WebSocket's cached authorization can last until expiry or reconnection. For immediate incident response disconnect/delete the affected deployment route or add an external access boundary. Fine-grained session revocation and per-user audit are not implemented.
+
+Public endpoints can still consume Worker request/CPU allocation under attack. No native application rate-limiting service or hard spending cap is provisioned here. Configure Cloudflare Access/WAF/rate controls as appropriate, keep ingestion client auth separate and monitor billing. Do not rely on obscurity of the deployment URL.
+
+**Limit sensitive data before export.** The publisher and receiver perform best-effort credential filtering for common keys and credential-shaped text. Tail excludes raw headers, body and CF metadata. New protobuf ingestion omits uninspectable original wire. This does not detect arbitrary personal data, prompt content or application-specific secrets; configure those at the source. Existing archived data is not retroactively filtered. No compliance or general PII-removal guarantee is made.
+
+`SOURCE_TOKENS` maps at most64 stable source IDs to distinct random credentials. Set a source's `enabled` to false to reject future ingestion; rotating its token preserves the source's idempotency namespace. Viewers still read the entire dataset: source credentials provide provenance and independent revocation, not tenant isolation. Production token files and attachment reports belong in the ignored repository-root `.cf-observe/` directory or another private local location.
+
+All examples and screenshots use synthetic data. Real account IDs, domain names, secrets, customer data and GitHub credentials are not included. Do not publish .dev.vars, .wrangler state, test exports or raw production logs. Review repository-level ignore rules after copying the project.

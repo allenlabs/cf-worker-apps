@@ -1,0 +1,40 @@
+name = "mcp-events"
+main = "index.js"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat", "global_fetch_strictly_public"]
+workers_dev = false
+
+# Supply the account, custom domain and actual KV namespace in private deployment configuration.
+[vars]
+PUBLIC_ORIGIN = "https://events.example.invalid"
+EVENTS_OBJECT_NAME = "sample-channel-events"
+OAUTH_OWNER_ID = "sample-owner"
+SERVER_NAME = "channel-talk-events"
+PRODUCT_NAME = "Channel Talk MCP Events"
+CHANNEL_REPLY_ENABLED = "false"
+ALLOWED_CHANNEL_ID = "sample-channel"
+ALLOWED_CHAT_ID = "sample-group"
+CHANNEL_SLUG = "sample-channel"
+CHANNEL_APP_ID = "sample-app"
+
+[[kv_namespaces]]
+binding = "OAUTH_KV"
+id = "00000000000000000000000000000000"
+
+[[durable_objects.bindings]]
+name = "EVENTS"
+class_name = "ChannelEvents"
+
+[[durable_objects.bindings]]
+name = "THREADS"
+class_name = "ThreadHistory"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ChannelEvents"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["ThreadHistory"]
+
+# Add a PI_ASSISTANT binding to the deployment's Assistant class before enabling replies.

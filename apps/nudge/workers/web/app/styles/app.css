@@ -1,0 +1,34 @@
+@import 'tailwindcss';
+
+/* Nudge palette — calm teal.  Reminders need to feel gentle, not urgent. */
+@theme {
+  --color-nudge-50:  #ecfeff;
+  --color-nudge-100: #cffafe;
+  --color-nudge-200: #a5f3fc;
+  --color-nudge-300: #67e8f9;
+  --color-nudge-400: #22d3ee;
+  --color-nudge-500: #06b6d4;
+  --color-nudge-600: #0891b2;
+  --color-nudge-700: #0e7490;
+  --color-nudge-800: #155e75;
+  --color-nudge-900: #164e63;
+}
+
+@layer base {
+  html, body, #app {
+    height: 100%;
+  }
+  body {
+    @apply bg-slate-950 text-slate-100 antialiased;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  a {
+    @apply text-nudge-400 hover:underline;
+  }
+  .card {
+    @apply rounded border border-slate-800 bg-slate-900;
+  }
+  code, pre, kbd, samp {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+}

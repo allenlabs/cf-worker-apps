@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ko">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><meta name="theme-color" content="#101218"><title>CF Observe · Telemetry Explorer</title><link rel="stylesheet" href="/style.css"><script type="module" src="/app.js"></script></head>
+<body>
+<aside class="sidebar">
+  <a class="brand" href="/"><span class="brand-mark">cf</span><span>Observe<small>Cloudflare-native telemetry</small></span></a>
+  <div class="workspace"><span class="workspace-icon">W</span><div>My workspace<small>Private telemetry archive</small></div><span class="version">v0.1</span></div>
+  <p class="nav-label">EXPLORE</p>
+  <nav aria-label="데이터 종류">
+    <button class="nav-item active" data-kind=""><span class="nav-icon">◫</span>모든 이벤트<span class="nav-count" id="navCount">0</span></button>
+    <button class="nav-item" data-kind="logs"><span class="nav-icon">≡</span>로그</button>
+    <button class="nav-item" data-kind="traces"><span class="nav-icon">⌁</span>트레이스</button>
+    <button class="nav-item" data-kind="metrics"><span class="nav-icon">▥</span>메트릭</button>
+  </nav>
+  <div class="sidebar-note"><span class="small-heading">STORAGE MODEL</span><strong>R2에 보관.<br>실시간으로 확인.</strong><p>장기 보관 데이터는 R2에.<br>저장 전 데이터는 임시 영속 버퍼에.</p><div class="storage-line"><i></i>R2 archive + durable live buffer</div></div>
+  <div class="sidebar-bottom"><div class="tiny-pill">NO SELF-MANAGED SERVER</div><p>Workers · R2 · Durable Objects</p><button id="logoutButton" class="text-button">로그아웃 ↗</button></div>
+</aside>
+<main>
+  <header class="topbar"><div class="breadcrumb">Workspace <span>/</span> Observability <span>/</span> <strong>Explorer</strong></div><span id="demoBadge" class="demo-badge" hidden>LOCAL DEMO · SYNTHETIC DATA</span><div class="connection"><i id="connectionDot"></i><span id="connectionText">연결 준비</span></div></header>
+  <div class="content">
+    <section class="page-heading"><div><p class="eyebrow">YOUR TELEMETRY, IN ONE PLACE</p><h1>Telemetry Explorer</h1><p class="subtitle">최근 작업부터 보관 데이터까지. 로그, 트레이스, 메트릭을 함께 확인합니다.</p></div><div class="heading-actions"><button id="exportButton" class="button secondary">↓ 현재 결과 JSON</button><button id="liveButton" class="button live-button" aria-pressed="true"><span class="live-dot"></span><span id="liveButtonText">Live 켜짐</span></button></div></section>
+    <div id="notice" class="notice" role="status" hidden></div>
+    <details id="onboarding" class="onboarding-card">
+      <summary id="onboardingSummary"><span>수집 연결</span><small>Workers · OTLP 수집</small></summary>
+      <div class="onboarding-body">
+        <p>소스마다 발급한 수집 토큰을 사용하세요. 이 화면의 Viewer token은 데이터를 전송할 수 없습니다. 입력받은 이벤트는 영속 버퍼에 수락한 뒤 표시하고, R2에는 기본 10초 단위로 묶어 보관합니다.</p>
+        <div class="endpoint-grid"><div><strong>일반 JSON</strong><code data-endpoint="/api/ingest"></code></div><div><strong>OTLP 로그</strong><code data-endpoint="/v1/logs"></code></div><div><strong>OTLP 트레이스</strong><code data-endpoint="/v1/traces"></code></div><div><strong>OTLP 메트릭</strong><code data-endpoint="/v1/metrics"></code></div></div>
+        <details class="connection-guide"><summary>1. 첫 이벤트로 연결 확인</summary><p>Bash에서 실행하는 예시입니다. 수집 토큰을 입력하면 <code>my-worker / collector.connected</code> 이벤트 한 건을 전송합니다. 조회 필터를 비우고 최근 5분을 선택하면 확인할 수 있습니다.</p><button class="button secondary" data-copy="curlExample">예시 복사</button><pre id="curlExample" tabindex="0"></pre></details>
+        <details class="connection-guide"><summary>2. Cloudflare Workers 연결</summary><p>배포된 Tail 수집기 <code>cf-observe-tail</code>에 producer Worker를 연결하면 호출 종료 후 console 로그·예외·실행 결과를 받습니다. 기존 <code>tail_consumers</code>가 있으면 유지하면서 항목을 추가하세요. CF Observe와 Tail 수집기 자신은 연결하지 않습니다. 자세한 절차는 저장소의 <code>apps/cf-observe/collectors/README.md</code>에 있습니다.</p><button class="button secondary" data-copy="tailExample">Tail 연결 설정 복사</button><pre id="tailExample" tabindex="0"></pre><p>실행 중인 작업 진행 상황은 같은 계정의 Service Binding으로 직접 전송할 수 있습니다. 저장소의 <code>apps/cf-observe/src/collectors/publisher.js</code>에서 <code>publishEvents</code>를 가져오세요. 아래 설정과 호출을 producer Worker에 적용하고, export마다 고유하고 재시도 동안 동일한 <code>idempotencyKey</code>를 지정하세요.</p><button class="button secondary" data-copy="workersExample">Service Binding 설정 복사</button><pre id="workersExample" tabindex="0"></pre><p>producer Worker에서 <code>npx wrangler secret put OBSERVE_INGEST_TOKEN</code>으로 수집 토큰을 등록한 뒤, 요청 처리 코드에서 아래 함수를 호출합니다.</p><button class="button secondary" data-copy="publishExample">전송 코드 복사</button><pre id="publishExample" tabindex="0"></pre><p>실행 중인 작업의 진행 상황은 직접 전송하세요. Tail은 호출 종료 후 전달합니다. <code>waitUntil</code>만으로 중요한 업무 이벤트의 전달이 보장되지는 않으며, 그런 이벤트에는 소스의 영속 outbox가 필요합니다.</p></details>
+        <details class="connection-guide"><summary>3. 기존 OTLP SDK·Collector 연결</summary><p>서버·컨테이너 수집기는 별도로 설치·연결해야 합니다. 기존 Collector가 있다면 저장소의 <code>apps/cf-observe/examples/otel-collector.yaml</code>을 참고하고, 설치한 Collector 버전으로 설정을 검사하세요. 이 예시는 OTLP 전달만 설정하며, 파일 로그 수집과 디스크 전송 대기열은 포함하지 않습니다.</p><button class="button secondary" data-copy="otlpExample">환경 설정 예시 복사</button><pre id="otlpExample" tabindex="0"></pre><p>앱 SDK는 같은 호스트의 OTLP 수신기로 보낼 수 있습니다. 예시의 대기열은 메모리 기반이므로 재시작을 견뎌야 한다면 Collector의 디스크 저장을 별도로 설정해야 합니다. 메트릭의 수집 주기는 로그 전송 지연과 별개입니다.</p></details>
+        <p class="onboarding-note">민감한 본문·속성은 수집 단계에서 제거하세요. 이벤트 상세와 JSON 내보내기는 수집 시 필터링·가림 처리를 적용한 저장 데이터를 표시합니다.</p><p id="copyStatus" role="status" class="copy-status"></p>
+      </div>
+    </details>
+    <section class="operations-card" aria-label="수집과 보관 운영 상태">
+      <div class="operations-heading"><h2>수집 · 보관 상태</h2><small id="healthChecked">운영 상태 확인 중</small></div>
+      <div id="healthWarning" class="notice error" role="status" hidden></div>
+      <div class="operations-grid">
+        <div><span>전체 소스의 마지막 수신</span><strong id="lastReceived">확인 중</strong><small>서버가 배치를 영속 수락한 시각</small></div>
+        <div><span>임시 영속 버퍼</span><strong id="bufferUsage">확인 중</strong><progress id="bufferPressure" max="100" value="0" aria-label="버퍼 사용률"></progress><small id="oldestPending">대기 상태 확인 중</small></div>
+        <div><span>R2 데이터 보관</span><strong id="archiveStatus">확인 중</strong><small id="lastArchived">보관 상태 확인 중</small><small>자동 보존 만료·삭제 없음</small></div>
+      </div>
+      <details class="source-details"><summary>소스별 마지막 수신과 누적 수락량</summary><p>수집 토큰에 연결된 소스·수집기 기준입니다. Tail 수집기 하나가 여러 Worker를 받을 수 있으며, 개별 앱은 아래 서비스 필터로 조회합니다. 조용한 소스도 정상일 수 있습니다. 누적 수락량은 현재 R2의 보관량과 다릅니다.</p><div class="source-table-scroll"><table class="source-table"><thead><tr><th>소스 · 수집기</th><th>마지막 수신</th><th>수락 이벤트</th><th>수락 배치 · 해제된 배치 크기</th></tr></thead><tbody id="sourceRows"></tbody></table></div><p id="sourceEmpty">아직 기록된 소스가 없습니다. 수집 연결 안내에서 첫 이벤트를 보내세요.</p></details>
+    </section>
+    <form id="searchForm" class="filter-card">
+      <label class="search-field"><span>⌕</span><input id="searchInput" name="q" placeholder="메시지와 저장된 속성에서 검색…" aria-label="저장된 이벤트 검색" maxlength="512"><kbd>검색</kbd></label>
+      <div class="filter-row"><label>서비스<input id="serviceInput" list="services" placeholder="모든 서비스" maxlength="256"><datalist id="services"></datalist></label><label>Trace ID<input id="traceInput" placeholder="전체 트레이스" maxlength="64"></label><label>수집 시간<select id="rangeInput"><option value="300000">최근 5분</option><option value="900000">최근 15분</option><option value="3600000" selected>최근 1시간</option><option value="86400000">최근 24시간</option><option value="custom">직접 지정</option></select></label><button class="button primary" type="submit" id="searchButton">조회 →</button></div>
+      <div class="custom-range" id="customRange" hidden><label>시작 <input type="datetime-local" id="fromInput"></label><label>종료 <input type="datetime-local" id="toInput"></label><small>시간 필터는 이벤트 발생 시간이 아닌 수집 시간을 기준으로 합니다.</small></div>
+    </form>
+    <section class="stats-grid" aria-label="현재 로딩된 결과 요약">
+      <div class="stat-card"><span>로딩한 이벤트</span><strong id="statEvents">0</strong><small>현재 화면에 불러온 결과</small></div>
+      <div class="stat-card"><span>오류 이벤트</span><strong id="statErrors">0</strong><small id="statErrorRate">로딩한 결과 중 0%</small></div>
+      <div class="stat-card"><span>서비스</span><strong id="statServices">0</strong><small>로딩한 결과에 포함된 서비스</small></div>
+      <div class="stat-card"><span>아직 버퍼에 있는 이벤트</span><strong id="statBuffered">0</strong><small id="flushLabel">R2 쓰기 주기 확인 중</small></div>
+    </section>
+    <section class="chart-card"><div class="card-heading"><div><h2 id="chartTitle">이벤트 분포</h2><span id="chartCaption">로딩한 결과 기준 · 전체 기간의 총계가 아닙니다</span></div><div class="chart-legend"><i></i><span id="chartLegend">Events</span><select id="metricSelect" aria-label="표시할 메트릭" hidden></select></div></div><svg id="activityChart" viewBox="0 0 1000 120" preserveAspectRatio="none" role="img" aria-label="로딩한 이벤트 분포"></svg><div class="chart-axis"><span id="axisFrom">—</span><span id="chartNote">미리 집계하지 않고, 현재 결과만 표시</span><span id="axisTo">—</span></div></section>
+    <section class="events-card"><div class="events-toolbar"><div><h2 id="tableTitle">모든 이벤트</h2><span id="resultCount" class="count-pill">0</span></div><span id="queryCost" class="query-cost">SQL scan 없음 · R2/Workers 사용료는 별도</span></div><div id="windowNotice" class="window-notice" role="status" hidden></div><div class="table-scroll"><table><thead><tr><th class="time-col">수집 시간</th><th class="kind-col">종류 / 수준</th><th class="service-col">서비스</th><th>이벤트</th><th class="value-col">값 / 소요 시간</th><th class="store-col">저장</th></tr></thead><tbody id="eventRows"></tbody></table><div id="emptyState" class="empty-state"><span class="empty-icon">⌕</span><h3 id="emptyTitle">저장된 이벤트를 조회하고 있습니다</h3><p id="emptyMessage">임시 영속 버퍼와 R2 보관 이력을 함께 확인합니다.</p><button id="emptyConnect" class="button secondary" hidden>수집 연결 안내 열기</button></div></div><div class="row-pagination"><span id="rowWindow">표시할 행 없음</span><div><button id="latestRows" class="button secondary" hidden>최신으로</button><button id="previousRows" class="button secondary" disabled>← 이전 500개</button><button id="nextRows" class="button secondary" disabled>다음 500개 →</button></div></div><footer class="results-footer"><span id="pageStatus">조회 대기</span><button id="loadMore" class="button secondary" hidden>서버에서 다음 결과 불러오기 ↓</button></footer></section>
+    <p class="bottom-note">조회 범위와 목록 정렬은 서버의 수집 시각 기준입니다. 이벤트 상세에는 발생 시각도 표시합니다. Live 목록은 약 200ms, 그래프는 약 1초 간격으로 갱신하며 전송 지연은 별도입니다. 약 1초는 실시간 표시 목표이며 보장된 지연 시간이 아닙니다. 보관 데이터는 자동으로 삭제하지 않습니다.</p>
+  </div>
+</main>
+<dialog id="loginDialog" class="login-dialog"><form id="loginForm"><span class="brand-mark">cf</span><p class="eyebrow">PRIVATE WORKSPACE</p><h2>CF Observe에 로그인</h2><p>배포 시 설정한 <code>VIEWER_TOKEN</code>을 입력하세요.<br>수집용 토큰과는 별도입니다.</p><label>Viewer token<input id="viewerToken" type="password" autocomplete="current-password" required></label><p id="loginError" class="login-error" role="alert"></p><button class="button primary" type="submit">워크스페이스 열기 →</button><small>토큰은 브라우저 저장소에 보관하지 않습니다.<br>인증 후 HttpOnly 세션 쿠키를 사용합니다.</small></form></dialog>
+<dialog id="detailDialog" class="detail-dialog"><header><div><p class="eyebrow">EVENT INSPECTOR</p><h2 id="detailTitle">저장된 이벤트</h2></div><button id="closeDetail" class="icon-button" aria-label="상세 닫기">×</button></header><div id="detailMeta" class="detail-meta"></div><div class="detail-actions"><button id="traceButton" class="button secondary" hidden>같은 Trace 조회 →</button><button id="rawToggle" class="button secondary">저장된 배치 전체 보기</button><button id="downloadRaw" class="button secondary">저장 데이터 JSON ↓</button></div><p class="detail-explanation" id="detailExplanation">수집 시 필터링·가림 처리를 적용한 저장 데이터를 표시합니다.</p><pre id="rawContent" tabindex="0"></pre></dialog>
+</body></html>

@@ -1,0 +1,23 @@
+{
+  "name": "@cf-worker-apps/mcp-events",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Channel Talk MCP Events on Cloudflare Workers.",
+  "scripts": {
+    "test": "node tests/workers/check.mjs",
+    "test:coverage": "node tests/workers/check.mjs --coverage",
+    "typecheck": "node --check workers/api/index.js && node --check tests/workers/check.mjs",
+    "build": "wrangler deploy --config workers/api/wrangler.toml --dry-run --outdir ../../../../../mcp-events-build",
+    "deploy": "wrangler deploy --config workers/api/wrangler.toml"
+  },
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "1.2.1"
+  },
+  "devDependencies": {
+    "wrangler": "4.147.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

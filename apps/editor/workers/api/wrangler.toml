@@ -1,0 +1,80 @@
+tail_consumers = [{ service = "cf-observe-tail" }]
+name = "editor-api"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Smart Placement: relocate near Hyperdrive → Hetzner Postgres (Helsinki).
+[placement]
+mode = "smart"
+workers_dev = true
+
+# Custom domain — DNS + SSL handled by Cloudflare (allenlabs.org on-account).
+[[routes]]
+pattern = "editor-api.allenlabs.org"
+custom_domain = true
+
+# Hyperdrive → Hetzner Postgres (`allenlabs` DB, `editor` schema). Shared
+# Hyperdrive config id, same as PM / inbox.
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "00000000000000000000000000000000"
+
+# R2 bucket for uploaded images (APAC). Written by POST /v1/files/upload and
+# served publicly by GET /files/*.
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "editor-allenlabs-files"
+
+# Datasource Step 2: per-workspace SQLite Durable Object backing NATIVE
+# databases (db_backend='native_do'). One DO instance per workspace
+# (idFromName(workspaceId)) → its own ≤10GB SQLite. ADDITIVE: existing
+# Postgres-backed databases never touch this binding.
+[[durable_objects.bindings]]
+name = "WORKSPACE_DB"
+class_name = "WorkspaceDB"
+
+# SQLite-backed DO class registration (new_sqlite_classes, not new_classes).
+[[migrations]]
+tag = "v1-workspace-db"
+new_sqlite_classes = ["WorkspaceDB"]
+
+# Cloudflare Workers AI — on-edge LLM inference (no external key). Default
+# backend for the AI assist route (/v1/ai). Overridden only when the optional
+# OpenAI-compatible secrets (LLM_BASE_URL + LLM_API_KEY) are set.
+[ai]
+binding = "AI"
+
+[vars]
+APP_NAME = "Editor"
+COLLAB_URL = "wss://collab.example.invalid/editor"
+# Optional Workers AI model override (defaults to @cf/meta/llama-3.1-8b-instruct).
+# WORKERS_AI_MODEL = "@cf/meta/llama-3.1-8b-instruct"
+
+# Secrets — set via `wrangler secret put` (never commit values):
+#   wrangler secret put EDITOR_HMAC_SECRET --config workers/api/wrangler.toml
+#       (MUST match the same secret on editor-web)
+#   wrangler secret put COLLAB_HMAC_SECRET --config workers/api/wrangler.toml
+#       (MUST equal the allenlabs-collab worker's token-signing secret)
+#   wrangler secret put OTEL_ACCESS_ID / OTEL_ACCESS_SECRET / OTEL_BEARER_TOKEN
+#
+# AI assist (/v1/ai) backends, in precedence order:
+#   1. OpenAI-compatible /chat/completions — OPTIONAL override. When BOTH
+#      LLM_BASE_URL + LLM_API_KEY are set, requests route there instead of
+#      Workers AI (e.g. point at LiteLLM/OpenAI):
+#        wrangler secret put LLM_BASE_URL --config workers/api/wrangler.toml
+#            (e.g. https://api.openai.com/v1  — no trailing /chat/completions)
+#        wrangler secret put LLM_API_KEY  --config workers/api/wrangler.toml
+#        wrangler secret put LLM_MODEL    --config workers/api/wrangler.toml
+#            (optional; defaults to gpt-4o-mini)
+#
+# Per-workspace AI backend (editor.ai_settings): a workspace owner/admin can
+# point AI assist at their own OpenAI-compatible provider. The API key they
+# enter is encrypted at rest with this secret (AES-GCM) and decrypted per
+# request when that workspace's backend is resolved. OPTIONAL — when unset,
+# saving a custom API key returns 409 "encryption not configured":
+#   wrangler secret put AI_SETTINGS_KEY --config workers/api/wrangler.toml
+#
+#   2. Cloudflare Workers AI ([ai] binding above) — the on-edge DEFAULT. No
+#      secret needed; the editor's "✨ AI" actions work as soon as this deploys.
+#   3. If the [ai] binding were ever removed AND no secrets set → 503.

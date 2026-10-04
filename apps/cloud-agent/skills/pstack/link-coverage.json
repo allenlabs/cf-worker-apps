@@ -1,0 +1,341 @@
+{
+  "links": [
+    {
+      "source": "skills/architect/SKILL.md",
+      "target": "../poteto-mode/references/provider-dispatch.md",
+      "resolved": "skills/poteto-mode/references/provider-dispatch.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/architect/SKILL.md",
+      "target": "../poteto-mode/references/codex-tools.md",
+      "resolved": "skills/poteto-mode/references/codex-tools.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/architect/SKILL.md",
+      "target": "references/design-red-flags.md",
+      "resolved": "skills/architect/references/design-red-flags.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/architect/references/rationale-template.md",
+      "target": "../SKILL.md#phase-a-ground-the-problem",
+      "resolved": "skills/architect/SKILL.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/architect/references/rationale-template.md",
+      "target": "#shape",
+      "resolved": "#shape",
+      "classification": "external-or-anchor"
+    },
+    {
+      "source": "skills/architect/references/rationale-template.md",
+      "target": "../../arena/SKILL.md",
+      "resolved": "skills/arena/SKILL.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/architect/references/runner-prompt.md",
+      "target": "rationale-template.md",
+      "resolved": "skills/architect/references/rationale-template.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/arena/SKILL.md",
+      "target": "../poteto-mode/references/provider-dispatch.md",
+      "resolved": "skills/poteto-mode/references/provider-dispatch.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/arena/SKILL.md",
+      "target": "../poteto-mode/references/codex-tools.md",
+      "resolved": "skills/poteto-mode/references/codex-tools.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/automate-me/SKILL.md",
+      "target": "../poteto-mode/references/codex-tools.md",
+      "resolved": "skills/poteto-mode/references/codex-tools.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/babysit/SKILL.md",
+      "target": "../poteto-mode/references/codex-tools.md",
+      "resolved": "skills/poteto-mode/references/codex-tools.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/babysit/SKILL.md",
+      "target": "../poteto-mode/playbooks/babysit.md",
+      "resolved": "skills/poteto-mode/playbooks/babysit.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/babysit/SKILL.md",
+      "target": "../poteto-mode/references/bugbot-triage.md",
+      "resolved": "skills/poteto-mode/references/bugbot-triage.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/create-verification-skill/SKILL.md",
+      "target": "../poteto-mode/references/codex-tools.md",
+      "resolved": "skills/poteto-mode/references/codex-tools.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/create-verification-skill/SKILL.md",
+      "target": "references/feature-map-example/",
+      "resolved": "skills/create-verification-skill/references/feature-map-example",
+      "classification": "included-directory"
+    },
+    {
+      "source": "skills/create-verification-skill/references/feature-map-example/README.md",
+      "target": "./create-note.md",
+      "resolved": "skills/create-verification-skill/references/feature-map-example/create-note.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/create-verification-skill/references/feature-map-example/README.md",
+      "target": "./search.md",
+      "resolved": "skills/create-verification-skill/references/feature-map-example/search.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/how/SKILL.md",
+      "target": "../poteto-mode/references/provider-dispatch.md",
+      "resolved": "skills/poteto-mode/references/provider-dispatch.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/how/SKILL.md",
+      "target": "../poteto-mode/references/codex-tools.md",
+      "resolved": "skills/poteto-mode/references/codex-tools.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/interrogate/SKILL.md",
+      "target": "../poteto-mode/references/provider-dispatch.md",
+      "resolved": "skills/poteto-mode/references/provider-dispatch.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/interrogate/SKILL.md",
+      "target": "../poteto-mode/references/codex-tools.md",
+      "resolved": "skills/poteto-mode/references/codex-tools.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/maintain-verification-skill/SKILL.md",
+      "target": "../poteto-mode/references/codex-tools.md",
+      "resolved": "skills/poteto-mode/references/codex-tools.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/no-comments/SKILL.md",
+      "target": "../poteto-mode/references/codex-tools.md",
+      "resolved": "skills/poteto-mode/references/codex-tools.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/poteto-mode/SKILL.md",
+      "target": "references/provider-dispatch.md",
+      "resolved": "skills/poteto-mode/references/provider-dispatch.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/poteto-mode/SKILL.md",
+      "target": "references/codex-tools.md",
+      "resolved": "skills/poteto-mode/references/codex-tools.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/poteto-mode/playbooks/multi-phase-plan.md",
+      "target": "../references/provider-dispatch.md",
+      "resolved": "skills/poteto-mode/references/provider-dispatch.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/poteto-mode/playbooks/multi-phase-plan.md",
+      "target": "../references/provider-dispatch.md",
+      "resolved": "skills/poteto-mode/references/provider-dispatch.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/poteto-mode/playbooks/multi-phase-plan.md",
+      "target": "../references/codex-tools.md",
+      "resolved": "skills/poteto-mode/references/codex-tools.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/poteto-mode/playbooks/multi-phase-plan.md",
+      "target": "../references/codex-tools.md",
+      "resolved": "skills/poteto-mode/references/codex-tools.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/poteto-mode/references/codex-tools.md",
+      "target": "provider-dispatch.md",
+      "resolved": "skills/poteto-mode/references/provider-dispatch.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/principle-attack-the-premise/SKILL.md",
+      "target": "../principle-build-the-lever/SKILL.md",
+      "resolved": "skills/principle-build-the-lever/SKILL.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/principle-attack-the-premise/SKILL.md",
+      "target": "../principle-fix-root-causes/SKILL.md",
+      "resolved": "skills/principle-fix-root-causes/SKILL.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/principle-attack-the-premise/SKILL.md",
+      "target": "../principle-laziness-protocol/SKILL.md",
+      "resolved": "skills/principle-laziness-protocol/SKILL.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/principle-attack-the-premise/SKILL.md",
+      "target": "../principle-redesign-from-first-principles/SKILL.md",
+      "resolved": "skills/principle-redesign-from-first-principles/SKILL.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/principle-build-the-lever/SKILL.md",
+      "target": "../principle-laziness-protocol/SKILL.md",
+      "resolved": "skills/principle-laziness-protocol/SKILL.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/principle-build-the-lever/SKILL.md",
+      "target": "../principle-encode-lessons-in-structure/SKILL.md",
+      "resolved": "skills/principle-encode-lessons-in-structure/SKILL.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/principle-build-the-lever/SKILL.md",
+      "target": "../principle-prove-it-works/SKILL.md",
+      "resolved": "skills/principle-prove-it-works/SKILL.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/principle-minimize-reader-load/SKILL.md",
+      "target": "../principle-guard-the-context-window/SKILL.md",
+      "resolved": "skills/principle-guard-the-context-window/SKILL.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/reflect/SKILL.md",
+      "target": "../poteto-mode/references/provider-dispatch.md",
+      "resolved": "skills/poteto-mode/references/provider-dispatch.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/reflect/SKILL.md",
+      "target": "../poteto-mode/references/codex-tools.md",
+      "resolved": "skills/poteto-mode/references/codex-tools.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/setup-pstack/SKILL.md",
+      "target": "../poteto-mode/references/provider-dispatch.md",
+      "resolved": "skills/poteto-mode/references/provider-dispatch.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/swarm/SKILL.md",
+      "target": "../poteto-mode/references/provider-dispatch.md",
+      "resolved": "skills/poteto-mode/references/provider-dispatch.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/swarm/SKILL.md",
+      "target": "../poteto-mode/references/codex-tools.md",
+      "resolved": "skills/poteto-mode/references/codex-tools.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/teach/SKILL.md",
+      "target": "../poteto-mode/references/codex-tools.md",
+      "resolved": "skills/poteto-mode/references/codex-tools.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/why/SKILL.md",
+      "target": "../poteto-mode/references/provider-dispatch.md",
+      "resolved": "skills/poteto-mode/references/provider-dispatch.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/why/SKILL.md",
+      "target": "../poteto-mode/references/codex-tools.md",
+      "resolved": "skills/poteto-mode/references/codex-tools.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/why/references/source-playbook.md",
+      "target": "./sources/code-archaeology.md",
+      "resolved": "skills/why/references/sources/code-archaeology.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/why/references/source-playbook.md",
+      "target": "./sources/linear.md",
+      "resolved": "skills/why/references/sources/linear.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/why/references/source-playbook.md",
+      "target": "./sources/notion.md",
+      "resolved": "skills/why/references/sources/notion.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/why/references/source-playbook.md",
+      "target": "./sources/slack.md",
+      "resolved": "skills/why/references/sources/slack.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/why/references/source-playbook.md",
+      "target": "./sources/datadog.md",
+      "resolved": "skills/why/references/sources/datadog.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/why/references/source-playbook.md",
+      "target": "./sources/sentry.md",
+      "resolved": "skills/why/references/sources/sentry.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/why/references/source-playbook.md",
+      "target": "./sources/databricks.md",
+      "resolved": "skills/why/references/sources/databricks.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/why/references/source-playbook.md",
+      "target": "./sources/incident-postmortem.md",
+      "resolved": "skills/why/references/sources/incident-postmortem.md",
+      "classification": "included-document"
+    },
+    {
+      "source": "skills/why/references/synthesizer-prompt.md",
+      "target": "url",
+      "resolved": "skills/why/references/url",
+      "classification": "upstream-example-placeholder"
+    }
+  ],
+  "summary": {
+    "external-or-anchor": 1,
+    "included-directory": 1,
+    "included-document": 52,
+    "upstream-example-placeholder": 1
+  },
+  "scope": "Markdown inline links. Tool names, example commands and plaintext paths are not installed capabilities."
+}

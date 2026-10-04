@@ -1,0 +1,40 @@
+@import 'tailwindcss';
+
+/* Stash palette.  This is the "external working memory" app — snippets, pasted
+   shell sessions, half-typed thoughts.  We use amber as the primary accent
+   (a "stash" / "save it for later" warmth) over the same muted slate base
+   used by inbox / focus / context. */
+@theme {
+  --color-stash-50:  #fffbeb;
+  --color-stash-100: #fef3c7;
+  --color-stash-200: #fde68a;
+  --color-stash-300: #fcd34d;
+  --color-stash-400: #fbbf24;
+  --color-stash-500: #f59e0b;
+  --color-stash-600: #d97706;
+  --color-stash-700: #b45309;
+  --color-stash-800: #92400e;
+  --color-stash-900: #78350f;
+}
+
+@layer base {
+  html, body, #app {
+    height: 100%;
+  }
+  body {
+    @apply bg-slate-950 text-slate-100 antialiased;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  a {
+    @apply text-stash-400 hover:underline;
+  }
+  .card {
+    @apply rounded border border-slate-800 bg-slate-900;
+  }
+  code, pre, kbd, samp {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  mark {
+    @apply bg-stash-300/30 text-stash-100 rounded-sm px-0.5;
+  }
+}

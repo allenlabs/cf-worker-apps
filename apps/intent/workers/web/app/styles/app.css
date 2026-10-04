@@ -1,0 +1,34 @@
+@import 'tailwindcss';
+
+/* Intent palette — clear cyan.  Bright, focused, declarative. */
+@theme {
+  --color-intent-50:  #ecfeff;
+  --color-intent-100: #cffafe;
+  --color-intent-200: #a5f3fc;
+  --color-intent-300: #67e8f9;
+  --color-intent-400: #22d3ee;
+  --color-intent-500: #06b6d4;
+  --color-intent-600: #0891b2;
+  --color-intent-700: #0e7490;
+  --color-intent-800: #155e75;
+  --color-intent-900: #164e63;
+}
+
+@layer base {
+  html, body, #app {
+    height: 100%;
+  }
+  body {
+    @apply bg-slate-950 text-slate-100 antialiased;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  a {
+    @apply text-intent-400 hover:underline;
+  }
+  .card {
+    @apply rounded border border-slate-800 bg-slate-900;
+  }
+  code, pre, kbd, samp {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+}

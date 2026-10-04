@@ -1,0 +1,34 @@
+tail_consumers = [{ service = "cf-observe-tail" }]
+name = "context-api"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Smart Placement: let Cloudflare relocate this worker near the data it talks
+# to (Hyperdrive → Hetzner Postgres in Helsinki), turning the many cross-
+# continent query round-trips per request into in-region hops.
+[placement]
+mode = "smart"
+workers_dev = true
+
+[[routes]]
+pattern = "context-api.allenlabs.org"
+custom_domain = true
+
+# Hyperdrive → Hetzner Postgres (`allenlabs` DB, `context` schema).
+# Reuses the same Hyperdrive binding as context-web + focus + inbox + pm-web.
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "00000000000000000000000000000000"
+
+[vars]
+APP_NAME = "Context API"
+PUBLIC_BASE_URL = "https://context-api.allenlabs.org"
+
+# Secrets — set with `wrangler secret put …`:
+#   OTEL_BEARER_TOKEN
+#   OTEL_ACCESS_ID
+#   OTEL_ACCESS_SECRET
+#
+# The HMAC secrets themselves live in context.api_clients (one per client_id),
+# not as wrangler secrets — they're per-client and rotated via UPDATE.

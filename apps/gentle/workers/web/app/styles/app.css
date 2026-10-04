@@ -1,0 +1,34 @@
+@import 'tailwindcss';
+
+/* Gentle palette — soft teal.  Calming, non-shame-inducing. */
+@theme {
+  --color-gentle-50:  #f0fdfa;
+  --color-gentle-100: #ccfbf1;
+  --color-gentle-200: #99f6e4;
+  --color-gentle-300: #5eead4;
+  --color-gentle-400: #2dd4bf;
+  --color-gentle-500: #14b8a6;
+  --color-gentle-600: #0d9488;
+  --color-gentle-700: #0f766e;
+  --color-gentle-800: #115e59;
+  --color-gentle-900: #134e4a;
+}
+
+@layer base {
+  html, body, #app {
+    height: 100%;
+  }
+  body {
+    @apply bg-slate-950 text-slate-100 antialiased;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  a {
+    @apply text-gentle-400 hover:underline;
+  }
+  .card {
+    @apply rounded border border-slate-800 bg-slate-900;
+  }
+  code, pre, kbd, samp {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+}

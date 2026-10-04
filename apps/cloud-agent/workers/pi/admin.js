@@ -1,0 +1,446 @@
+import { DurableObject } from "cloudflare:workers";
+import { parse as parseYaml } from "yaml";
+
+const encoder = new TextEncoder();
+const b64 = bytes => btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+const unb64 = text => Uint8Array.from(atob(text.replaceAll("-", "+").replaceAll("_", "/")), c => c.charCodeAt(0));
+const random = () => b64(crypto.getRandomValues(new Uint8Array(32)));
+const hash = async value => [...new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(value)))].map(n => n.toString(16).padStart(2, "0")).join("");
+const accountId = value => value === "owner" || typeof value === "string" && /^account-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+const nativeId = value => typeof value === "string" && /^[A-Za-z0-9_:-]{1,255}$/.test(value);
+const cookie = (request, name) => request.headers.get("cookie")?.split(";").map(v => v.trim()).find(v => v.startsWith(`${name}=`))?.slice(name.length + 1) ?? null;
+const cookieHeader = (name, value, age) => `${name}=${value}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${age}`;
+const SESSION = "__Host-cloud_agent_session";
+const ATTEMPT = "__Host-cloud_agent_login";
+const productName = env => env.PRODUCT_NAME || "Cloud Agent";
+class AdminError extends Error { constructor(code, status = 400) { super(code); this.name = "AdminError"; this.status = status; } }
+const requireValue = (ok, code, status = 400) => { if (!ok) throw new AdminError(code, status); };
+export function channelScope(env) {
+  const scope = { channelId: env.ALLOWED_CHANNEL_ID, groupId: env.ALLOWED_CHAT_ID, appId: env.CHANNEL_APP_ID };
+  requireValue(Object.values(scope).every(nativeId), "channel_configuration_invalid", 503);
+  return scope;
+}
+const object = value => !!value && typeof value === "object" && !Array.isArray(value);
+const exactKeys = (value, keys) => requireValue(object(value) && Object.keys(value).every(key => keys.includes(key)), "invalid_fields");
+const string = (value, limit, code = "invalid_text") => { requireValue(typeof value === "string" && value.trim().length > 0 && encoder.encode(value).length <= limit && !value.includes("\0"), code); return value.trim(); };
+const response = (value, status = 200, headers = {}) => Response.json(value, { status, headers: { "cache-control": "no-store", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer", ...headers } });
+const redirect = (path, headers = {}) => new Response(null, { status: 303, headers: { location: path, "cache-control": "no-store", "referrer-policy": "no-referrer", ...headers } });
+
+async function boundedText(message, limit, code, status) {
+  requireValue(Number(message.headers.get("content-length") || 0) <= limit, code, status);
+  const reader = message.body?.getReader(); if (!reader) return "";
+  const decoder = new TextDecoder(); let text = "", bytes = 0;
+  try {
+    for (;;) { const { value, done } = await reader.read(); if (done) break; bytes += value.byteLength; requireValue(bytes <= limit, code, status); text += decoder.decode(value, { stream: true }); }
+    return text + decoder.decode();
+  } catch (error) { await reader.cancel().catch(() => {}); throw error; }
+  finally { reader.releaseLock(); }
+}
+
+async function remoteJson(url, options = {}) {
+  let r;
+  try { r = await fetch(url, { ...options, redirect: "manual", signal: AbortSignal.timeout(15000) }); }
+  catch { throw new AdminError("sso_network_error", 502); }
+  requireValue(r.ok, "sso_request_failed", 502);
+  const text = await boundedText(r, 131072, "sso_response_invalid", 502);
+  try { return JSON.parse(text); } catch { throw new AdminError("sso_response_invalid", 502); }
+}
+
+async function discovery(env) {
+  const issuer = new URL(env.SSO_ISSUER);
+  requireValue(issuer.protocol === "https:" && !issuer.username && !issuer.password && !issuer.search && !issuer.hash, "sso_configuration_invalid", 503);
+  const doc = await remoteJson(`${issuer.href.replace(/\/$/, "")}/.well-known/openid-configuration`);
+  requireValue(doc.issuer === env.SSO_ISSUER, "sso_issuer_mismatch", 503);
+  for (const field of ["authorization_endpoint", "token_endpoint", "jwks_uri", "userinfo_endpoint"]) {
+    let endpoint;
+    try { endpoint = new URL(doc[field]); } catch { throw new AdminError("sso_configuration_invalid", 503); }
+    requireValue(endpoint.origin === issuer.origin && endpoint.protocol === "https:" && !endpoint.username && !endpoint.password && !endpoint.hash, "sso_endpoint_invalid", 503);
+  }
+  requireValue(doc.id_token_signing_alg_values_supported?.includes("EdDSA") && doc.code_challenge_methods_supported?.includes("S256"), "sso_protocol_unsupported", 503);
+  return doc;
+}
+
+async function verifiedPrincipal(env, doc, token, nonce) {
+  requireValue(typeof token.id_token === "string" && token.id_token.length <= 32768, "sso_id_token_invalid");
+  const parts = token.id_token.split(".");
+  requireValue(parts.length === 3, "sso_id_token_invalid");
+  let header, claims;
+  try { header = JSON.parse(new TextDecoder().decode(unb64(parts[0]))); claims = JSON.parse(new TextDecoder().decode(unb64(parts[1]))); }
+  catch { throw new AdminError("sso_id_token_invalid"); }
+  requireValue(header.alg === "EdDSA" && typeof header.kid === "string" && header.kid.length <= 255 && !header.crit, "sso_id_token_algorithm_invalid");
+  const jwks = await remoteJson(doc.jwks_uri);
+  const keys = jwks.keys?.filter(key => key.kid === header.kid && key.kty === "OKP" && key.crv === "Ed25519" && (!key.use || key.use === "sig") && (!key.alg || key.alg === "EdDSA") && (!key.key_ops || key.key_ops.includes("verify")));
+  requireValue(keys?.length === 1, "sso_id_token_key_invalid");
+  let verified = false;
+  try {
+    const key = await crypto.subtle.importKey("jwk", keys[0], { name: "Ed25519" }, false, ["verify"]);
+    verified = await crypto.subtle.verify("Ed25519", key, unb64(parts[2]), encoder.encode(`${parts[0]}.${parts[1]}`));
+  } catch { throw new AdminError("sso_id_token_signature_invalid"); }
+  requireValue(verified, "sso_id_token_signature_invalid");
+  const audience = claims.aud === env.SSO_CLIENT_ID || Array.isArray(claims.aud) && claims.aud.includes(env.SSO_CLIENT_ID);
+  requireValue(audience && (!Array.isArray(claims.aud) || claims.aud.length <= 1 || claims.azp === env.SSO_CLIENT_ID), "sso_id_token_audience_mismatch");
+  const now = Date.now() / 1000;
+  requireValue(claims.iss === env.SSO_ISSUER && typeof claims.sub === "string" && claims.sub.length > 0 && claims.sub.length <= 255, "sso_id_token_identity_invalid");
+  requireValue(claims.nonce === nonce, "sso_id_token_nonce_mismatch");
+  requireValue(Number.isFinite(claims.exp) && claims.exp > now && Number.isFinite(claims.iat) && claims.iat <= now + 60 && (claims.nbf === undefined || Number.isFinite(claims.nbf) && claims.nbf <= now + 60), "sso_id_token_expired");
+  let identity = claims;
+  if (typeof claims.email !== "string" || claims.email_verified === undefined) {
+    requireValue(typeof token.access_token === "string" && token.access_token.length <= 32768 && token.token_type?.toLowerCase() === "bearer", "sso_userinfo_token_invalid");
+    identity = await remoteJson(doc.userinfo_endpoint, { headers: { authorization: `Bearer ${token.access_token}` } });
+    requireValue(identity.sub === claims.sub, "sso_userinfo_subject_mismatch");
+  }
+  requireValue(identity.email_verified === true && typeof identity.email === "string", "sso_email_unverified", 403);
+  const email = identity.email.trim().toLowerCase();
+  let allowed, pins;
+  try { allowed = JSON.parse(env.SUPER_ADMIN_EMAILS || "[]"); pins = JSON.parse(env.SUPER_ADMIN_SUBJECTS || "{}"); }
+  catch { throw new AdminError("sso_policy_invalid", 503); }
+  requireValue(Array.isArray(allowed) && allowed.length <= 20 && allowed.every(x => typeof x === "string") && object(pins), "sso_policy_invalid", 503);
+  requireValue(allowed.includes(email) && (!Object.keys(pins).length || pins[email] === claims.sub), "super_admin_required", 403);
+  return { issuer: claims.iss, subject: claims.sub, email, role: "super_admin", name: typeof identity.name === "string" ? identity.name.slice(0, 128) : email, idTokenExpiresAt: claims.exp * 1000 };
+}
+
+function validateSkill(input) {
+  exactKeys(input, ["rawContent", "resources"]);
+  const rawContent = string(input.rawContent, 65536, "skill_size_invalid");
+  const match = rawContent.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
+  requireValue(match, "skill_frontmatter_invalid");
+  let data;
+  try { data = parseYaml(match[1]); } catch { throw new AdminError("skill_frontmatter_invalid"); }
+  requireValue(object(data), "skill_frontmatter_invalid");
+  const frontmatter = { data, body: match[2] };
+  const optionalString = value => typeof value === "string" && value.trim() ? value.trim() : undefined;
+  const parsed = { name: optionalString(data.name), description: optionalString(data.description), body: match[2], compatibility: optionalString(data.compatibility), license: optionalString(data.license), allowedTools: optionalString(data["allowed-tools"]), metadata: data.metadata };
+  requireValue(parsed.name && parsed.description && (data.metadata === undefined || object(data.metadata)), "skill_metadata_invalid");
+  requireValue(parsed && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(parsed.name) && parsed.name.length <= 64 && parsed.description.length <= 1024 && parsed.body.trim().length > 0, "skill_metadata_invalid");
+  requireValue(Object.keys(frontmatter.data).every(key => ["name", "description", "license", "compatibility", "allowed-tools", "metadata", "disable-model-invocation"].includes(key)), "skill_unknown_metadata");
+  const metadata = { ...(parsed.metadata || {}) };
+  if (frontmatter.data["disable-model-invocation"] !== undefined) {
+    requireValue(typeof frontmatter.data["disable-model-invocation"] === "boolean", "skill_metadata_invalid");
+    metadata["disable-model-invocation"] = frontmatter.data["disable-model-invocation"];
+  }
+  requireValue(Object.keys(metadata).length <= 20 && Object.entries(metadata).every(([key, value]) => key.length <= 128 && ["string", "boolean", "number"].includes(typeof value) && String(value).length <= 1024), "skill_metadata_invalid");
+  const resources = input.resources || [];
+  requireValue(Array.isArray(resources) && resources.length <= 20, "skill_resources_invalid");
+  const paths = new Set(); let total = encoder.encode(rawContent).length;
+  for (const resource of resources) {
+    exactKeys(resource, ["path", "kind", "content", "encoding", "mimeType"]);
+    requireValue(typeof resource.path === "string" && resource.path.length <= 255 && /^(?:references|assets)\/[A-Za-z0-9_./-]+$/.test(resource.path) && !resource.path.split("/").some(part => !part || part === "." || part === "..") && !paths.has(resource.path), "skill_resource_path_invalid");
+    requireValue(["reference", "asset", "file"].includes(resource.kind) && (!resource.encoding || resource.encoding === "text") && typeof resource.content === "string" && !resource.content.includes("\0"), "skill_resource_invalid");
+    requireValue(!/\.(?:js|mjs|cjs|ts|sh|bash|py|wasm|exe|so|dll)$/i.test(resource.path) && (!resource.mimeType || /^text\/[a-z0-9.+-]+$/i.test(resource.mimeType)), "skill_scripts_unsupported");
+    const size = encoder.encode(resource.content).length;
+    requireValue(size <= 65536, "skill_resource_size_invalid"); total += size; paths.add(resource.path);
+  }
+  requireValue(total <= 262144, "skill_bundle_size_invalid");
+  return { ...parsed, metadata, rawContent, resources: resources.map(resource => ({ ...resource, encoding: "text", size: encoder.encode(resource.content).length })) };
+}
+
+export class ManagementCredentials extends DurableObject {
+  async audit(principal, action, target, outcome = "ok") {
+    await this.ctx.storage.transaction(async transaction => {
+      const rows = await transaction.get("adminAudit") || [];
+      rows.push({ at: new Date().toISOString(), subject: principal.subject, email: principal.email, action, target, outcome });
+      await transaction.put("adminAudit", rows.slice(-500));
+    });
+  }
+  async startSso() {
+    const doc = await discovery(this.env);
+    requireValue(typeof this.env.SSO_CLIENT_ID === "string" && this.env.SSO_CLIENT_ID.length > 0 && typeof this.env.SSO_CLIENT_SECRET === "string" && this.env.SSO_CLIENT_SECRET.length > 0, "sso_client_not_configured", 503);
+    const attempt = { state: random(), nonce: random(), verifier: random(), browser: random(), expiresAt: Date.now() + 600000 };
+    const prior = await this.ctx.storage.list({ prefix: "ssoAttempt:" });
+    let liveAttempts = 0;
+    for (const [key, stored] of prior) { if (stored.expiresAt <= Date.now()) await this.ctx.storage.delete(key); else liveAttempts++; }
+    requireValue(liveAttempts < 100, "sso_busy", 429);
+    await this.ctx.storage.put(`ssoAttempt:${await hash(attempt.state)}`, { browserHash: await hash(attempt.browser), expiresAt: attempt.expiresAt, sealed: await this.seal({ nonce: attempt.nonce, verifier: attempt.verifier }) });
+    const authorize = new URL(doc.authorization_endpoint);
+    authorize.search = new URLSearchParams({ client_id: this.env.SSO_CLIENT_ID, redirect_uri: `${this.env.PUBLIC_ORIGIN}/auth/callback`, response_type: "code", scope: "openid profile email", state: attempt.state, nonce: attempt.nonce, code_challenge: b64(new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(attempt.verifier)))), code_challenge_method: "S256" }).toString();
+    let target = authorize.href;
+    if (this.env.SSO_LOGIN_URL) {
+      const login = new URL(this.env.SSO_LOGIN_URL);
+      requireValue(login.protocol === "https:" && !login.username && !login.password && !login.hash, "sso_configuration_invalid", 503);
+      if (this.env.SSO_SITE) login.searchParams.set("sitename", this.env.SSO_SITE);
+      login.searchParams.set("callbackURL", authorize.href);
+      target = login.href;
+    }
+    return { location: target, browser: attempt.browser };
+  }
+  async completeSso(query, browser) {
+    requireValue(typeof query.state === "string" && /^[A-Za-z0-9_-]{43}$/.test(query.state) && typeof browser === "string" && /^[A-Za-z0-9_-]{43}$/.test(browser), "sso_state_invalid");
+    const key = `ssoAttempt:${await hash(query.state)}`;
+    const stored = await this.ctx.storage.transaction(async transaction => {
+      const record = await transaction.get(key);
+      requireValue(record && record.expiresAt > Date.now() && record.browserHash === await hash(browser), "sso_attempt_invalid");
+      await transaction.delete(key); return record;
+    });
+    requireValue(!query.error && typeof query.code === "string" && query.code.length > 0 && query.code.length <= 8192 && (!query.iss || query.iss === this.env.SSO_ISSUER), "sso_callback_invalid");
+    const attempt = await this.open(stored.sealed);
+    const doc = await discovery(this.env);
+    const token = await remoteJson(doc.token_endpoint, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", authorization: `Basic ${btoa(`${encodeURIComponent(this.env.SSO_CLIENT_ID)}:${encodeURIComponent(this.env.SSO_CLIENT_SECRET)}`)}` }, body: new URLSearchParams({ grant_type: "authorization_code", code: query.code, redirect_uri: `${this.env.PUBLIC_ORIGIN}/auth/callback`, code_verifier: attempt.verifier }) });
+    const principal = await verifiedPrincipal(this.env, doc, token, attempt.nonce);
+    const session = random(), csrf = random();
+    const expiresAt = Math.min(Date.now() + 28800000, principal.idTokenExpiresAt);
+    await this.ctx.storage.put(`adminSession:${await hash(session)}`, { expiresAt, sealed: await this.seal({ principal, csrf }) });
+    await this.audit(principal, "sso.login", "management");
+    return { session, maxAge: Math.max(1, Math.floor((expiresAt - Date.now()) / 1000)) };
+  }
+  async adminSession(value) {
+    if (typeof value !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(value)) return null;
+    const key = `adminSession:${await hash(value)}`; const record = await this.ctx.storage.get(key);
+    if (!record || record.expiresAt <= Date.now()) { if (record) await this.ctx.storage.delete(key); return null; }
+    const session = await this.open(record.sealed);
+    let allowed, pins;
+    try { allowed = JSON.parse(this.env.SUPER_ADMIN_EMAILS || "[]"); pins = JSON.parse(this.env.SUPER_ADMIN_SUBJECTS || "{}"); } catch { return null; }
+    return session.principal.role === "super_admin" && session.principal.issuer === this.env.SSO_ISSUER && allowed.includes(session.principal.email) && (!Object.keys(pins).length || pins[session.principal.email] === session.principal.subject) ? { ...session, expiresAt: record.expiresAt } : null;
+  }
+  async accountInventory() { return await this.ctx.storage.get("adminAccounts") || [{ id: "owner", label: "owner", createdAt: null }]; }
+  async accounts() {
+    const inventory = await this.accountInventory();
+    return Promise.all(inventory.map(async row => {
+      try {
+        const status = await (row.id === "owner" ? this : this.env.Credentials.getByName(row.id)).status();
+        return { ...row, ...status, label: status.identity?.source === "verified_id_token" && status.identity.accountId || row.id };
+      }
+      catch { return { ...row, label: row.id, connected: false, error: "account_status_unavailable" }; }
+    }));
+  }
+  async controlSnapshot() {
+    const version = await this.ctx.storage.get("skillManifestVersion") || "empty";
+    return { defaultAccountId: (await this.accountSelection()).defaultAccountId, manifest: await this.skillManifest(version) };
+  }
+  async accountSelection() { return await this.ctx.storage.get("accountSelection") || { mode: "fixed", defaultAccountId: await this.ctx.storage.get("defaultAccountId") || "owner", poolAccountIds: [] }; }
+  async skillManifest(version) {
+    if (version === "empty") return { version, skills: [] };
+    const value = await this.ctx.storage.get(`skillManifest:${version}`);
+    requireValue(value, "skill_manifest_missing", 404); return value;
+  }
+  async skillCatalog() {
+    const rows = await this.ctx.storage.get("skillCatalog") || [];
+    return rows.map(({ name, description, revision, enabled, publishedAt, publishedBy, revisions }) => ({ name, description, revision, enabled, publishedAt, publishedBy, revisions }));
+  }
+  async publishedSkill(name, revision) {
+    const row = (await this.ctx.storage.get("skillCatalog") || []).find(skill => skill.name === name);
+    if (!row || !row.enabled || revision && !row.revisions.includes(revision)) return null;
+    return await this.ctx.storage.get(`skillRevision:${name}:${revision || row.revision}`) || null;
+  }
+  async skillSource(name, revision) {
+    const row = (await this.ctx.storage.get("skillCatalog") || []).find(skill => skill.name === name);
+    if (!row || revision && !row.revisions.includes(revision)) return null;
+    return await this.ctx.storage.get(`skillRevision:${name}:${revision || row.revision}`) || null;
+  }
+  async registerThread(identity) {
+    const scope = channelScope(this.env);
+    requireValue(object(identity) && identity.channelId === scope.channelId && identity.groupId === scope.groupId && nativeId(identity.rootMessageId) && /^channel-[0-9a-f]{64}$/.test(identity.threadKey), "thread_identity_invalid");
+    const expected = `channel-${await hash(JSON.stringify([identity.channelId, identity.groupId, identity.rootMessageId]))}`;
+    requireValue(identity.threadKey === expected && (identity.accountId === undefined || accountId(identity.accountId)), "thread_identity_invalid");
+    const existing = (await this.ctx.storage.get("threadIndex") || []).find(row => row.threadKey === identity.threadKey);
+    const selection = !existing && identity.accountId === undefined ? await this.accountSelection() : null;
+    // ponytail: account health across DOs is a snapshot; later disconnects fail on the pinned account instead of switching it.
+    const candidates = selection ? (await this.accounts()).filter(row => row.connected && row.directUsageGranted).map(row => row.id) : [];
+    return this.ctx.storage.transaction(async transaction => {
+      const rows = await transaction.get("threadIndex") || [];
+      const found = rows.find(row => row.threadKey === identity.threadKey);
+      if (found) { requireValue(identity.accountId === undefined || found.accountId === identity.accountId, "thread_account_immutable"); found.lastObservedAt = new Date().toISOString(); }
+      else {
+        requireValue(rows.length < 2000, "thread_index_full", 409); let selected = identity.accountId;
+        if (selection) {
+          const current = await transaction.get("accountSelection") || { mode: "fixed", defaultAccountId: await transaction.get("defaultAccountId") || "owner", poolAccountIds: [] };
+          requireValue(JSON.stringify(current) === JSON.stringify(selection), "account_selection_changed", 409);
+          if (selection.mode === "fixed") selected = selection.defaultAccountId;
+          else {
+            const cursor = await transaction.get("accountCursor") || 0, pool = selection.poolAccountIds;
+            const offset = pool.findIndex((_, index) => candidates.includes(pool[(cursor + index) % pool.length]));
+            requireValue(offset >= 0, "account_pool_unavailable", 409); selected = pool[(cursor + offset) % pool.length];
+            await transaction.put("accountCursor", (cursor + offset + 1) % pool.length);
+          }
+          requireValue(candidates.includes(selected), "account_not_connected", 409);
+        }
+        const at = new Date().toISOString(); rows.push({ channelId: identity.channelId, groupId: identity.groupId, rootMessageId: identity.rootMessageId, threadKey: identity.threadKey, accountId: selected, firstObservedAt: at, lastObservedAt: at });
+      }
+      await transaction.put("threadIndex", rows);
+      return rows.find(row => row.threadKey === identity.threadKey);
+    });
+  }
+  async threads() { return (await this.ctx.storage.get("threadIndex") || []).slice().reverse(); }
+  async adminAudit() { return (await this.ctx.storage.get("adminAudit") || []).slice().reverse(); }
+  async adminMutation(action, input, sessionToken, csrf) {
+    // ponytail: human admin mutations share one queue, including OAuth calls; split by account/catalog if concurrent operator throughput grows.
+    const prior = this.managementTail || Promise.resolve();
+    const pending = prior.catch(() => undefined).then(() => this.performAdminMutation(action, input, sessionToken, csrf));
+    this.managementTail = pending;
+    try { return await pending; }
+    catch (error) { if (error instanceof AdminError) return { adminError: error.message, status: error.status }; throw error; }
+    finally { if (this.managementTail === pending) this.managementTail = undefined; }
+  }
+  async performAdminMutation(action, input, sessionToken, csrf) {
+    const session = await this.adminSession(sessionToken);
+    requireValue(session && typeof csrf === "string" && csrf === session.csrf, "admin_csrf_invalid", 403);
+    const actor = session.principal;
+    if (action === "logout") {
+      exactKeys(input, []); await this.ctx.storage.delete(`adminSession:${await hash(sessionToken)}`); await this.audit(actor, "sso.logout", "management"); return { loggedOut: true };
+    }
+    if (action === "account.create") {
+      exactKeys(input, ["expectedEmail"]);
+      const email = string(input.expectedEmail, 254).toLowerCase();
+      requireValue(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email), "account_email_invalid");
+      const rows = await this.accountInventory(); requireValue(rows.length < 20, "account_limit", 409);
+      const id = `account-${crypto.randomUUID()}`;
+      await this.env.Credentials.getByName(id).configureAccount({ expectedEmailHash: await hash(email), label: id });
+      rows.push({ id, label: id, expectedEmail: email, createdAt: new Date().toISOString(), createdBy: actor.subject });
+      await this.ctx.storage.put("adminAccounts", rows); await this.audit(actor, action, id); return { id };
+    }
+    if (action === "account.selection") {
+      exactKeys(input, ["mode", "defaultAccountId", "poolAccountIds"]);
+      requireValue(["fixed", "round_robin"].includes(input.mode) && accountId(input.defaultAccountId) && Array.isArray(input.poolAccountIds) && input.poolAccountIds.length <= 20 && input.poolAccountIds.every(accountId) && new Set(input.poolAccountIds).size === input.poolAccountIds.length, "account_selection_invalid");
+      const accounts = await this.accounts(), connected = accounts.filter(row => row.connected && row.directUsageGranted).map(row => row.id);
+      requireValue(accounts.some(row => row.id === input.defaultAccountId) && input.poolAccountIds.every(id => accounts.some(row => row.id === id)), "account_not_found", 404);
+      requireValue(input.poolAccountIds.every(id => connected.includes(id)) && (input.mode === "fixed" ? connected.includes(input.defaultAccountId) : input.poolAccountIds.length > 0), "account_not_connected", 409);
+      const selection = { mode: input.mode, defaultAccountId: input.defaultAccountId, poolAccountIds: input.poolAccountIds };
+      await this.ctx.storage.transaction(async transaction => {
+        const previous = await transaction.get("accountSelection") || { mode: "fixed", defaultAccountId: await transaction.get("defaultAccountId") || "owner", poolAccountIds: [] };
+        await transaction.put({ accountSelection: selection, defaultAccountId: selection.defaultAccountId });
+        if (JSON.stringify(previous) !== JSON.stringify(selection)) await transaction.put("accountCursor", 0);
+      });
+      await this.audit(actor, action, "new_roots"); return { ...selection, appliesTo: "new_roots_only" };
+    }
+    if (action.startsWith("account.")) {
+      const fields = action === "account.start" ? ["id", "planUsageConfirmed"] : action === "account.complete" ? ["id", "callbackUrl"] : action === "account.disconnect" ? ["id", "confirmed"] : ["id"];
+      exactKeys(input, fields); requireValue(accountId(input.id) && (await this.accountInventory()).some(row => row.id === input.id), "account_not_found", 404);
+      const credentials = input.id === "owner" ? this : this.env.Credentials.getByName(input.id); let result;
+      if (action === "account.start") { requireValue(input.planUsageConfirmed === true, "plan_usage_ui_unconfirmed"); result = await credentials.start(true); }
+      else if (action === "account.refresh") { result = await credentials.refreshStatus(); }
+      else if (action === "account.complete") { string(input.callbackUrl, 16384, "callback_url_invalid"); result = await credentials.complete(input.callbackUrl); }
+      else if (action === "account.disconnect") { requireValue(input.confirmed === true, "disconnect_confirmation_required"); result = await credentials.disconnect(); }
+      else if (action === "account.default") { const status = await credentials.status(); requireValue(status.connected && status.directUsageGranted, "account_not_connected", 409); const selection = { ...await this.accountSelection(), mode: "fixed", defaultAccountId: input.id }; await this.ctx.storage.transaction(async transaction => { await transaction.put({ defaultAccountId: input.id, accountSelection: selection, accountCursor: 0 }); }); result = { ...selection, appliesTo: "new_roots_only" }; }
+      else throw new AdminError("action_not_found", 404);
+      await this.audit(actor, action, input.id); return result;
+    }
+    if (action === "skill.validate") { const skill = validateSkill(input); return { name: skill.name, description: skill.description, bytes: encoder.encode(skill.rawContent).length, resources: skill.resources.map(({ path, size }) => ({ path, size })) }; }
+    if (action === "skill.publish" || action === "skill.toggle") {
+      let rows = await this.ctx.storage.get("skillCatalog") || [], target, revisionRecord = {};
+      if (action === "skill.publish") {
+        const skill = validateSkill(input); target = skill.name;
+        const revision = await hash(JSON.stringify(skill)); skill.version = revision;
+        let row = rows.find(value => value.name === target);
+        requireValue(row || rows.length < 20, "skill_limit", 409);
+        if (!row) { row = { name: target, enabled: false, revisions: [] }; rows.push(row); }
+        requireValue(row.revisions.includes(revision) || row.revisions.length < 100, "skill_revision_limit", 409);
+        if (!row.revisions.includes(revision)) { revisionRecord[`skillRevision:${target}:${revision}`] = skill; row.revisions.push(revision); }
+        Object.assign(row, { description: skill.description, revision, enabled: false, publishedAt: new Date().toISOString(), publishedBy: actor.email });
+      } else {
+        exactKeys(input, ["name", "enabled"]); requireValue(typeof input.enabled === "boolean", "skill_toggle_invalid");
+        const row = rows.find(value => value.name === input.name); requireValue(row, "skill_not_found", 404); target = row.name; row.enabled = input.enabled;
+      }
+      const skills = await Promise.all(rows.filter(row => row.enabled).map(row => revisionRecord[`skillRevision:${row.name}:${row.revision}`] || this.ctx.storage.get(`skillRevision:${row.name}:${row.revision}`)));
+      requireValue(skills.every(Boolean), "skill_revision_missing", 409);
+      requireValue(encoder.encode(JSON.stringify(skills)).length <= 1048576, "skill_manifest_size_limit", 409);
+      const version = await hash(JSON.stringify(skills));
+      await this.ctx.storage.put({ ...revisionRecord, skillCatalog: rows, skillManifestVersion: version, [`skillManifest:${version}`]: { version, skills } });
+      await this.audit(actor, action, target); return { manifestVersion: version, catalog: await this.skillCatalog() };
+    }
+    throw new AdminError("action_not_found", 404);
+  }
+}
+
+const htmlEscape = text => text.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
+function page(env, authenticated) {
+  const nonce = random(), name = htmlEscape(productName(env));
+  const content = authenticated ? `<header><h1>${name}</h1><p id="identity"></p><button id="logout">로그아웃</button></header>
+<section><h2>구독 계정</h2><p>기본 계정 변경은 새 채널톡 원글부터 적용됩니다. 기존 스레드는 연결된 계정을 유지합니다.</p><div id="accounts"></div><form id="account-selection"><label>새 원글의 계정 할당 <select name="mode"><option value="fixed">고정 계정</option><option value="round_robin">선택 계정 순환</option></select></label><label>고정 계정 <select name="defaultAccountId" required></select></label><p>순환 대상은 각 계정에서 직접 선택하세요. 계정별 구독 한도는 그대로 적용됩니다. 잔여 한도에 따른 자동 전환은 하지 않습니다.</p><button>할당 정책 저장</button></form><form id="create-account"><p>표시 이름은 연결 후 확인된 ChatGPT 계정 ID로 자동 지정됩니다. 계정 ID가 제공되지 않으면 등록 ID를 표시합니다.</p><label>연결할 OpenAI 이메일 <input name="expectedEmail" type="email" required></label><button>계정 추가</button></form><label><input id="plan-usage-confirmed" type="checkbox"> 선택한 ChatGPT 계정·워크스페이스의 사용 권한을 연결합니다.</label><div id="connection" hidden><a id="authorize" target="_blank" rel="noopener noreferrer">OpenAI 로그인 열기</a><form id="complete-account"><label>로그인 후 localhost 콜백 주소 전체를 붙여넣으세요 <textarea name="callbackUrl" required spellcheck="false" autocomplete="off"></textarea></label><button>연결 완료</button></form></div></section>
+<section><h2>스킬</h2><p>SKILL.md와 텍스트 참고 파일을 버전으로 저장합니다. 새 스킬은 활성화한 뒤 사용할 수 있습니다.</p><div id="skills"></div><form id="skill-form"><label>SKILL.md <textarea name="rawContent" required spellcheck="false" placeholder="---&#10;name: example&#10;description: 스킬 설명&#10;---&#10;Instructions"></textarea></label><label>텍스트 참고 파일 JSON (선택) <textarea name="resources" spellcheck="false" placeholder='[{"path":"references/example.md","kind":"reference","content":"Reference text"}]'></textarea></label><button type="button" id="validate-skill">검사</button><button>새 버전 저장</button></form><pre id="skill-validate-result"></pre></section>
+<section><h2>수신한 팀 채팅 스레드</h2><button id="refresh">새로고침</button><div id="threads"></div><a id="export-thread" class="button" hidden>선택한 스레드 JSON 다운로드</a><div id="thread-controls" hidden><h3 id="selected-thread"></h3><p id="thread-settings"></p><p>직원 채팅에서는 /ai model, /ai thinking을 사용할 수 있습니다. 나머지 설정은 이 관리 화면에서 변경합니다.</p><form id="thread-model"><label>모델 <select name="args" required></select></label><button>모델 적용</button></form><form id="thread-thinking"><label>사고 수준 <select name="args" required></select></label><button>사고 수준 적용</button></form><form id="thread-name"><label>세션 이름 <input name="args" maxlength="128" required></label><button>이름 저장</button></form><form id="thread-resume"><label>전환할 세션 <select name="args" required></select></label><button>세션 전환</button></form><form id="thread-fork"><label>분기할 사용자 메시지 <select name="args" required></select></label><button>이 메시지에서 분기</button></form><button type="button" data-thread-action="new">새 세션</button><button type="button" data-thread-action="clone">현재 세션 복제</button><button type="button" data-thread-action="reload">스킬 새로고침</button><p>문맥 압축은 현재 지원하지 않습니다.</p><pre id="thread-control-result"></pre></div><pre id="thread-history"></pre></section><section><h2>구독 연결 테스트</h2><p>표시한 수치는 이 Cloud Agent에서 측정한 모델 토큰입니다. 구독 전체 잔여 한도는 제공되지 않습니다. <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer">ChatGPT 사용량 관리</a></p><form id="ask"><label>테스트할 계정 <select name="account" required></select></label><label>테스트 요청 <input name="prompt" required maxlength="8000" value="Reply SUBSCRIPTION_OK only."></label><button>테스트 실행</button></form><pre id="ask-result"></pre></section><section><h2>관리 기록</h2><pre id="audit"></pre></section><p id="notice" role="status"></p>` : `<main><h1>${name}</h1><p>SSO로 로그인하면 계정, 승인한 스킬, 직원 스레드를 관리할 수 있습니다.</p><a class="button" href="/auth/login">SSO 로그인</a></main>`;
+  const script = authenticated ? `<script nonce="${nonce}">
+const $=id=>document.getElementById(id); let csrf, connecting, selectedRoot; const pendingControls=new Map();
+const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function api(path,body){const options=body===undefined?{}:{method:'POST',headers:{'content-type':'application/json','x-csrf-token':csrf},body:JSON.stringify(body)};const r=await fetch(path,{...options,credentials:'same-origin'});const data=await r.json();if(!r.ok)throw Error(data.error||'request_failed');return data;}
+async function run(fn){$('notice').textContent='처리 중…';try{await fn();$('notice').textContent='완료';}catch(e){$('notice').textContent=e.message==='skill_manifest_size_limit'?'활성 스킬 합계가 1MiB를 넘습니다. 일부 스킬을 비활성화하거나 참고 파일 크기를 줄이세요.':e.message==='thread_busy'?'이 스레드가 답변을 처리 중입니다. 기존 답변이 끝난 뒤 다시 실행하세요.':e.message;}}
+const tokens=value=>Number.isSafeInteger(value)&&value>=0?value.toLocaleString():'제공되지 않음';
+function accountView(a,data){const i=a.identity?.source==='verified_id_token'?a.identity:null,u=a.usage?.source==='pi_committed_usage'?a.usage:null;return '<article><strong>'+esc(a.label)+'</strong> '+esc(data.accountSelection.mode==='fixed'&&a.id===data.defaultAccountId?'새 원글의 고정 계정':'')+'<p>'+esc(a.connected?'연결됨 · '+a.subjectFingerprint+' · 만료 '+a.expiresAt:'연결 해제됨')+'</p><p>검증 이메일: '+esc(i?.email||'제공되지 않음')+'<br>ChatGPT 계정 ID: '+esc(i?.accountId||'제공되지 않음')+'<br>플랜: '+esc(i?.planType||'제공되지 않음')+'<br>워크스페이스: '+esc(i?.workspace?[(i.workspace.title||''),i.workspace.id].filter(Boolean).join(' · '):'제공되지 않음')+'<br>조직: '+esc(Array.isArray(i?.organizations)?i.organizations.map(o=>[o.title,o.id,o.role].filter(Boolean).join(' · ')).join(', ')||'제공되지 않음':'제공되지 않음')+'</p>'+(a.expectedEmail?'<p>설정 이메일: '+esc(a.expectedEmail)+'</p>':'')+(!i?'<p>기존 연결은 유지됩니다. 정보 새로고침으로 확인하세요. 로그인 정보가 제공되지 않으면 다시 연결할 수 있습니다.</p>':'<small>검증 시각 '+esc(i.verifiedAt)+'</small>')+(u?'<p>이 Cloud Agent에서 측정한 모델 토큰 · '+'최초 집계 '+esc(u.collectionStartedAt||'제공되지 않음')+' · 마지막 집계 '+esc(u.lastUpdated||'제공되지 않음')+'<br>입력 '+tokens(u.input)+' · 출력 '+tokens(u.output)+' · 전체 '+tokens(u.totalTokens)+' 토큰<br>캐시 읽기 '+tokens(u.cacheRead)+' · 캐시 쓰기 '+tokens(u.cacheWrite)+(u.reasoning===undefined?'':' · 사고 '+tokens(u.reasoning)+' (출력에 포함)')+'</p>':'<p>사용량 측정 전입니다.</p>')+'<label><input type="checkbox" data-pool="'+esc(a.id)+'" '+(data.accountSelection.poolAccountIds.includes(a.id)?'checked':'')+'> 새 원글 순환 대상</label><button data-action="connect" data-id="'+esc(a.id)+'">연결 / 다시 연결</button> <button data-action="refresh" data-id="'+esc(a.id)+'" '+(a.connected?'':'disabled')+'>정보 새로고침</button> <button data-action="default" data-id="'+esc(a.id)+'">새 원글의 고정 계정</button> <button data-action="disconnect" data-id="'+esc(a.id)+'">연결 해제</button></article>';}
+async function refresh(){const data=await api('/api/overview');csrf=data.csrf;$('identity').textContent=data.principal.email+' · Super Admin';$('accounts').innerHTML=data.accounts.map(a=>accountView(a,data)).join('');$('account-selection').elements.mode.value=data.accountSelection.mode;const choices=data.accounts.map(a=>'<option value="'+esc(a.id)+'">'+esc(a.label)+'</option>').join('');$('account-selection').elements.defaultAccountId.innerHTML=choices;$('account-selection').elements.defaultAccountId.value=data.defaultAccountId;const currentTest=$('ask').elements.account.value;$('ask').elements.account.innerHTML='<option value="">계정을 선택하세요</option>'+data.accounts.filter(a=>a.connected&&a.directUsageGranted).map(a=>'<option value="'+esc(a.id)+'">'+esc(a.label)+'</option>').join('');$('ask').elements.account.value=currentTest;$('skills').innerHTML=data.skills.map(s=>'<article><strong>'+esc(s.name)+'</strong> '+esc(s.enabled?'활성':'비활성')+'<p>'+esc(s.description)+'</p><small>'+esc(s.revision)+'</small> <button data-skill="'+esc(s.name)+'" data-enabled="'+String(!s.enabled)+'">'+(s.enabled?'비활성화':'활성화')+'</button> <button data-edit="'+esc(s.name)+'">새 버전 작성</button></article>').join('')||'<p>저장된 스킬이 없습니다.</p>';$('threads').innerHTML=data.threads.map(t=>'<p><button data-root="'+esc(t.rootMessageId)+'">'+esc(t.rootMessageId)+'</button> · '+esc(t.accountId)+'</p>').join('')||'<p>아직 등록된 원글이 없습니다.</p>';$('audit').textContent=JSON.stringify(data.audit.slice(0,30),null,2);}
+$('account-selection').onsubmit=e=>{e.preventDefault();run(async()=>{const data=Object.fromEntries(new FormData(e.target));await api('/api/accounts/selection',{...data,poolAccountIds:[...$('accounts').querySelectorAll('input[data-pool]:checked')].map(input=>input.dataset.pool)});await refresh();});};
+$('accounts').onclick=e=>{const b=e.target.closest('button[data-action]');if(!b)return;run(async()=>{const id=b.dataset.id;if(b.dataset.action==='connect'){if(!$('plan-usage-confirmed').checked)throw Error('선택한 계정·워크스페이스의 사용 권한 확인을 먼저 체크하세요');const r=await api('/api/accounts/start',{id,planUsageConfirmed:true});connecting=id;$('authorize').href=r.authorizationUrl;$('connection').hidden=false;}else if(b.dataset.action==='disconnect'){if(!confirm('이 계정의 연결을 해제할까요? 다시 연결할 때까지 이 계정을 쓰는 스레드는 답변할 수 없습니다.'))return;await api('/api/accounts/disconnect',{id,confirmed:true});await refresh();}else{await api(b.dataset.action==='refresh'?'/api/accounts/refresh':'/api/accounts/default',{id});await refresh();}});};
+$('create-account').onsubmit=e=>{e.preventDefault();run(async()=>{await api('/api/accounts/create',Object.fromEntries(new FormData(e.target)));e.target.reset();await refresh();});};
+$('complete-account').onsubmit=e=>{e.preventDefault();run(async()=>{const callbackUrl=new FormData(e.target).get('callbackUrl');try{await api('/api/accounts/complete',{id:connecting,callbackUrl});$('connection').hidden=true;$('authorize').removeAttribute('href');await refresh();}finally{e.target.reset();}});};
+function skillInput(){const data=Object.fromEntries(new FormData($('skill-form')));return{rawContent:data.rawContent,resources:data.resources.trim()?JSON.parse(data.resources):[]};}
+$('validate-skill').onclick=()=>run(async()=>{$('skill-validate-result').textContent=JSON.stringify(await api('/api/skills/validate',skillInput()),null,2);});$('skill-form').onsubmit=e=>{e.preventDefault();run(async()=>{await api('/api/skills/publish',skillInput());await refresh();});};
+$('skills').onclick=e=>{const edit=e.target.closest('button[data-edit]');if(edit){run(async()=>{const skill=await api('/api/skills/source?name='+encodeURIComponent(edit.dataset.edit));$('skill-form').elements.rawContent.value=skill.rawContent;$('skill-form').elements.resources.value=JSON.stringify((skill.resources||[]).map(({path,kind,content,encoding,mimeType})=>({path,kind,content,encoding,mimeType})),null,2);$('skill-form').scrollIntoView({behavior:'smooth'});});return;}const b=e.target.closest('button[data-skill]');if(b)run(async()=>{await api('/api/skills/toggle',{name:b.dataset.skill,enabled:b.dataset.enabled==='true'});await refresh();});};
+function settingsView(s){$('thread-settings').textContent='계정 '+s.selected.accountId+' · 세션 '+s.selected.sessionId+' · '+s.model.label+' · '+s.thinking.label;$('thread-name').elements.args.value=s.selected.name||'';const options=(items,key,label)=>items.map(item=>'<option value="'+esc(item[key])+'">'+esc(item[label]||item[key])+'</option>').join('');$('thread-model').elements.args.innerHTML=options(s.models,'id','label');$('thread-model').elements.args.value=s.model.id;$('thread-thinking').elements.args.innerHTML=options(s.thinkingChoices,'value','label');$('thread-thinking').elements.args.value=s.thinking.value;$('thread-resume').elements.args.innerHTML=options(s.sessions,'id','name');$('thread-resume').elements.args.value=s.selected.sessionId;$('thread-fork').elements.args.innerHTML=options(s.userEntries,'id','preview');$('thread-fork').querySelector('button').disabled=!s.userEntries.length;}
+async function selectRoot(root){selectedRoot=root;$('thread-controls').hidden=true;$('export-thread').hidden=true;$('thread-control-result').textContent='';const [history,settings]=await Promise.all([api('/api/threads/history?root='+encodeURIComponent(root)),api('/api/threads/settings?root='+encodeURIComponent(root))]);if(selectedRoot!==root)return;$('thread-history').textContent=JSON.stringify(history,null,2);$('selected-thread').textContent='원글 '+root;settingsView(settings);$('thread-controls').hidden=false;$('export-thread').href='/api/threads/export?root='+encodeURIComponent(root);$('export-thread').hidden=false;}
+async function threadControl(action,args=''){const root=selectedRoot;if(!root)throw Error('관리할 스레드를 먼저 선택하세요');const key=JSON.stringify([root,action,args]);if(!pendingControls.has(key))pendingControls.set(key,'admin-'+crypto.randomUUID());const result=await api('/api/threads/control',{root,action,args,operationId:pendingControls.get(key)});if(selectedRoot===root){$('thread-control-result').textContent=result.status==='uncertain'?'실행 결과를 확정할 수 없습니다. 같은 작업을 재실행해도 중복 처리하지 않습니다. 이력을 확인하세요.':result.message;settingsView(result.settings);const history=await api('/api/threads/history?root='+encodeURIComponent(root));if(selectedRoot===root)$('thread-history').textContent=JSON.stringify(history,null,2);}if(result.status==='done')pendingControls.delete(key);}
+for(const action of ['model','thinking','name','resume','fork'])$('thread-'+action).onsubmit=e=>{e.preventDefault();run(()=>threadControl(action,new FormData(e.target).get('args')));};$('thread-controls').onclick=e=>{const button=e.target.closest('button[data-thread-action]');if(button)run(()=>threadControl(button.dataset.threadAction));};$('threads').onclick=e=>{const b=e.target.closest('button[data-root]');if(b)run(()=>selectRoot(b.dataset.root));};
+$('ask').onsubmit=e=>{e.preventDefault();run(async()=>{const data=new FormData(e.target);$('ask-result').textContent=JSON.stringify(await api('/ask?thread=manual-test&account='+encodeURIComponent(data.get('account')),{prompt:data.get('prompt'),operationId:'manual-'+crypto.randomUUID()}),null,2);await refresh();});};$('refresh').onclick=()=>run(refresh);$('logout').onclick=()=>run(async()=>{await api('/api/logout',{});location.assign('/');});run(async()=>{await refresh();const root=new URLSearchParams(location.search).get('root');if(root)await selectRoot(root);});
+</script>` : "";
+  return new Response(`<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${name}</title><style nonce="${nonce}">:root{font-family:system-ui,sans-serif;color:#142d36;background:#f3f7f8}body{max-width:1040px;margin:0 auto;padding:28px}header,main,section{background:white;border:1px solid #dce5e8;border-radius:16px;padding:24px;margin-bottom:20px}h1{font-size:30px;margin:0 0 10px}h2{font-size:22px}p{line-height:1.6;color:#49616b}article{padding:14px 0;border-top:1px solid #e3eaed}label{display:block;margin:12px 0}input,textarea,select{box-sizing:border-box;display:block;width:100%;padding:10px;border:1px solid #aac0c9;border-radius:8px;font:inherit}input[type=checkbox]{display:inline;width:auto}textarea{min-height:120px;font-family:monospace}button,.button{display:inline-block;background:#126c70;color:white;border:0;border-radius:8px;padding:10px 14px;cursor:pointer;margin:4px 4px 4px 0;text-decoration:none}button:disabled{opacity:.55;cursor:default}small,pre{overflow-wrap:anywhere}pre{white-space:pre-wrap;background:#f5f8fa;padding:12px;border-radius:8px;max-height:480px;overflow:auto}#notice{position:sticky;bottom:8px;padding:12px;background:#dff2ee;border-radius:8px}a{color:#126c70}button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:3px solid #65b8be;outline-offset:2px}</style></head><body>${content}${script}</body></html>`, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer", "x-content-type-options": "nosniff", "content-security-policy": `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'` } });
+}
+
+export async function adminRoute(request, env) {
+  try {
+    const url = new URL(request.url);
+    requireValue(env.PUBLIC_ORIGIN && url.origin === env.PUBLIC_ORIGIN && url.protocol === "https:", "canonical_origin_required", 421);
+    const owner = env.Credentials.getByName("owner"), path = url.pathname;
+    if (request.method === "GET" && path === "/health") return response({ service: productName(env), status: "ok" });
+    if (request.method === "GET" && path === "/auth/login") { const login = await owner.startSso(); return redirect(login.location, { "set-cookie": cookieHeader(ATTEMPT, login.browser, 600) }); }
+    if (request.method === "GET" && path === "/auth/callback") {
+      requireValue([...url.searchParams.keys()].every(key => ["code", "state", "iss", "error", "error_description"].includes(key) && url.searchParams.getAll(key).length === 1), "sso_callback_invalid");
+      const login = await owner.completeSso(Object.fromEntries(url.searchParams), cookie(request, ATTEMPT));
+      const old = cookie(request, SESSION); if (old) { const prior = await owner.adminSession(old); if (prior) await owner.adminMutation("logout", {}, old, prior.csrf); }
+      const headers = new Headers({ location: "/", "cache-control": "no-store", "referrer-policy": "no-referrer" });
+      headers.append("set-cookie", cookieHeader(ATTEMPT, "", 0)); headers.append("set-cookie", cookieHeader(SESSION, login.session, login.maxAge));
+      return new Response(null, { status: 303, headers });
+    }
+    const sessionToken = cookie(request, SESSION), session = await owner.adminSession(sessionToken);
+    if (request.method === "GET" && ["/", "/login"].includes(path)) return page(env, !!session);
+    const diagnostic = env.DIAGNOSTIC_READS_ENABLED === "true" && request.method === "GET" && ["/status", "/channel/status", "/channel/history", "/history"].includes(path) && env.PROBE_KEY_SHA256 && request.headers.get("authorization")?.startsWith("Bearer ") && await hash(request.headers.get("authorization").slice(7)) === env.PROBE_KEY_SHA256;
+    requireValue(session || diagnostic, "sso_login_required", 401);
+    if (request.method === "GET") {
+      if (path === "/status") return response(await owner.status());
+      if (path === "/channel/status") return response(await owner.channelStatus());
+      if (path === "/history") { requireValue(url.searchParams.get("thread") === "manual-test", "diagnostic_thread_invalid"); return response({ thread: "manual-test", entries: await env.Assistant.getByName("manual-test").history() }); }
+      if (path === "/api/threads/settings") {
+        const root = url.searchParams.get("root"); requireValue(nativeId(root), "thread_root_invalid");
+        const observed = (await owner.threads()).find(row => row.rootMessageId === root); requireValue(observed, "thread_not_observed", 404);
+        return response(await env.Assistant.getByName(observed.threadKey).adminSettings());
+      }
+      if (path === "/channel/history" || path === "/api/threads/history" || path === "/api/threads/export") {
+        const root = url.searchParams.get("root"); requireValue(nativeId(root), "thread_root_invalid");
+        if (path.startsWith("/api/")) requireValue((await owner.threads()).some(row => row.rootMessageId === root), "thread_not_observed", 404);
+        const scope = channelScope(env);
+        const threadKey = `channel-${await hash(JSON.stringify([scope.channelId, scope.groupId, root]))}`;
+        const history = { threadKey, ...await env.Assistant.getByName(threadKey).channelHistory() };
+        const bounded = path.startsWith("/api/") ? { ...history, entries: (history.entries || []).slice(-200), receipts: (history.receipts || []).slice(-50), displayLimits: { entries: 200, receipts: 50 } } : history;
+        requireValue(encoder.encode(JSON.stringify(bounded)).length <= 1048576, "thread_history_too_large", 413);
+        return response(bounded, 200, path.endsWith("/export") ? { "content-disposition": `attachment; filename="thread-${root.replace(/[^A-Za-z0-9_-]/g, "_")}.json"` } : {});
+      }
+      if (path === "/api/overview") { const [accounts, snapshot, skills, threads, audit, accountSelection] = await Promise.all([owner.accounts(), owner.controlSnapshot(), owner.skillCatalog(), owner.threads(), owner.adminAudit(), owner.accountSelection()]); return response({ principal: session.principal, csrf: session.csrf, expiresAt: session.expiresAt, accounts, defaultAccountId: accountSelection.defaultAccountId, accountSelection, manifestVersion: snapshot.manifest.version, skills, threads, audit }); }
+      if (path === "/api/skills/source") { const skill = await owner.skillSource(url.searchParams.get("name"), url.searchParams.get("revision") || undefined); requireValue(skill, "skill_not_found", 404); return response(skill); }
+      throw new AdminError("route_not_found", 404);
+    }
+    requireValue(request.method === "POST", "method_not_allowed", 405);
+    requireValue(session && request.headers.get("origin") === env.PUBLIC_ORIGIN && request.headers.get("x-csrf-token") === session.csrf && request.headers.get("content-type")?.split(";")[0].trim() === "application/json", "admin_csrf_invalid", 403);
+    const raw = await boundedText(request, 400000, "request_too_large", 413);
+    let input; try { input = JSON.parse(raw); } catch { throw new AdminError("invalid_json"); }
+    if (path === "/api/threads/control") {
+      exactKeys(input, ["root", "operationId", "action", "args"]); requireValue(nativeId(input.root), "thread_root_invalid");
+      requireValue(typeof input.operationId === "string" && /^admin-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(input.operationId), "operation_id_invalid");
+      requireValue(["model", "thinking", "new", "resume", "name", "clone", "fork", "reload"].includes(input.action) && typeof input.args === "string" && encoder.encode(input.args).length <= 500 && !input.args.includes("\0"), "thread_control_invalid");
+      const observed = (await owner.threads()).find(row => row.rootMessageId === input.root); requireValue(observed, "thread_not_observed", 404);
+      const result = await env.Assistant.getByName(observed.threadKey).adminControl({ operationId: input.operationId, action: input.action, args: input.args });
+      await owner.audit(session.principal, `thread.${input.action}`, input.root, result.status);
+      return response(result);
+    }
+    if (path === "/ask") {
+      exactKeys(input, ["prompt", "operationId"]); requireValue(url.searchParams.get("thread") === "manual-test", "manual_thread_invalid");
+      const prompt = string(input.prompt, 16384); requireValue(typeof input.operationId === "string" && /^manual-[A-Za-z0-9-]{1,128}$/.test(input.operationId), "operation_id_invalid");
+      const selected = url.searchParams.get("account") || "owner"; requireValue(accountId(selected), "account_not_found", 404);
+      const account = (await owner.accounts()).find(row => row.id === selected); requireValue(account, "account_not_found", 404); requireValue(account.connected && account.directUsageGranted, "account_not_connected", 409);
+      return response(await env.Assistant.getByName(selected === "owner" ? "manual-test" : `manual-${selected}`).manualAsk(prompt, input.operationId, selected));
+    }
+    const actions = { "/api/logout": "logout", "/api/accounts/create": "account.create", "/api/accounts/start": "account.start", "/api/accounts/complete": "account.complete", "/api/accounts/disconnect": "account.disconnect", "/api/accounts/default": "account.default", "/api/accounts/selection": "account.selection", "/api/accounts/refresh": "account.refresh", "/api/skills/validate": "skill.validate", "/api/skills/publish": "skill.publish", "/api/skills/toggle": "skill.toggle" };
+    requireValue(actions[path], "route_not_found", 404);
+    const result = await owner.adminMutation(actions[path], input, sessionToken, session.csrf);
+    if (result.adminError) throw new AdminError(result.adminError, result.status);
+    return response(result, 200, path === "/api/logout" ? { "set-cookie": cookieHeader(SESSION, "", 0) } : {});
+  } catch (error) {
+    const safe = error instanceof AdminError ? error.message : /^[a-z][a-z0-9_]{0,80}$/.test(error?.message || "") ? error.message : "management_request_failed";
+    const remoteStatus = safe === "thread_busy" ? 409 : ["super_admin_required", "sso_email_unverified"].includes(safe) ? 403 : ["sso_network_error", "sso_request_failed", "sso_response_invalid"].includes(safe) ? 502 : ["sso_configuration_invalid", "sso_issuer_mismatch", "sso_endpoint_invalid", "sso_protocol_unsupported", "sso_client_not_configured", "sso_policy_invalid"].includes(safe) ? 503 : safe === "sso_busy" ? 429 : 400;
+    return response({ error: safe }, error instanceof AdminError ? error.status : remoteStatus);
+  }
+}

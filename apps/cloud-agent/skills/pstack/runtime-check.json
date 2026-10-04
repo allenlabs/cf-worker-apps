@@ -1,0 +1,26 @@
+{
+  "status": "NOT_INSTALLED",
+  "passed": true,
+  "nativeValidator": true,
+  "nativePublishAndActivation": true,
+  "exactResourceRetention": true,
+  "idempotentPublish": true,
+  "enabledManifestBytes": 526913,
+  "checked": [
+    {
+      "name": "pstack",
+      "bytes": 3607,
+      "resourceBytes": 246048,
+      "resources": 8
+    },
+    {
+      "name": "pstack-library",
+      "bytes": 2353,
+      "resourceBytes": 258791,
+      "resources": 5
+    }
+  ],
+  "networkRequests": 0,
+  "inferenceRequests": 0,
+  "productionChanges": 0
+}

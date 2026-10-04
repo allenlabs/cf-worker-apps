@@ -1,0 +1,41 @@
+{
+  "name": "@cf-worker-apps/notion-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Central Notion integration gateway — holds OAuth tokens for connected Notion workspaces; consumer apps (PM, MyPanel, …) call in via HMAC-signed JSON.",
+  "type": "module",
+  "scripts": {
+    "dev:api": "wrangler dev --config workers/api/wrangler.toml",
+    "dev:web": "wrangler dev --config workers/web/wrangler.toml",
+    "deploy:api": "wrangler deploy --config workers/api/wrangler.toml",
+    "deploy:web": "wrangler deploy --config workers/web/wrangler.toml",
+    "deploy": "npm run deploy:api && npm run deploy:web",
+    "//db:env": "DATABASE_URL must be set from pass-cli item 'Allenlabs PostgreSQL Hetzner' (the allenlabs DB connection string).",
+    "db:migrate": "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f drizzle-pg/0001_initial.sql && psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f drizzle-pg/0002_webhooks.sql",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@microlabs/otel-cf-workers": "^1.0.0-rc.52",
+    "@notionhq/client": "^5.22.0",
+    "drizzle-orm": "0.45.2",
+    "hono": "4.6.20",
+    "jose": "6.2.3",
+    "postgres": "^3.4.5",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "4.20260521.1",
+    "@electric-sql/pglite": "^0.4.5",
+    "@types/node": "^22.19.19",
+    "@vitest/coverage-v8": "4.1.7",
+    "typescript": "5.7.2",
+    "vitest": "4.1.7",
+    "wrangler": "4.93.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

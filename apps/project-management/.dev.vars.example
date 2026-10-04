@@ -1,0 +1,14 @@
+# Copy to .dev.vars and fill in.  Used by `wrangler dev` / `vinxi dev` locally.
+
+# Required: random 32+ byte secret used to sign session JWTs.
+# Generate with: openssl rand -base64 48
+JWT_SECRET="change-me-to-a-long-random-string"
+
+# Public base URL (used for GitHub OAuth callback construction).
+PUBLIC_BASE_URL="http://localhost:3000"
+
+# Optional: GitHub OAuth (leave blank to disable GitHub login).
+# Create an OAuth App at https://github.com/settings/developers
+# Authorization callback URL: {PUBLIC_BASE_URL}/oauth/github/callback
+GITHUB_OAUTH_CLIENT_ID=""
+GITHUB_OAUTH_CLIENT_SECRET=""

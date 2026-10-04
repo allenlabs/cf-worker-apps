@@ -1,0 +1,19 @@
+name = "cf-observe-tail"
+main = "../../src/collectors/tail.js"
+compatibility_date = "2026-08-15"
+workers_dev = false
+
+[[services]]
+binding = "OBSERVE"
+service = "cf-observe"
+
+[vars]
+ENVIRONMENT = "production"
+
+[limits]
+cpu_ms = 10000
+
+# Never attach this Tail Worker to cf-observe or to itself.
+# This consumer deliberately has no R2/DO bindings and no public HTTP endpoint.
+[observability]
+enabled = false

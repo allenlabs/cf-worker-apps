@@ -1,0 +1,2 @@
+PASS: ingestion, idempotency, auth separation, immediate query and raw inspection (17ms on this run; not an SLA).
+PASS: same event is readable from the R2 archive. Synthetic record is retained by design.

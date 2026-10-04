@@ -1,0 +1,423 @@
+import { beforeEach, describe, expect, it } from 'vitest';
+import { eq } from 'drizzle-orm';
+import {
+  type TestDB,
+  insertProject,
+  insertUser,
+  makeTestDb,
+} from '../../src/testing/db';
+import { activities, issueLabels, issues, journals, labels, watchers } from '@allenlabs/pm-core/db/schema';
+import { type CurrentUser } from '@allenlabs/pm-core/server/auth';
+import {
+  countIssuesImpl,
+  createIssueImpl,
+  deleteIssueImpl,
+  getIssueImpl,
+  listIssuesImpl,
+  updateIssueImpl,
+  watchIssueImpl,
+} from '../../src/server/issues';
+import { createPmHost } from '../../src/host/create-host';
+import { findOrCreateSiteImpl } from '../../src/server/sites';
+
+// issues.ts is host-agnostic; a plugin-less host exercises the dispatch points
+// (no-ops) while keeping this suite focused on the core issue logic. Feature
+// reactions (labels/relations/rollup/notifications) are tested in their own
+// packages / the app integration suite.
+const host = createPmHost([]);
+
+let db: TestDB;
+let alice: CurrentUser;
+let projectId: number;
+
+beforeEach(async () => {
+  db = await makeTestDb();
+  const u = await insertUser(db, { login: 'alice' });
+  alice = {
+    id: u.id,
+    login: u.login,
+    email: u.email,
+    firstname: '',
+    lastname: '',
+    isAdmin: false,
+    avatarUrl: null,
+  };
+  const p = await insertProject(db);
+  projectId = p.id;
+});
+
+async function seedIssue(overrides: Partial<{ subject: string; trackerId: number; description: string }> = {}) {
+  return createIssueImpl(db, alice, {
+    projectId,
+    trackerId: overrides.trackerId ?? 1,
+    subject: overrides.subject ?? 'A bug',
+    description: overrides.description ?? 'It broke',
+    doneRatio: 0,
+  }, host);
+}
+
+describe('createIssueImpl', () => {
+  it('uses default status + priority when not provided', async () => {
+    const i = await seedIssue();
+    expect(i.statusId).toBe(1); // New (default in seed)
+    expect(i.priorityId).toBe(2); // Normal (default in seed)
+    expect(i.authorId).toBe(alice.id);
+  });
+
+  it('records a project activity', async () => {
+    await seedIssue({ subject: 'log me' });
+    const act = await db.query.activities.findFirst();
+    expect(act?.kind).toBe('issue_created');
+    expect(act?.title).toContain('log me');
+  });
+
+  it('honours explicit status/priority', async () => {
+    const i = await createIssueImpl(db, alice, {
+      projectId,
+      trackerId: 1,
+      subject: 'x',
+      description: '',
+      statusId: 3,
+      priorityId: 4,
+      doneRatio: 50,
+    }, host);
+    expect(i.statusId).toBe(3);
+    expect(i.priorityId).toBe(4);
+    expect(i.doneRatio).toBe(50);
+  });
+
+  it('throws if default status/priority missing', async () => {
+    // wipe seeded defaults
+    await db.delete((await import('@allenlabs/pm-core/db/schema')).issueStatuses);
+    await expect(seedIssue()).rejects.toThrow(/Default status/);
+  });
+
+  it('allocates a per-project sequential number (RED-1, RED-2 …)', async () => {
+    const first = await seedIssue({ subject: 'one' });
+    const second = await seedIssue({ subject: 'two' });
+    expect(first.number).toBe(1);
+    expect(second.number).toBe(2);
+    // A second project numbers independently from 1.
+    const other = await insertProject(db, { identifier: 'other', key: 'OTH' });
+    const otherFirst = await createIssueImpl(db, alice, {
+      projectId: other.id,
+      trackerId: 1,
+      subject: 'o1',
+      description: '',
+      doneRatio: 0,
+    }, host);
+    expect(otherFirst.number).toBe(1);
+  });
+
+  it('throws when the project does not exist', async () => {
+    await expect(
+      createIssueImpl(db, alice, {
+        projectId: 999999,
+        trackerId: 1,
+        subject: 'ghost',
+        description: '',
+        doneRatio: 0,
+      }, host),
+    ).rejects.toThrow(/not found/);
+  });
+});
+
+describe('listIssuesImpl', () => {
+  beforeEach(async () => {
+    await seedIssue({ subject: 'open one' });
+    const closed = await seedIssue({ subject: 'will close' });
+    await db.update(issues).set({ statusId: 5 }).where(eq(issues.id, closed.id)); // Closed (is_closed=1)
+    await seedIssue({ subject: 'second open' });
+  });
+
+  it('returns only open by default', async () => {
+    const list = await listIssuesImpl(db, { projectId });
+    expect(list.map((i) => i.subject).sort()).toEqual(['open one', 'second open']);
+  });
+
+  it('exposes the per-project number and project key on each row', async () => {
+    const list = await listIssuesImpl(db, { projectId, statusFilter: 'all', sort: 'id' });
+    for (const row of list) {
+      expect(row.projectKey).toBe('DEMO'); // insertProject('demo') → key DEMO
+      expect(row.number).toBeGreaterThan(0);
+    }
+  });
+
+  it('returns only closed when requested', async () => {
+    const list = await listIssuesImpl(db, { projectId, statusFilter: 'closed' });
+    expect(list.map((i) => i.subject)).toEqual(['will close']);
+  });
+
+  it('returns all when statusFilter=all', async () => {
+    const list = await listIssuesImpl(db, { projectId, statusFilter: 'all' });
+    expect(list).toHaveLength(3);
+  });
+
+  it('full-text matches subject and description', async () => {
+    const list = await listIssuesImpl(db, { projectId, statusFilter: 'all', q: 'close' });
+    expect(list.map((i) => i.subject)).toEqual(['will close']);
+  });
+
+  it('filters by label', async () => {
+    const tagged = await seedIssue({ subject: 'tagged' });
+    const [label] = await db.insert(labels).values({ projectId, name: 'urgent' }).returning();
+    await db.insert(issueLabels).values({ issueId: tagged.id, labelId: label!.id });
+    const list = await listIssuesImpl(db, { projectId, statusFilter: 'all', label: label!.id });
+    expect(list.map((i) => i.subject)).toEqual(['tagged']);
+  });
+
+  it('respects assignee + tracker filters', async () => {
+    const u = await insertUser(db, { login: 'bob', email: 'b@x.test' });
+    const mine = await seedIssue({ subject: 'mine' });
+    await db.update(issues).set({ assignedToId: u.id }).where(eq(issues.id, mine.id));
+    const a = await listIssuesImpl(db, { projectId, statusFilter: 'all', assignee: u.id });
+    expect(a.map((i) => i.subject)).toEqual(['mine']);
+    const t = await listIssuesImpl(db, { projectId, statusFilter: 'all', tracker: 1 });
+    expect(t.length).toBeGreaterThan(0);
+  });
+
+  it('supports priority and id sort orders', async () => {
+    const byPriority = await listIssuesImpl(db, { projectId, statusFilter: 'all', sort: 'priority' });
+    expect(byPriority.length).toBe(3);
+    const byId = await listIssuesImpl(db, { projectId, statusFilter: 'all', sort: 'id' });
+    expect(byId[0]!.id).toBeGreaterThan(byId[byId.length - 1]!.id);
+  });
+
+  it('countIssuesImpl matches the same filters', async () => {
+    expect(await countIssuesImpl(db, { projectId, statusFilter: 'all' })).toBe(3);
+    expect(await countIssuesImpl(db, { projectId, statusFilter: 'open' })).toBe(2);
+    expect(await countIssuesImpl(db, { projectId, statusFilter: 'closed' })).toBe(1);
+  });
+
+  it('paginates with limit + offset', async () => {
+    const p1 = await listIssuesImpl(db, { projectId, statusFilter: 'all', sort: 'id', limit: 2, offset: 0 });
+    const p2 = await listIssuesImpl(db, { projectId, statusFilter: 'all', sort: 'id', limit: 2, offset: 2 });
+    expect(p1).toHaveLength(2);
+    expect(p2).toHaveLength(1);
+    const ids = new Set([...p1, ...p2].map((i) => i.id));
+    expect(ids.size).toBe(3); // no overlap across pages
+  });
+
+  it('filters by priority, version, and category', async () => {
+    const { versions, issueCategories } = await import('@allenlabs/pm-core/db/schema');
+    const [ver] = await db
+      .insert(versions)
+      .values({ projectId, name: 'v1', description: '', sharing: 'none' })
+      .returning();
+    const [cat] = await db
+      .insert(issueCategories)
+      .values({ projectId, name: 'cat' })
+      .returning();
+    const target = await seedIssue({ subject: 'targeted' });
+    await db
+      .update(issues)
+      .set({ priorityId: 4, fixedVersionId: ver!.id, categoryId: cat!.id })
+      .where(eq(issues.id, target.id));
+
+    expect((await listIssuesImpl(db, { projectId, statusFilter: 'all', priority: 4 })).map((i) => i.subject)).toEqual(['targeted']);
+    expect((await listIssuesImpl(db, { projectId, statusFilter: 'all', version: ver!.id })).map((i) => i.subject)).toEqual(['targeted']);
+    expect((await listIssuesImpl(db, { projectId, statusFilter: 'all', category: cat!.id })).map((i) => i.subject)).toEqual(['targeted']);
+  });
+});
+
+describe('getIssueImpl', () => {
+  it('returns hydrated issue with journals and children', async () => {
+    const parent = await seedIssue({ subject: 'parent' });
+    const child = await seedIssue({ subject: 'child' });
+    await db.update(issues).set({ parentId: parent.id }).where(eq(issues.id, child.id));
+    await updateIssueImpl(db, alice, { id: parent.id, notes: 'hello', changes: {} }, host);
+
+    const r = await getIssueImpl(db, parent.id, host);
+    expect(r.issue.subject).toBe('parent');
+    expect(r.children.map((c) => c.subject)).toEqual(['child']);
+    expect(r.journals).toHaveLength(1);
+    expect(r.journals[0]!.notes).toBe('hello');
+    expect(r.tracker?.name).toBe('Bug');
+  });
+
+  it('hydrates journal details for changed-field journals', async () => {
+    const i = await seedIssue();
+    await updateIssueImpl(db, alice, { id: i.id, notes: 'work', changes: { statusId: 2 } }, host);
+    const r = await getIssueImpl(db, i.id, host);
+    expect(r.journals).toHaveLength(1);
+    expect(r.journals[0]!.details.length).toBeGreaterThan(0);
+    expect(r.journals[0]!.details[0]!.prop_key).toBe('status');
+  });
+
+  it('returns assignee / category / version / parent when all are set', async () => {
+    const { issueCategories, versions } = await import('@allenlabs/pm-core/db/schema');
+    const [cat] = await db
+      .insert(issueCategories)
+      .values({ projectId, name: 'Backend' })
+      .returning();
+    if (!cat) throw new Error('issueCategories insert returned no row');
+    const [ver] = await db
+      .insert(versions)
+      .values({ projectId, name: 'v1.0' })
+      .returning();
+    if (!ver) throw new Error('versions insert returned no row');
+    const parent = await seedIssue({ subject: 'parent' });
+    const child = await seedIssue({ subject: 'child' });
+    await db
+      .update(issues)
+      .set({
+        assignedToId: alice.id,
+        categoryId: cat.id,
+        fixedVersionId: ver.id,
+        parentId: parent.id,
+      })
+      .where(eq(issues.id, child.id));
+
+    const r = await getIssueImpl(db, child.id, host);
+    expect(r.assignee?.id).toBe(alice.id);
+    expect(r.category?.id).toBe(cat.id);
+    expect(r.version?.id).toBe(ver.id);
+    expect(r.parent?.id).toBe(parent.id);
+  });
+
+  it('records a journal detail when transitioning a previously-null field', async () => {
+    const i = await seedIssue();
+    // before: assignedToId is null; we set it to alice
+    await updateIssueImpl(db, alice, {
+      id: i.id,
+      notes: '',
+      changes: { assignedToId: alice.id },
+    }, host);
+    const r = await getIssueImpl(db, i.id, host);
+    const detail = r.journals[0]!.details.find((d) => d.prop_key === 'assigned_to');
+    expect(detail?.oldValue).toBeNull();
+    expect(detail?.newValue).toBe(String(alice.id));
+
+    // and back to null
+    await updateIssueImpl(db, alice, {
+      id: i.id,
+      notes: '',
+      changes: { assignedToId: null },
+    }, host);
+    const r2 = await getIssueImpl(db, i.id, host);
+    const last = r2.journals[r2.journals.length - 1]!.details.find(
+      (d) => d.prop_key === 'assigned_to',
+    );
+    expect(last?.oldValue).toBe(String(alice.id));
+    expect(last?.newValue).toBeNull();
+  });
+
+  it('throws when issue is missing', async () => {
+    await expect(getIssueImpl(db, 99999, host)).rejects.toThrow(/not found/);
+  });
+});
+
+describe('updateIssueImpl', () => {
+  it('records the notion-origin marker on the activity when opts.notionOrigin is set', async () => {
+    const i = await seedIssue();
+    await updateIssueImpl(db, alice, { id: i.id, notes: 'sync', changes: {} }, host, {
+      notionOrigin: true,
+    });
+    const act = await db.query.activities.findFirst({
+      where: eq(activities.kind, 'comment_added'),
+    });
+    expect(act?.body).toBe('notionOrigin=true');
+  });
+
+  it('writes journal_details for changed fields', async () => {
+    const i = await seedIssue();
+    await updateIssueImpl(db, alice, {
+      id: i.id,
+      notes: '',
+      changes: { statusId: 2, doneRatio: 25 },
+    }, host);
+    const j = await db.query.journals.findFirst({ where: eq(journals.issueId, i.id) });
+    expect(j).toBeDefined();
+    const details = await db.query.journalDetails.findMany();
+    const props = details.map((d) => d.prop_key);
+    expect(props).toContain('status');
+    expect(props).toContain('done_ratio');
+  });
+
+  it('skips unchanged fields and unknown keys', async () => {
+    const i = await seedIssue();
+    await updateIssueImpl(db, alice, {
+      id: i.id,
+      notes: '',
+      changes: { statusId: i.statusId, bogus: 'x' },
+    }, host);
+    const journalsForIssue = await db.query.journals.findMany({
+      where: eq(journals.issueId, i.id),
+    });
+    // no real changes -> no journal
+    expect(journalsForIssue).toHaveLength(0);
+  });
+
+  it('sets closedAt when transitioning to a closed status', async () => {
+    const i = await seedIssue();
+    const updated = await updateIssueImpl(db, alice, {
+      id: i.id,
+      notes: '',
+      changes: { statusId: 5 }, // Closed
+    }, host);
+    expect(updated.closedAt).not.toBeNull();
+  });
+
+  it('records comment_added when only notes provided', async () => {
+    const i = await seedIssue();
+    await updateIssueImpl(db, alice, { id: i.id, notes: 'looks good', changes: {} }, host);
+    const act = await db.query.activities.findMany();
+    const comment = act.find((a) => a.kind === 'comment_added');
+    expect(comment?.title).toContain('alice');
+  });
+
+  it('throws on missing issue', async () => {
+    await expect(
+      updateIssueImpl(db, alice, { id: 99999, notes: '', changes: { statusId: 2 } }, host),
+    ).rejects.toThrow(/not found/);
+  });
+});
+
+describe('watchIssueImpl', () => {
+  it('toggles a watcher on and off', async () => {
+    const i = await seedIssue();
+    await watchIssueImpl(db, alice, i.id, true);
+    expect(await db.query.watchers.findMany({ where: eq(watchers.issueId, i.id) })).toHaveLength(1);
+    await watchIssueImpl(db, alice, i.id, false);
+    expect(await db.query.watchers.findMany({ where: eq(watchers.issueId, i.id) })).toHaveLength(0);
+  });
+
+  it('is idempotent on double-watch', async () => {
+    const i = await seedIssue();
+    await watchIssueImpl(db, alice, i.id, true);
+    await watchIssueImpl(db, alice, i.id, true);
+    expect(await db.query.watchers.findMany({ where: eq(watchers.issueId, i.id) })).toHaveLength(1);
+  });
+
+  it('getIssueImpl returns the watcher list', async () => {
+    const i = await seedIssue();
+    await watchIssueImpl(db, alice, i.id, true);
+    const r = await getIssueImpl(db, i.id, host);
+    expect(r.watchers).toEqual([alice.id]);
+  });
+});
+
+describe('deleteIssueImpl', () => {
+  it('removes the issue', async () => {
+    const i = await seedIssue();
+    await deleteIssueImpl(db, i.id);
+    expect(await db.query.issues.findFirst({ where: eq(issues.id, i.id) })).toBeUndefined();
+  });
+});
+
+describe('getIssueImpl site scoping (siteId arg)', () => {
+  it('enforces the current site — a cross-site issue id resolves to not found', async () => {
+    const site = await findOrCreateSiteImpl(db, { slug: 'acme', name: 'Acme' });
+    const other = await findOrCreateSiteImpl(db, { slug: 'b', name: 'B' });
+    const sp = await insertProject(db, { identifier: 'sp', key: 'SP', siteId: site.id });
+    const issue = await createIssueImpl(db, alice, {
+      projectId: sp.id, trackerId: 1, subject: 'scoped', description: '', doneRatio: 0,
+    }, host);
+    // same site → resolves
+    const r = await getIssueImpl(db, issue.id, host, null, site.id);
+    expect(r.issue.id).toBe(issue.id);
+    // different site → not found
+    await expect(getIssueImpl(db, issue.id, host, null, other.id)).rejects.toThrow(/not found/i);
+  });
+});
+

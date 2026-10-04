@@ -1,0 +1,34 @@
+@import 'tailwindcss';
+
+/* Calm-recovery palette.  Context restore is a "warm welcome back, here's
+   where you were" moment, so we use a deep blue-violet primary with green
+   accents for the "I'm back" CTA.  Matches inbox / focus on the muted slate
+   substrate so the visual continuity holds when you bounce between apps. */
+@theme {
+  --color-ctx-50:  #eef2ff;
+  --color-ctx-100: #e0e7ff;
+  --color-ctx-200: #c7d2fe;
+  --color-ctx-300: #a5b4fc;
+  --color-ctx-400: #818cf8;
+  --color-ctx-500: #6366f1;
+  --color-ctx-600: #4f46e5;
+  --color-ctx-700: #4338ca;
+  --color-ctx-800: #3730a3;
+  --color-ctx-900: #312e81;
+}
+
+@layer base {
+  html, body, #app {
+    height: 100%;
+  }
+  body {
+    @apply bg-slate-950 text-slate-100 antialiased;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  a {
+    @apply text-ctx-400 hover:underline;
+  }
+  .card {
+    @apply rounded border border-slate-800 bg-slate-900;
+  }
+}

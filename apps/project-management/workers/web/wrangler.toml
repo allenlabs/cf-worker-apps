@@ -1,0 +1,60 @@
+tail_consumers = [{ service = "cf-observe-tail" }]
+name = "pm-web"
+# `npm run build` (TanStack Start vite plugin) emits the complete worker
+# at dist/server/server.js with all server-fn handlers registered.
+# We bypass @cloudflare/vite-plugin entirely — its parallel pm_web/
+# bundle ships a stub `getServerFnById` (returns undefined for every id)
+# so every POST /_serverFn/<hash> 500'd.  TanStack Start's own server
+# bundle has the real resolver.
+main = "../../dist/server/server.js"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+# Static client bundle (CSS/JS/fonts). MUST be a top-level key, ABOVE any
+# [section] header: TOML assigns every key after a header to that table, so if
+# this sits under [placement] it becomes `placement.assets` and wrangler
+# silently drops it — no ASSETS binding, nothing served, every /assets/* request
+# falls through to the worker and the page loads unstyled.
+assets = { directory = "../../dist/client", binding = "ASSETS" }
+
+# Smart Placement: let Cloudflare relocate this worker near the data it talks
+# to (Hyperdrive → Hetzner Postgres in Helsinki), turning the many cross-
+# continent query round-trips per request into in-region hops.
+[placement]
+mode = "smart"
+
+# Custom domain — DNS + SSL handled by Cloudflare since allenlabs.org is on
+# the same account.  Workers will create the DNS record automatically.
+[[routes]]
+pattern = "projects.allenlabs.org"
+custom_domain = true
+
+# Hyperdrive → Hetzner Postgres (`allenlabs` DB, `pm` schema).
+# Shared with the cleanup worker (see workers/cleanup/wrangler.toml).
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "00000000000000000000000000000000"
+
+# JWT revocation list — moved off Workers KV to the auth D1 in APAC.
+# The shared `revoked_sessions` table (apps/auth/migrations-d1/0007_revoked_sessions.sql)
+# is bound here as AUTH_DB so verifySessionToken's revocation check sits
+# next to auth itself instead of crossing the continent twice per request.
+# Bonus: deploy tokens no longer need KV:Edit scope.
+[[d1_databases]]
+binding = "AUTH_DB"
+database_name = "allenlabs-auth-d1"
+database_id = "00000000-0000-0000-0000-000000000000"
+
+# R2 bucket for issue/wiki attachments — shared with the cleanup worker.
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "projects-allenlabs-files"
+
+[vars]
+APP_NAME = "Project Management"
+DEFAULT_LANGUAGE = "en"
+ATTACHMENT_TTL_DAYS = "365"
+AUTH_WEB_URL = "https://auth.allen.company"
+AUTH_API_URL = "https://auth-api.allen.company"
+PUBLIC_BASE_URL = "https://projects.allenlabs.org"

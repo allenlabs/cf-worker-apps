@@ -1,0 +1,50 @@
+# Optional: use only if you already operate a Collector. It is NOT a backend requirement.
+# Validate against your installed Collector distribution/version before deploying.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 127.0.0.1:4317
+      http:
+        endpoint: 127.0.0.1:4318
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+  batch:
+    timeout: 1s
+    send_batch_size: 128
+    send_batch_max_size: 256
+exporters:
+  otlphttp/cf_observe:
+    endpoint: ${env:OBSERVE_URL}
+    headers:
+      Authorization: Bearer ${env:INGEST_TOKEN}
+    encoding: proto
+    compression: gzip
+    timeout: 10s
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+      max_elapsed_time: 0s
+    sending_queue:
+      enabled: true
+      queue_size: 1000
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/cf_observe]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/cf_observe]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/cf_observe]
+# This example's queue is memory-backed. Enable your distribution's file_storage
+# extension for durable Collector retries. A single huge record can still exceed
+# CF Observe's 512 KiB wire / 1 MiB decompressed request limit.

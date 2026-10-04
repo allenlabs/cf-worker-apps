@@ -1,0 +1,130 @@
+import {
+  Outlet,
+  createRootRouteWithContext,
+  HeadContent,
+  Scripts,
+  redirect,
+} from '@tanstack/react-router';
+import { getRequest } from '@tanstack/react-start/server';
+import type { QueryClient } from '@tanstack/react-query';
+import type { ReactNode } from 'react';
+import { getEnv } from '~/server/auth-runtime.server';
+import { readSessionToken, verifySessionToken } from '~/server/session.server';
+import appCss from '~/styles/app.css?url';
+import { DEFAULT_LOCALE, type Locale } from '@allenlabs/i18n';
+import { resolveLocale } from '@allenlabs/i18n/server';
+import { I18nProvider } from '@allenlabs/i18n/react';
+import { appDict } from '~/i18n/dict';
+import { LanguagePicker } from '~/i18n/picker';
+
+interface RouterContext {
+  queryClient: QueryClient;
+  user: { id: number; login: string; isAdmin: boolean } | null;
+  locale: Locale;
+}
+
+const PUBLIC_PATHS = new Set([
+  '/auth/login',
+  '/auth/callback',
+  '/auth/logout',
+]);
+
+export const Route = createRootRouteWithContext<RouterContext>()({
+  beforeLoad: async () => {
+    // getRequest() THROWS on the client ("No StartEvent found in
+    // AsyncLocalStorage"). Catch + return — the initial SSR already
+    // gated; letting the throw escape would silently break Link clicks.
+    let req: Request | undefined;
+    try { req = getRequest(); } catch { return; }
+    if (!req) return;
+    const cookie = req.headers.get('cookie') ?? null;
+    const token = readSessionToken(cookie);
+    let url: URL | null = null;
+    try {
+      url = new URL(req.url);
+    } catch {
+      url = null;
+    }
+    const isPublic = url ? PUBLIC_PATHS.has(url.pathname) : false;
+    if (token) {
+      const env = getEnv();
+      const payload = await verifySessionToken(env, token);
+      if (payload?.sub) return;
+    }
+    if (isPublic) return;
+    throw redirect({ to: '/auth/login' });
+  },
+  loader: async () => {
+    let req: Request | undefined;
+    try { req = getRequest(); } catch { return { user: null, appName: 'Dopamine', locale: DEFAULT_LOCALE }; }
+    const cookie = req?.headers.get('cookie') ?? null;
+    const token = readSessionToken(cookie);
+    const env = getEnv();
+    let user: { id: number; login: string; isAdmin: boolean } | null = null;
+    let jwtLocale: string | null = null;
+    if (token) {
+      const payload = await verifySessionToken(env, token);
+      if (payload?.sub) {
+        const displayName =
+          (typeof payload.email === 'string' && payload.email.split('@')[0]) ||
+          (typeof payload.name === 'string' && payload.name) ||
+          'user';
+        user = {
+          id: -1,
+          login: displayName,
+          isAdmin: false,
+        };
+        if (typeof payload.locale === 'string') jwtLocale = payload.locale;
+      }
+    }
+    const locale = req
+      ? resolveLocale(req as unknown as Request, jwtLocale)
+      : DEFAULT_LOCALE;
+    return { user, appName: env.APP_NAME ?? 'Dopamine', locale };
+  },
+  head: () => ({
+    meta: [
+      { charSet: 'utf-8' },
+      { name: 'viewport', content: 'width=device-width, initial-scale=1' },
+      { title: 'Dopamine' },
+      { name: 'theme-color', content: '#78350f' },
+    ],
+    links: [{ rel: 'stylesheet', href: appCss }],
+    scripts: [
+      {
+        children:
+          "var __name=(t,n)=>Object.defineProperty(t,'name',{value:n,configurable:true});",
+      },
+    ],
+  }),
+  component: RootComponent,
+});
+
+function RootComponent() {
+  const data = Route.useLoaderData();
+  const locale = data?.locale ?? DEFAULT_LOCALE;
+  return (
+    <RootDocument locale={locale}>
+      <I18nProvider locale={locale} dict={appDict}>
+        <div className="fixed top-2 right-2 z-50">
+          <LanguagePicker />
+        </div>
+        <Outlet />
+      </I18nProvider>
+    </RootDocument>
+  );
+}
+
+function RootDocument({ locale, children }: { locale: Locale; children: ReactNode }) {
+  return (
+    <html lang={locale}>
+      <head>
+        <HeadContent />
+      </head>
+      <body className="bg-slate-950 text-slate-100">
+        <div id="app">{children}</div>
+        <Scripts />
+      </body>
+    </html>
+  );
+}

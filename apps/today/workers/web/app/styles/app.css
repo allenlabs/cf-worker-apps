@@ -1,0 +1,23 @@
+@import 'tailwindcss';
+
+/* Today is the calmest surface in the suite — it's a *dashboard*, not a
+   workspace.  Slate base, warm amber accents (matching focus' candle-lit
+   palette so bouncing between focus → today feels visually continuous).
+   The hero card uses very large type because ADHD readers benefit from
+   "you literally cannot miss this" framing for the one next action. */
+
+@layer base {
+  html, body, #app {
+    height: 100%;
+  }
+  body {
+    @apply bg-slate-950 text-slate-100 antialiased;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  a {
+    @apply text-amber-400 hover:underline;
+  }
+  .card {
+    @apply rounded border border-slate-800 bg-slate-900;
+  }
+}

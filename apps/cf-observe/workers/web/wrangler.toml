@@ -1,0 +1,36 @@
+# Adapted from templates/web-worker/wrangler.toml for the imported static UI.
+# Keep workers_dev and assets ABOVE section headers (repository template rule).
+# The existing public/ assets need no Vite or SSR build.
+name = "cf-observe"
+main = "../../src/worker.js"
+# Supported by both the pinned Vitest pool runtime and Wrangler runtime.
+compatibility_date = "2026-08-15"
+workers_dev = true
+assets = { directory = "../../public", binding = "ASSETS", run_worker_first = true }
+
+[[r2_buckets]]
+binding = "ARCHIVE"
+bucket_name = "cf-observe-archive"
+
+[[durable_objects.bindings]]
+name = "JOURNAL"
+class_name = "TelemetryJournal"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["TelemetryJournal"]
+
+[triggers]
+crons = ["* * * * *"]
+
+[vars]
+DATASET = "default"
+R2_FLUSH_MS = "10000"
+MAX_PENDING_BYTES = "16777216"
+MAX_QUERY_SEGMENTS = "12"
+
+[limits]
+cpu_ms = 30000
+
+[observability]
+enabled = false

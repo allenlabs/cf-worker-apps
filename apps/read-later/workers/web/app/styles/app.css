@@ -1,0 +1,55 @@
+@import 'tailwindcss';
+
+/* Reading-mode palette.  Warm amber accent for "Read now" CTA (action), cool
+   slate for "Skip for now" (defer).  Reader-mode body uses generous line
+   height and a slightly off-white type colour to reduce ADHD-eye fatigue
+   across long sessions. */
+@theme {
+  --color-rl-50:  #fffbeb;
+  --color-rl-100: #fef3c7;
+  --color-rl-200: #fde68a;
+  --color-rl-300: #fcd34d;
+  --color-rl-400: #fbbf24;
+  --color-rl-500: #f59e0b;
+  --color-rl-600: #d97706;
+  --color-rl-700: #b45309;
+  --color-rl-800: #92400e;
+  --color-rl-900: #78350f;
+}
+
+@layer base {
+  html, body, #app {
+    height: 100%;
+  }
+  body {
+    @apply bg-slate-950 text-slate-100 antialiased;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  a {
+    @apply text-rl-400 hover:underline;
+  }
+  .card {
+    @apply rounded border border-slate-800 bg-slate-900;
+  }
+  /* Reader mode typography — high contrast, wide line height, generous
+     measure.  Applied only inside .reader-mode so the queue surface keeps
+     the compact UI styling. */
+  .reader-mode {
+    @apply mx-auto max-w-2xl px-6 py-8 text-slate-100 leading-relaxed;
+    font-size: 1.0625rem;
+    line-height: 1.7;
+  }
+  .reader-mode h1 { @apply text-2xl font-semibold mt-8 mb-4; }
+  .reader-mode h2 { @apply text-xl font-semibold mt-6 mb-3; }
+  .reader-mode h3 { @apply text-lg font-semibold mt-5 mb-2; }
+  .reader-mode p  { @apply mb-4; }
+  .reader-mode ul, .reader-mode ol { @apply mb-4 pl-6; }
+  .reader-mode ul { list-style: disc; }
+  .reader-mode ol { list-style: decimal; }
+  .reader-mode blockquote { @apply border-l-4 border-slate-700 pl-4 italic text-slate-300 mb-4; }
+  .reader-mode pre { @apply bg-slate-900 rounded p-3 overflow-x-auto text-sm mb-4; }
+  .reader-mode code { @apply bg-slate-900 rounded px-1 py-0.5 text-sm; }
+  .reader-mode pre code { @apply bg-transparent p-0; }
+  .reader-mode img { @apply max-w-full h-auto rounded my-4; }
+  .reader-mode a { @apply text-rl-400 underline; }
+}

@@ -1,0 +1,33 @@
+@import 'tailwindcss';
+
+/* Concierge palette.  Warm amber/orange for the AI nudge — the visual cue
+   that "something is asking for your attention" without the alarm-red of an
+   error.  Sits on the same muted slate substrate as the rest of the suite. */
+@theme {
+  --color-conci-50:  #fff7ed;
+  --color-conci-100: #ffedd5;
+  --color-conci-200: #fed7aa;
+  --color-conci-300: #fdba74;
+  --color-conci-400: #fb923c;
+  --color-conci-500: #f97316;
+  --color-conci-600: #ea580c;
+  --color-conci-700: #c2410c;
+  --color-conci-800: #9a3412;
+  --color-conci-900: #7c2d12;
+}
+
+@layer base {
+  html, body, #app {
+    height: 100%;
+  }
+  body {
+    @apply bg-slate-950 text-slate-100 antialiased;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  a {
+    @apply text-conci-400 hover:underline;
+  }
+  .card {
+    @apply rounded border border-slate-800 bg-slate-900;
+  }
+}

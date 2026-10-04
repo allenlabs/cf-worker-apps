@@ -1,0 +1,246 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { makeTestEnv } from '../../../src/testing/env';
+import { primeJwks, resetTestJwt, signTestJwt } from '../../../src/testing/jwt';
+import type { Env } from '@allenlabs/pm-core/lib/env';
+import { betterAuthAdapter } from '@allenlabs/pm-core/server/auth/adapters/better-auth';
+
+let env: Env;
+
+beforeEach(async () => {
+  env = makeTestEnv();
+  await primeJwks(env);
+});
+afterEach(() => {
+  resetTestJwt();
+  vi.unstubAllGlobals();
+});
+
+const cookie = (token: string) => `cfr_session=${token}`;
+
+describe('betterAuthAdapter.verify', () => {
+  it('returns null with no cookie', async () => {
+    expect(await betterAuthAdapter.verify(env, null)).toBeNull();
+  });
+
+  it('maps a full JWT payload to a normalized identity', async () => {
+    const token = await signTestJwt(env, {
+      sub: 'ext-1',
+      email: 'a@b.test',
+      name: 'Alice A',
+      username: 'alice',
+      preferredName: 'Al',
+      locale: 'ko',
+      role: 'admin',
+      teamMemberships: [{ teamId: 't1', role: 'owner' }],
+    });
+    const id = await betterAuthAdapter.verify(env, cookie(token));
+    expect(id).toEqual({
+      subject: 'ext-1',
+      email: 'a@b.test',
+      displayName: 'Alice A',
+      username: 'alice',
+      preferredName: 'Al',
+      locale: 'ko',
+      isPlatformAdmin: true,
+      teamMemberships: [{ teamId: 't1', role: 'owner' }],
+      site: null,
+      orgMemberships: [],
+    });
+  });
+
+  it('fills neutral defaults for a minimal payload', async () => {
+    const token = await signTestJwt(env, { sub: 'ext-2' });
+    const id = await betterAuthAdapter.verify(env, cookie(token));
+    expect(id).toEqual({
+      subject: 'ext-2',
+      email: '',
+      displayName: null,
+      username: null,
+      preferredName: null,
+      locale: null,
+      isPlatformAdmin: false,
+      teamMemberships: [],
+      site: null,
+      orgMemberships: [],
+    });
+  });
+
+  it('returns null for an unverifiable token', async () => {
+    expect(await betterAuthAdapter.verify(env, cookie('not-a-jwt'))).toBeNull();
+  });
+
+  it('carries a site key + org memberships when the JWT has them', async () => {
+    const token = await signTestJwt(env, {
+      sub: 'ext-t',
+      site: 'acme',
+      memberships: [{ orgId: 'o1', role: 'admin' }],
+    });
+    const id = await betterAuthAdapter.verify(env, cookie(token));
+    expect(id?.site).toBe('acme');
+    expect(id?.orgMemberships).toEqual([{ orgId: 'o1', role: 'admin' }]);
+  });
+
+  it('verifies without AUTH_DB bound (no revocation list ⇒ never revoked)', async () => {
+    const token = await signTestJwt(env, { sub: 'no-db' });
+    const id = await betterAuthAdapter.verify({ ...env, AUTH_DB: undefined }, cookie(token));
+    expect(id?.subject).toBe('no-db');
+  });
+});
+
+describe('betterAuthAdapter.loginRedirect', () => {
+  it('points at the provider sign-in with a return_to callback', async () => {
+    const { href } = await betterAuthAdapter.loginRedirect(env, {});
+    const u = new URL(href);
+    expect(u.origin + u.pathname).toBe('https://auth.test/sign-in');
+    expect(u.searchParams.get('return_to')).toBe('http://localhost:3000/auth/callback');
+  });
+
+  it('preserves a path-scoped PUBLIC_BASE_URL in the return_to callback', async () => {
+    const e = makeTestEnv({ PUBLIC_BASE_URL: 'https://host.example.com/projects/prod/site/' });
+    const { href } = await betterAuthAdapter.loginRedirect(e, {});
+    expect(new URL(href).searchParams.get('return_to')).toBe(
+      'https://host.example.com/projects/prod/site/auth/callback',
+    );
+  });
+});
+
+describe('betterAuthAdapter.handleCallback', () => {
+  async function fetchReturning(status: number, json: unknown): Promise<typeof fetch> {
+    return (async () => new Response(JSON.stringify(json), { status })) as unknown as typeof fetch;
+  }
+
+  it('exchanges the code, verifies, and returns identity + token + redirect', async () => {
+    const token = await signTestJwt(env, { sub: 'ext-9', email: 'c@d.test' });
+    const res = await betterAuthAdapter.handleCallback(
+      env,
+      new Request('https://pm.test/auth/callback?code=abc&next=/projects'),
+      { fetch: await fetchReturning(200, { token }) },
+    );
+    expect(res.sessionToken).toBe(token);
+    expect(res.identity.subject).toBe('ext-9');
+    expect(res.redirectTo).toBe('/projects');
+  });
+
+  it('defaults redirect to / when next is missing or not a path', async () => {
+    const token = await signTestJwt(env, { sub: 'ext-9' });
+    const res = await betterAuthAdapter.handleCallback(
+      env,
+      new Request('https://pm.test/auth/callback?code=abc&next=http://evil'),
+      { fetch: await fetchReturning(200, { token }) },
+    );
+    expect(res.redirectTo).toBe('/');
+  });
+
+  it('throws (redirect to login) when no code', async () => {
+    let err: unknown;
+    try {
+      await betterAuthAdapter.handleCallback(env, new Request('https://pm.test/auth/callback'));
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeTruthy(); // redirect to /auth/login was thrown
+  });
+
+  it('throws 400 when the exchange is non-200', async () => {
+    let err: unknown;
+    try {
+      await betterAuthAdapter.handleCallback(env, new Request('https://pm.test/auth/callback?code=x'), {
+        fetch: await fetchReturning(403, {}),
+      });
+    } catch (e) {
+      err = e;
+    }
+    expect((err as Response).status).toBe(400);
+  });
+
+  it('throws 500 when no token is returned', async () => {
+    let err: unknown;
+    try {
+      await betterAuthAdapter.handleCallback(env, new Request('https://pm.test/auth/callback?code=x'), {
+        fetch: await fetchReturning(200, {}),
+      });
+    } catch (e) {
+      err = e;
+    }
+    expect((err as Response).status).toBe(500);
+  });
+
+  it('throws 500 when the issued token fails verification', async () => {
+    let err: unknown;
+    try {
+      await betterAuthAdapter.handleCallback(env, new Request('https://pm.test/auth/callback?code=x'), {
+        fetch: await fetchReturning(200, { token: 'garbage' }),
+      });
+    } catch (e) {
+      err = e;
+    }
+    expect((err as Response).status).toBe(500);
+  });
+});
+
+describe('betterAuthAdapter cookies + logout', () => {
+  it('session/clear cookie helpers carry the session cookie name', () => {
+    expect(betterAuthAdapter.sessionCookie(env, 'tok')).toContain('cfr_session=tok');
+    expect(betterAuthAdapter.clearSessionCookie(env)).toContain('cfr_session=');
+  });
+
+  it('logout with no cookie still returns the sign-out redirect + clear cookie', async () => {
+    const { href, setCookie } = await betterAuthAdapter.logout(env, null);
+    expect(href).toBe('https://auth-api.test/api/auth/sign-out');
+    expect(setCookie).toContain('Max-Age=0');
+  });
+
+  it('logout revokes a present token', async () => {
+    const token = await signTestJwt(env, { sub: 'ext-3' });
+    const { href } = await betterAuthAdapter.logout(env, cookie(token));
+    expect(href).toContain('/api/auth/sign-out');
+  });
+
+  it('skips revocation entirely when AUTH_DB is not bound', async () => {
+    const token = await signTestJwt(env, { sub: 'ext-nodb' });
+    const { setCookie } = await betterAuthAdapter.logout({ ...env, AUTH_DB: undefined }, cookie(token));
+    expect(setCookie).toContain('Max-Age=0');
+  });
+
+  it('swallows a revoke failure', async () => {
+    const throwingDb = {
+      prepare() {
+        return { bind() { return this; }, async run() { throw new Error('d1 down'); } };
+      },
+    } as unknown as D1Database;
+    const token = await signTestJwt(env, { sub: 'ext-4' });
+    const { setCookie } = await betterAuthAdapter.logout({ ...env, AUTH_DB: throwingDb }, cookie(token));
+    expect(setCookie).toContain('Max-Age=0');
+  });
+});
+
+describe('betterAuthAdapter.onProjectCreated', () => {
+  it('returns null teamId when there is no acting external user', async () => {
+    const r = await betterAuthAdapter.onProjectCreated!(env, {
+      actingExternalUserId: null,
+      projectName: 'P',
+      projectSlug: 'p',
+    });
+    expect(r).toEqual({ teamId: null });
+  });
+
+  it('provisions a team when the org bridge succeeds', async () => {
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ teamId: 'team_x', slug: 'p' }), { status: 200 }));
+    const r = await betterAuthAdapter.onProjectCreated!(env, {
+      actingExternalUserId: 'ext-7',
+      projectName: 'P',
+      projectSlug: 'p',
+    });
+    expect(r).toEqual({ teamId: 'team_x' });
+  });
+
+  it('falls back to null teamId when the org bridge fails', async () => {
+    vi.stubGlobal('fetch', async () => new Response('nope', { status: 500 }));
+    const r = await betterAuthAdapter.onProjectCreated!(env, {
+      actingExternalUserId: 'ext-8',
+      projectName: 'P',
+      projectSlug: 'p',
+    });
+    expect(r).toEqual({ teamId: null });
+  });
+});

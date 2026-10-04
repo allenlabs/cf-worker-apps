@@ -1,0 +1,5 @@
+
+> cf-observe@0.1.0 check
+> node scripts/check.mjs
+
+Syntax checked 28 JavaScript modules.

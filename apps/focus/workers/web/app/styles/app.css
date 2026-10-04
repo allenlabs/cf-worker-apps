@@ -1,0 +1,45 @@
+@import 'tailwindcss';
+
+/* Warm, calm focus surface.  The colour story is "candlelit study" so the
+   active session screen feels inviting rather than clinical.  Amber accents
+   for the live timer; greens for completed; muted slate for everything else
+   (matches inbox so the visual continuity holds when you bounce between
+   apps). */
+@theme {
+  --color-focus-50:  #fffbeb;
+  --color-focus-100: #fef3c7;
+  --color-focus-200: #fde68a;
+  --color-focus-300: #fcd34d;
+  --color-focus-400: #fbbf24;
+  --color-focus-500: #f59e0b;
+  --color-focus-600: #d97706;
+  --color-focus-700: #b45309;
+  --color-focus-800: #92400e;
+  --color-focus-900: #78350f;
+}
+
+@layer base {
+  html, body, #app {
+    height: 100%;
+  }
+  body {
+    @apply bg-slate-950 text-slate-100 antialiased;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  a {
+    @apply text-focus-400 hover:underline;
+  }
+  .card {
+    @apply rounded border border-slate-800 bg-slate-900;
+  }
+}
+
+/* The countdown ring uses pure CSS for the sweep — JS only computes the
+   remaining seconds for the label, so the ring never drifts even on the
+   slowest workerd hosts. */
+@layer components {
+  .ring-sweep {
+    transform: rotate(-90deg);
+    transform-origin: 50% 50%;
+  }
+}

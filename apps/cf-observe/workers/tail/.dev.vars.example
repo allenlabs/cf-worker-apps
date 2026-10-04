@@ -1,0 +1,2 @@
+# Use a dedicated source token registered as workers-tail in the receiver SOURCE_TOKENS secret.
+INGEST_TOKEN=replace-with-a-random-secret-of-at-least-32-characters

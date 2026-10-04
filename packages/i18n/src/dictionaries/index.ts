@@ -1,0 +1,158 @@
+// Shared "common" strings used by every app: nav chrome, auth flow, generic
+// button/empty/loading labels, locale switcher. Apps merge this with their
+// app-specific strings via `mergeDicts`. Flat dot-path keys keep autocomplete
+// useful without runtime overhead.
+
+import type { Dict } from "../index";
+
+export const commonStrings: Dict = {
+  en: {
+    // Navigation chrome
+    "nav.home": "Home",
+    "nav.projects": "Projects",
+    "nav.activity": "Activity",
+    "nav.settings": "Settings",
+    "nav.profile": "Profile",
+    "nav.search": "Search",
+    "nav.new": "New",
+    "nav.myPage": "My page",
+    "nav.signIn": "Sign in",
+    "nav.signUp": "Sign up",
+    "nav.signOut": "Sign out",
+    "nav.menu": "Menu",
+    "nav.close": "Close",
+
+    // Generic action buttons
+    "btn.save": "Save",
+    "btn.cancel": "Cancel",
+    "btn.delete": "Delete",
+    "btn.edit": "Edit",
+    "btn.create": "Create",
+    "btn.add": "Add",
+    "btn.confirm": "Confirm",
+    "btn.back": "Back",
+    "btn.next": "Next",
+    "btn.submit": "Submit",
+    "btn.send": "Send",
+    "btn.copy": "Copy",
+    "btn.retry": "Retry",
+    "btn.apply": "Apply",
+    "btn.reset": "Reset",
+
+    // Generic states
+    "state.loading": "Loading…",
+    "state.saving": "Saving…",
+    "state.empty": "Nothing here yet.",
+    "state.error": "Something went wrong.",
+    "state.signedOut": "Signed out.",
+    "state.required": "Required",
+    "state.optional": "Optional",
+    "state.yes": "Yes",
+    "state.no": "No",
+
+    // Auth flow
+    "auth.signIn.title": "Sign in",
+    "auth.signIn.email": "Email",
+    "auth.signIn.password": "Password",
+    "auth.signIn.submit": "Sign in",
+    "auth.signIn.forgotPassword": "Forgot password?",
+    "auth.signIn.noAccount": "Don't have an account?",
+    "auth.signUp.title": "Create account",
+    "auth.signUp.name": "Name",
+    "auth.signUp.preferredName": "Preferred name",
+    "auth.signUp.username": "Username",
+    "auth.signUp.confirmPassword": "Confirm password",
+    "auth.signUp.submit": "Create account",
+    "auth.signUp.haveAccount": "Already have an account?",
+    "auth.invalidCredentials": "Email or password is incorrect.",
+    "auth.welcome": "Welcome, {name}",
+
+    // Locale switcher
+    "locale.label": "Language",
+    "locale.en": "English",
+    "locale.ko": "Korean",
+    "locale.switchTo.en": "Switch to English",
+    "locale.switchTo.ko": "한국어로 전환",
+
+    // Time / relative
+    "time.now": "just now",
+    "time.minutesAgo": "{n} min ago",
+    "time.hoursAgo": "{n} h ago",
+    "time.daysAgo": "{n} d ago",
+
+    // Confirmation
+    "confirm.delete": "Are you sure you want to delete this?",
+    "confirm.unsavedChanges": "You have unsaved changes. Leave anyway?",
+  },
+  ko: {
+    "nav.home": "홈",
+    "nav.projects": "프로젝트",
+    "nav.activity": "활동",
+    "nav.settings": "설정",
+    "nav.profile": "프로필",
+    "nav.search": "검색",
+    "nav.new": "새로 만들기",
+    "nav.myPage": "내 페이지",
+    "nav.signIn": "로그인",
+    "nav.signUp": "회원가입",
+    "nav.signOut": "로그아웃",
+    "nav.menu": "메뉴",
+    "nav.close": "닫기",
+
+    "btn.save": "저장",
+    "btn.cancel": "취소",
+    "btn.delete": "삭제",
+    "btn.edit": "수정",
+    "btn.create": "만들기",
+    "btn.add": "추가",
+    "btn.confirm": "확인",
+    "btn.back": "뒤로",
+    "btn.next": "다음",
+    "btn.submit": "제출",
+    "btn.send": "보내기",
+    "btn.copy": "복사",
+    "btn.retry": "다시 시도",
+    "btn.apply": "적용",
+    "btn.reset": "초기화",
+
+    "state.loading": "로딩 중…",
+    "state.saving": "저장 중…",
+    "state.empty": "아직 아무것도 없습니다.",
+    "state.error": "오류가 발생했습니다.",
+    "state.signedOut": "로그아웃되었습니다.",
+    "state.required": "필수",
+    "state.optional": "선택",
+    "state.yes": "예",
+    "state.no": "아니오",
+
+    "auth.signIn.title": "로그인",
+    "auth.signIn.email": "이메일",
+    "auth.signIn.password": "비밀번호",
+    "auth.signIn.submit": "로그인",
+    "auth.signIn.forgotPassword": "비밀번호를 잊으셨나요?",
+    "auth.signIn.noAccount": "계정이 없으신가요?",
+    "auth.signUp.title": "계정 만들기",
+    "auth.signUp.name": "이름",
+    "auth.signUp.preferredName": "표시 이름",
+    "auth.signUp.username": "사용자명",
+    "auth.signUp.confirmPassword": "비밀번호 확인",
+    "auth.signUp.submit": "계정 만들기",
+    "auth.signUp.haveAccount": "이미 계정이 있으신가요?",
+    "auth.invalidCredentials": "이메일 또는 비밀번호가 올바르지 않습니다.",
+    "auth.welcome": "{name}님, 환영합니다",
+
+    "locale.label": "언어",
+    "locale.en": "English",
+    "locale.ko": "한국어",
+    "locale.switchTo.en": "Switch to English",
+    "locale.switchTo.ko": "한국어로 전환",
+
+    "time.now": "방금 전",
+    "time.minutesAgo": "{n}분 전",
+    "time.hoursAgo": "{n}시간 전",
+    "time.daysAgo": "{n}일 전",
+
+    "confirm.delete": "정말 삭제하시겠어요?",
+    "confirm.unsavedChanges": "저장되지 않은 변경사항이 있습니다. 그래도 나가시겠어요?",
+  },
+};

@@ -1,0 +1,49 @@
+{
+  "name": "cloud-agent",
+  "main": "index.js",
+  "compatibility_date": "2026-10-04",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": false,
+  "preview_urls": false,
+  "vars": {
+    "PROBE_MODE": "subscription",
+    "OPENAI_MODEL": "gpt-6.1-sol",
+    "CHANNEL_REPLY_ENABLED": "false",
+    "PRODUCT_NAME": "Cloud Agent",
+    "PUBLIC_ORIGIN": "https://cloud-agent.example.invalid",
+    "SSO_ISSUER": "https://sso.example.invalid",
+    "SSO_CLIENT_ID": "",
+    "SUPER_ADMIN_EMAILS": "[]",
+    "SUPER_ADMIN_SUBJECTS": "{}",
+    "DIAGNOSTIC_READS_ENABLED": "false",
+    "ALLOWED_OPENAI_MODELS": "[\"gpt-6-luna\", \"gpt-6.1-sol\", \"gpt-6-astra\"]",
+    "ALLOWED_CHANNEL_ID": "",
+    "ALLOWED_CHAT_ID": "",
+    "CHANNEL_APP_ID": "",
+    "OWNER_EMAIL_SHA256": "",
+    "TOKEN_WRAPPING_AAD": "cloud-agent/v1"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "Assistant",
+        "class_name": "Assistant"
+      },
+      {
+        "name": "Credentials",
+        "class_name": "Credentials"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "Assistant",
+        "Credentials"
+      ]
+    }
+  ]
+}

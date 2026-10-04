@@ -1,0 +1,1 @@
+{"offline_fixture_checks": "PASS", "console_errors": [], "checks": ["initial list", "inspector", "metric rendering", "search race", "mobile layout"]}

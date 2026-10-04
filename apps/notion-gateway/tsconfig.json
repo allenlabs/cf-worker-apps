@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable", "WebWorker"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "verbatimModuleSyntax": false,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "allowJs": false,
+    "noEmit": true,
+    "types": ["@cloudflare/workers-types", "node"],
+    "paths": {
+      "@shared/*": ["./shared/src/*"]
+    }
+  },
+  "include": [
+    "shared/**/*",
+    "workers/**/*",
+    "tests/**/*",
+    "vitest.config.ts"
+  ]
+}

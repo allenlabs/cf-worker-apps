@@ -1,0 +1,37 @@
+tail_consumers = [{ service = "cf-observe-tail" }]
+name = "pm-api"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+# Smart Placement: sit near Hyperdrive → Hetzner Postgres (Helsinki).
+[placement]
+mode = "smart"
+
+[[routes]]
+pattern = "projects-api.allenlabs.org"
+custom_domain = true
+
+# Hyperdrive → Hetzner Postgres (`allenlabs` DB, `pm` schema).
+# Same binding id as pm-web / pm-cleanup.
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "00000000000000000000000000000000"
+
+# The handlers reuse the web app's pure *Impl functions, but those live in
+# files that also export createServerFn wrappers importing auth-runtime.server →
+# which transitively pulls TanStack Start's SSR entry/manifest virtual modules.
+# The API worker never runs those code paths, so alias them to an empty stub to
+# satisfy the bundler.
+[alias]
+"#tanstack-router-entry" = "./src/stubs/empty.ts"
+"#tanstack-start-entry" = "./src/stubs/empty.ts"
+"tanstack-start-manifest:v" = "./src/stubs/empty.ts"
+
+[vars]
+APP_NAME = "Project Management API"
+PUBLIC_BASE_URL = "https://projects-api.allenlabs.org"
+
+# HMAC secrets live per-client in pm.api_clients (rotated via UPDATE), not as
+# wrangler secrets.

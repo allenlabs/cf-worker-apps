@@ -1,0 +1,26 @@
+tail_consumers = [{ service = "cf-observe-tail" }]
+name = "pm-cleanup"
+main = "index.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Cron-triggered worker that prunes attachments older than ATTACHMENT_TTL_DAYS.
+# Runs daily at 03:30 UTC; the schedule is also evaluated locally by
+# `wrangler dev --test-scheduled` for verification.
+[triggers]
+crons = ["30 3 * * *"]
+
+# Shares the Hyperdrive + R2 bindings with `pm-web` (same Hyperdrive id,
+# same R2 bucket). Hyperdrive → Hetzner Postgres `allenlabs` DB, `pm` schema.
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "00000000000000000000000000000000"
+
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "projects-allenlabs-files"
+
+[vars]
+ATTACHMENT_TTL_DAYS = "365"
+# Hard ceiling on rows per run so a stuck job can't hammer Postgres.  Tune as needed.
+CLEANUP_MAX_ROWS = "500"

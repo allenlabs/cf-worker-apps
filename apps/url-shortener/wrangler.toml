@@ -1,0 +1,13 @@
+name = "url-shortener"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[kv_namespaces]]
+binding = "LINKS"
+id = "REPLACE_ME_AFTER_wrangler_kv_namespace_create"
+
+[vars]
+DEFAULT_CODE_LENGTH = "7"
+# Comma-separated owner emails allowed to mint links via /api/shorten.
+ADMIN_EMAILS = ""

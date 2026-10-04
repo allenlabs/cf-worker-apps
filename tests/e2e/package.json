@@ -1,0 +1,20 @@
+{
+  "name": "@cf-worker-apps/e2e",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Playwright end-to-end suite against deployed *.allenlabs.org workers.",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "cleanup": "tsx lib/cleanup.ts",
+    "install:chromium": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.60.0",
+    "@types/node": "22.19.19",
+    "@types/pg": "8.11.10",
+    "pg": "8.13.1",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3"
+  }
+}

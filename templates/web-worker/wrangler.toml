@@ -1,0 +1,32 @@
+# Canonical TanStack Start web-worker config. Copy to apps/<app>/workers/web/
+# and replace <APP> / <app> / the binding ids. See templates/web-worker/README.md.
+#
+# ⚠️ ORDER MATTERS. `assets` and `workers_dev` are TOP-LEVEL keys and MUST stay
+# ABOVE the first [section] header. TOML assigns every key after a header to that
+# table, so if `assets` slips below [placement] it silently becomes
+# `placement.assets`, wrangler drops it, and NO static assets are served —
+# /assets/*.css|js and /favicon.svg fall through to the worker and every page
+# renders unstyled. (This bit the whole suite once; keep these two lines here.)
+
+name = "<app>-web"
+main = "../../dist/server/server.js"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+assets = { directory = "../../dist/client", binding = "ASSETS" }
+
+[placement]
+mode = "smart"
+
+[[routes]]
+pattern = "<app>.allenlabs.org"
+custom_domain = true
+
+# Shared Hyperdrive → Hetzner Postgres (`allenlabs` DB, `<app>` schema).
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "0b76cf08a44443d39d12f0d51ed059f5"
+
+[vars]
+APP_NAME = "<App Name>"
+PUBLIC_BASE_URL = "https://<app>.allenlabs.org"

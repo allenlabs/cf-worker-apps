@@ -1,0 +1,22 @@
+name = "webhook-ingest"
+main = "index.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Queue producer — pushes webhook events to the `webhook-events` queue.
+# The relay worker (workers/relay/) is the consumer.
+[[queues.producers]]
+binding = "EVENTS"
+queue = "webhook-events"
+
+# Subscribers map: stored as a JSON blob in KV under key "subscribers:<source>".
+# Letting humans edit subscribers via the dashboard / wrangler kv put is enough
+# for this scale.
+[[kv_namespaces]]
+binding = "SUBSCRIBERS"
+id = "REPLACE_ME_AFTER_wrangler_kv_namespace_create"
+
+[vars]
+INGEST_SECRET = ""   # set via wrangler secret for production
+INITIAL_BACKOFF_MS = "1000"
+MAX_ATTEMPTS = "5"

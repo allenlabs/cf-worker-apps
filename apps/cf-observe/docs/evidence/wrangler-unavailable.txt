@@ -1,0 +1,5 @@
+
+> cf-observe@0.1.0 dry-run
+> wrangler deploy --dry-run
+
+sh: 1: wrangler: not found

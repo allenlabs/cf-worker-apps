@@ -1,0 +1,671 @@
+{
+  "status": "NOT_INSTALLED",
+  "licenseSource": {
+    "url": "https://raw.githubusercontent.com/ericlitman/open-pstack/main/LICENSE",
+    "repository": "https://github.com/ericlitman/open-pstack",
+    "retrievedOn": "2026-10-05",
+    "sha256": "bc957ca6bee02792566a1a028d105e02e247c6e77cf057061674273da77b200e",
+    "bytes": 1067,
+    "exactSourceCopy": true
+  },
+  "upstream": "https://github.com/ericlitman/open-pstack",
+  "version": "1.5.0",
+  "licenseDeclaration": "MIT",
+  "licenseTextPresentInSnapshot": false,
+  "adaptation": "complete-markdown-docs-with-hosted-capability-adapter",
+  "upstreamMarkdownFiles": 122,
+  "upstreamSkillEntrypoints": 54,
+  "sourceBytes": 474432,
+  "bundles": [
+    {
+      "name": "pstack",
+      "file": "pstack.payload.json",
+      "bytes": 249656,
+      "resourceCount": 8,
+      "largestResourceBytes": 53840
+    },
+    {
+      "name": "pstack-library",
+      "file": "pstack-library.payload.json",
+      "bytes": 261145,
+      "resourceCount": 5,
+      "largestResourceBytes": 54835
+    }
+  ],
+  "documents": [
+    {
+      "path": ".claude-plugin/plugin.json",
+      "bytes": 629,
+      "sha256": "37b4c2973ee7201b59f345533b526c20eb66d6b53e3e7bff6a510298c36c780c"
+    },
+    {
+      "path": ".codex-plugin/plugin.json",
+      "bytes": 1630,
+      "sha256": "260c7cdfedc8a8a94be39be2dd10289d2ea1b2cd3568076a2295090e26fef1c2"
+    },
+    {
+      "path": "agents/comment-sicko.md",
+      "bytes": 2230,
+      "sha256": "3e239e40b7b4b9beb2cf7f3ccc57f2388eb8b69bd1ba8ae888ef87ef6e0e2116"
+    },
+    {
+      "path": "agents/poteto-agent.md",
+      "bytes": 622,
+      "sha256": "31c7ea4c51a865168ca3cf66a16dd067afea35bc4ae635615372d1d6a4baefd4"
+    },
+    {
+      "path": "agents/pstack-fable-high.md",
+      "bytes": 501,
+      "sha256": "c3c3f3f594eae2ade9f9c4b03d285180cb5bf0152614c5472dc5048827ffb46e"
+    },
+    {
+      "path": "agents/pstack-fable-low.md",
+      "bytes": 498,
+      "sha256": "f6f8e02c045466fe1ab1258527f005dbbdcffdb8352b9d59fc2dc7651d4a67e1"
+    },
+    {
+      "path": "agents/pstack-fable-max.md",
+      "bytes": 498,
+      "sha256": "ff88c2bd93b26bdcd8673ee2e2e272ff9a9c296804ce196fa565fb77e052b437"
+    },
+    {
+      "path": "agents/pstack-fable-medium.md",
+      "bytes": 507,
+      "sha256": "5bfccbbe1c1b085b3aed11685955a95c6eb43d96712d95a96b0a931df4dd3a12"
+    },
+    {
+      "path": "agents/pstack-fable-xhigh.md",
+      "bytes": 504,
+      "sha256": "56825e109c4dbaca1125c0bc991d95d57717803373f85a9fd54a4755123e7d0b"
+    },
+    {
+      "path": "agents/pstack-opus-high.md",
+      "bytes": 497,
+      "sha256": "91f1a0a56e2ed0a86025d766dd6f926d7b10f7e43cc7fc29b7f97a96edb0f323"
+    },
+    {
+      "path": "agents/pstack-opus-low.md",
+      "bytes": 494,
+      "sha256": "aa6cf5948ad2f63a2ca030f86ffc6960c0039e48da6515edfc3ca40fb610abf2"
+    },
+    {
+      "path": "agents/pstack-opus-max.md",
+      "bytes": 494,
+      "sha256": "c1b34e732b432c483500b2052bcf898e6bf6d1cc4f951d7306b5799c6b6c4824"
+    },
+    {
+      "path": "agents/pstack-opus-medium.md",
+      "bytes": 503,
+      "sha256": "89d38b825a2c97a3464a0a22466ac2104f576f725373ed72b4a650686627f667"
+    },
+    {
+      "path": "agents/pstack-opus-xhigh.md",
+      "bytes": 500,
+      "sha256": "6b924be943c7c4184853ad7867af7bb34b29c7534ff606d2fc4d6fb0456aa8b0"
+    },
+    {
+      "path": "hooks/session-start-context.md",
+      "bytes": 1259,
+      "sha256": "fe278d1d9520968f76382b95bc9f73cc01dbb91f26c0242ae426f8bfdb556db8"
+    },
+    {
+      "path": "skills/architect/SKILL.md",
+      "bytes": 5758,
+      "sha256": "97d0d603c5c1ffd031e2947252b6a9e2a0ceecc29ceb64fcb28aece966725794"
+    },
+    {
+      "path": "skills/architect/references/design-red-flags.md",
+      "bytes": 1944,
+      "sha256": "905066f9bbac81c573c2b325be47751d2c0f9325e0a0772bd4384e82dafe9336"
+    },
+    {
+      "path": "skills/architect/references/rationale-template.md",
+      "bytes": 3050,
+      "sha256": "0cedfccdc7b47fc881febd5a8293eecbc542c20f8df825639904a8102d2eb5d3"
+    },
+    {
+      "path": "skills/architect/references/runner-prompt.md",
+      "bytes": 3087,
+      "sha256": "983bf2820cc14ed8ecab6e448e1033e5cfe6031967d0a9287b48c7fa9c33d925"
+    },
+    {
+      "path": "skills/arena/SKILL.md",
+      "bytes": 5398,
+      "sha256": "f7b94e119ddb88e6fb3f9012a903ae2478811ef24492a03ce0d9090d27fe7855"
+    },
+    {
+      "path": "skills/automate-me/SKILL.md",
+      "bytes": 7589,
+      "sha256": "e3058f06434344b33d709239ed1318aefb0190c3aa72f711086a5c2b278cf0bc"
+    },
+    {
+      "path": "skills/babysit/SKILL.md",
+      "bytes": 4585,
+      "sha256": "c0d4d14063382478ab4443cb193cd526878bf2a96a8ed2d64ea8c4db9c44f1ac"
+    },
+    {
+      "path": "skills/blast-radius/SKILL.md",
+      "bytes": 3820,
+      "sha256": "4dc94701157e43ddb754b859cc086e5cbd15367b3b36f78b0614b05ce12e12bd"
+    },
+    {
+      "path": "skills/bro/SKILL.md",
+      "bytes": 236,
+      "sha256": "8b822d47b9299627f5e4fe42684a031105792c8531443da1ae3423adfa2de96f"
+    },
+    {
+      "path": "skills/create-verification-skill/SKILL.md",
+      "bytes": 6199,
+      "sha256": "5714b32ebf44972987215a269392bc111b9cde117da63dd52a8b3dea314a0b06"
+    },
+    {
+      "path": "skills/create-verification-skill/references/feature-map-example/README.md",
+      "bytes": 2601,
+      "sha256": "cb7bd782cf89968a4ba3d58a5151db837430db92d19a6f52a906973b77b516ba"
+    },
+    {
+      "path": "skills/create-verification-skill/references/feature-map-example/create-note.md",
+      "bytes": 2926,
+      "sha256": "644a44c74f35d38c2feb7cd05a0121fdebbb623e8dc376c185b565a581d1ccf7"
+    },
+    {
+      "path": "skills/create-verification-skill/references/feature-map-example/search.md",
+      "bytes": 3478,
+      "sha256": "6e87b9e7f2791a7776ba1bb83f371cd285c306c67f19d245cc4dd6ca3015c823"
+    },
+    {
+      "path": "skills/deslop/SKILL.md",
+      "bytes": 719,
+      "sha256": "2f7b7def74af7ed11f5b44b4d32f0f91fca8c5d1f92bf2171e8d12fd33a0f810"
+    },
+    {
+      "path": "skills/figure-it-out/SKILL.md",
+      "bytes": 4028,
+      "sha256": "88ae794a0addb5c034af77d1d02fd7538ad49386647e1a5ea4b9664c7120b635"
+    },
+    {
+      "path": "skills/fix-ci/SKILL.md",
+      "bytes": 901,
+      "sha256": "925f8c3e11de8bcc0cd015ec907f4d00b12cde6714246554ed3a52e096536522"
+    },
+    {
+      "path": "skills/fix-merge-conflicts/SKILL.md",
+      "bytes": 988,
+      "sha256": "738b251281b30fd33e3892d0679cf94249e9c9e29e1bed40bcdde4a6aca98a76"
+    },
+    {
+      "path": "skills/get-pr-comments/SKILL.md",
+      "bytes": 529,
+      "sha256": "8bf292736cab922276feb4d8377edc2fc4102a7beb62bcd1f3f5cf72a79b16cc"
+    },
+    {
+      "path": "skills/how/SKILL.md",
+      "bytes": 2968,
+      "sha256": "1fd123d1a0f6f493f6607415bd86e6f64ad95cb4f36ce7e28fcd009cd9ec1495"
+    },
+    {
+      "path": "skills/how/references/explainer-prompt.md",
+      "bytes": 3085,
+      "sha256": "ddb89cebefc24e2b54517a331aedfe045b6971e101f45c71b8cef4cccff45bff"
+    },
+    {
+      "path": "skills/how/references/explorer-prompt.md",
+      "bytes": 2684,
+      "sha256": "a3b44a6e5bb16a6d4d1cac19db8ed5322ffd5f5f5d45baca4e73990ca096f8be"
+    },
+    {
+      "path": "skills/interrogate/SKILL.md",
+      "bytes": 5079,
+      "sha256": "a9c2100772bae0b0c5416577afaf443cc67257d704fa7c4e9fd297d818bd527d"
+    },
+    {
+      "path": "skills/interrogate/references/code-quality-review.md",
+      "bytes": 5217,
+      "sha256": "79162fda183eafd40d51661fbb5e151c7ba250f89e506ba17f5bd135dcbd50a8"
+    },
+    {
+      "path": "skills/interrogate/references/lead-judgment.md",
+      "bytes": 3465,
+      "sha256": "6e5bdf5670eb34017692e9b6c546f36ac7552e6bb9f3f2f3429164fcc46a9361"
+    },
+    {
+      "path": "skills/interrogate/references/reviewer-prompt.md",
+      "bytes": 2491,
+      "sha256": "e0598e254792b56de39bb16b1e6db559b03a522fdc54b98f942d254090920ae6"
+    },
+    {
+      "path": "skills/interrogate/references/rubric.md",
+      "bytes": 5025,
+      "sha256": "a85aa801abbaf14434f00579440abc0d8e2723227ba8bf57de7cca8d6e7d2f25"
+    },
+    {
+      "path": "skills/maintain-verification-skill/SKILL.md",
+      "bytes": 5188,
+      "sha256": "f8c694b44404e51ac4967c573382db688123ec8bb8624e51e9e3875d7032a1b4"
+    },
+    {
+      "path": "skills/make-pr-easy-to-review/SKILL.md",
+      "bytes": 2275,
+      "sha256": "e8da0d4a85b7c04823698f539251617389f827fd9137100ef7eaea5dcc992fe7"
+    },
+    {
+      "path": "skills/no-comments/SKILL.md",
+      "bytes": 2767,
+      "sha256": "d3e0cb254f9bf496a36fb2815cfab02d7d823d256f1abfab62c5f87cc82f21c9"
+    },
+    {
+      "path": "skills/poteto-mode/SKILL.md",
+      "bytes": 19554,
+      "sha256": "73af5e5492f014385f08ce293438808a4887b9086a68edf6d2ff31a5814474de"
+    },
+    {
+      "path": "skills/poteto-mode/playbooks/authoring-a-skill.md",
+      "bytes": 849,
+      "sha256": "712c47f47c02708475ba7872bd9f2f3364c1666d9f85e46ead6dd8302e8b433e"
+    },
+    {
+      "path": "skills/poteto-mode/playbooks/autonomous-run.md",
+      "bytes": 1862,
+      "sha256": "a60ad3a185a1b1ac7bd6cbe9d0767a3bb9ff7f7353b484d8ec5eb76a3e7bc9f2"
+    },
+    {
+      "path": "skills/poteto-mode/playbooks/autopilot-full.md",
+      "bytes": 10998,
+      "sha256": "092ae93e2939ec550b4567c1cf1007e2d1f21cf614c8f4d6556f24211a9e70fa"
+    },
+    {
+      "path": "skills/poteto-mode/playbooks/autopilot-stack.md",
+      "bytes": 8498,
+      "sha256": "a1340ad3a4ba016dd5b5ce2b4a9b8480c15698403e0d1dc1857f79f42d02f387"
+    },
+    {
+      "path": "skills/poteto-mode/playbooks/babysit.md",
+      "bytes": 8753,
+      "sha256": "5cec6ceb9777407997a87afca2b18f9f2473f5653f570d1e37d29ed9a3acc60e"
+    },
+    {
+      "path": "skills/poteto-mode/playbooks/bug-fix.md",
+      "bytes": 2397,
+      "sha256": "5cea51399204fc1897978202844e933ae84ea7918ddafd1a001c5ce316c2e35c"
+    },
+    {
+      "path": "skills/poteto-mode/playbooks/eval.md",
+      "bytes": 2566,
+      "sha256": "3d69bdbc42e6a0f881965c7c9fc19bdfcc5c8fd18ed46a6bed60024491f02edb"
+    },
+    {
+      "path": "skills/poteto-mode/playbooks/feature.md",
+      "bytes": 2751,
+      "sha256": "ee9525e11e39a69dcdfe7755d6f851ecbd97b4fe3f5b3b142061d5c07b4da263"
+    },
+    {
+      "path": "skills/poteto-mode/playbooks/hillclimb.md",
+      "bytes": 4126,
+      "sha256": "8bf10a6dc8a80e84d2f7f3244cbf522ee713bbc5418d4c6ffddf7b807b01be7e"
+    },
+    {
+      "path": "skills/poteto-mode/playbooks/investigation.md",
+      "bytes": 928,
+      "sha256": "dc66bcf6af3a074fc7f67aa5e12b93ef571a4fb4d8e17f2f1af5ae5359f42e46"
+    },
+    {
+      "path": "skills/poteto-mode/playbooks/multi-phase-plan.md",
+      "bytes": 16535,
+      "sha256": "bf4222f58e499b4ad06131f6b6916a27af152867bf577349642bd2a13309f2ff"
+    },
+    {
+      "path": "skills/poteto-mode/playbooks/opening-a-pr.md",
+      "bytes": 7203,
+      "sha256": "24f3e27e30eed2d2e58c8493f1255d9676c1e4ad949a731e45c536bbec168cad"
+    },
+    {
+      "path": "skills/poteto-mode/playbooks/orchestrate.md",
+      "bytes": 17227,
+      "sha256": "0d0c21979dfc5f608550c38371575bb5618ada9a4a54fa83064f49b40a66a4e6"
+    },
+    {
+      "path": "skills/poteto-mode/playbooks/pause-safely.md",
+      "bytes": 1135,
+      "sha256": "77968cfe5f4a71a8cd33e0ae8ffcdbd88dd693a212c240457773e6c40c96c21d"
+    },
+    {
+      "path": "skills/poteto-mode/playbooks/perf-issue.md",
+      "bytes": 3169,
+      "sha256": "7918bdeb94c55fc867364737fdb99493e86b24cf436c0d1139d8fc8f6d2d20e6"
+    },
+    {
+      "path": "skills/poteto-mode/playbooks/prototype.md",
+      "bytes": 2200,
+      "sha256": "0ee5ef31780a3705873850ffb8377e475884a24dc40b3608f5e4502156b439c3"
+    },
+    {
+      "path": "skills/poteto-mode/playbooks/refactoring.md",
+      "bytes": 3302,
+      "sha256": "89fc9844da8dd6ed31c55214f13a9ed93f332f9947ed82c9b28ce88ffa5c8ab9"
+    },
+    {
+      "path": "skills/poteto-mode/playbooks/runtime-forensics.md",
+      "bytes": 1249,
+      "sha256": "2944310bd9315a959708c849a13ec124835c974fa143cdd22242434cffb3d6dd"
+    },
+    {
+      "path": "skills/poteto-mode/playbooks/session-pickup.md",
+      "bytes": 1767,
+      "sha256": "177423ee4694da47395ef1bf197c18a367033f2de4262cac074d894a3aab83ee"
+    },
+    {
+      "path": "skills/poteto-mode/playbooks/shipping.md",
+      "bytes": 13014,
+      "sha256": "ccf66f5e197561064fde0960357e3e31de616f57792b5dd71e7b2ab73a92d19a"
+    },
+    {
+      "path": "skills/poteto-mode/playbooks/trace-forensics.md",
+      "bytes": 1865,
+      "sha256": "137ce3984fb96e45971fdff4d3c79fa4ccc647c5b30ae4945783b9fb23f8cec7"
+    },
+    {
+      "path": "skills/poteto-mode/playbooks/visual-parity.md",
+      "bytes": 1236,
+      "sha256": "903ada984a0464686b1d63ee1f9666625ec1446c1dbc6a626e6637d2946e16a4"
+    },
+    {
+      "path": "skills/poteto-mode/playbooks/worktree-cleanup.md",
+      "bytes": 3010,
+      "sha256": "00bedc0f92559fae9c333c119babaf7096d5701dd075f92b28a82dac4c705e31"
+    },
+    {
+      "path": "skills/poteto-mode/references/bugbot-triage.md",
+      "bytes": 9629,
+      "sha256": "b2d146c770d8d3593e1ef3d77b668039b8e1f78093ea1a86f1d45d7f99614309"
+    },
+    {
+      "path": "skills/poteto-mode/references/codex-tools.md",
+      "bytes": 5288,
+      "sha256": "10a833577d91c20d8bdaded72eb7360f90f4b954432cae628d57198b067f1896"
+    },
+    {
+      "path": "skills/poteto-mode/references/provider-dispatch.md",
+      "bytes": 11095,
+      "sha256": "7ca7186e3fb319e3cbba32079be1cd94eea98007501b95e66e4167b8055d1584"
+    },
+    {
+      "path": "skills/principle-attack-the-premise/SKILL.md",
+      "bytes": 2080,
+      "sha256": "baa5a62e55fd3ef6538bf52143b6f983de6edbedcb518cfc410161b348899e36"
+    },
+    {
+      "path": "skills/principle-boundary-discipline/SKILL.md",
+      "bytes": 1874,
+      "sha256": "e59efe04ed66e3a403a50e70640daeb5c7b592598687a67b6e25ceed6251d19f"
+    },
+    {
+      "path": "skills/principle-build-the-lever/SKILL.md",
+      "bytes": 2449,
+      "sha256": "21bc68f769b9cc6eff2614f4a11c5760d37334eb1b59309df04278dabb49bccf"
+    },
+    {
+      "path": "skills/principle-encode-lessons-in-structure/SKILL.md",
+      "bytes": 2202,
+      "sha256": "99755a1add54e0f721842a0505230bf608bc44bd2d859ac4d792ffd576b9eead"
+    },
+    {
+      "path": "skills/principle-exhaust-the-design-space/SKILL.md",
+      "bytes": 1143,
+      "sha256": "be8d01be643621e93feb2e94389b1311bd7aa8241bf417d63fed2692e52a2d28"
+    },
+    {
+      "path": "skills/principle-experience-first/SKILL.md",
+      "bytes": 1175,
+      "sha256": "688917387e19da6a343fe657c726eb65998937da69ed7d29f1dfaadb53516a10"
+    },
+    {
+      "path": "skills/principle-fix-root-causes/SKILL.md",
+      "bytes": 1237,
+      "sha256": "4c5fd0fb9eb4754dff9a6dd4d1de7a87dc927f5154ab3afd643bedb9b7f8b6b9"
+    },
+    {
+      "path": "skills/principle-foundational-thinking/SKILL.md",
+      "bytes": 1521,
+      "sha256": "a3d9bf77ebb9ed5c5eb9ef6ae719f6eeecf5fda6122a134a89ce6856b14577ab"
+    },
+    {
+      "path": "skills/principle-guard-the-context-window/SKILL.md",
+      "bytes": 930,
+      "sha256": "fa71b45013927d1ffb3cd9c2eed00c00606ee86080bb81b6ee4b9dd7eccfc593"
+    },
+    {
+      "path": "skills/principle-laziness-protocol/SKILL.md",
+      "bytes": 1362,
+      "sha256": "3496d3bc0e8fd23980b6ac1a56f9ad4c904ec215b61aaf36bdae11baa71be79b"
+    },
+    {
+      "path": "skills/principle-make-operations-idempotent/SKILL.md",
+      "bytes": 1381,
+      "sha256": "576260695df90ac979f01c03321d5a8cb7bd824bdbc5d3fbe6790ee1caa19ab4"
+    },
+    {
+      "path": "skills/principle-migrate-callers-then-delete-legacy-apis/SKILL.md",
+      "bytes": 1137,
+      "sha256": "8014f4eb04fe50474f7e3f9286bce2de276116b8b669cd2fe7b2100972efb68a"
+    },
+    {
+      "path": "skills/principle-minimize-reader-load/SKILL.md",
+      "bytes": 2086,
+      "sha256": "772bd55686c20d49e1220d0728de4587cd5608ae2968b7896c5477b3f8813dfc"
+    },
+    {
+      "path": "skills/principle-model-the-domain/SKILL.md",
+      "bytes": 2073,
+      "sha256": "bc0b694b37b3311ca2f02660c1660769e0799af49cec9a2b12d349742349f1ff"
+    },
+    {
+      "path": "skills/principle-never-block-on-the-human/SKILL.md",
+      "bytes": 1163,
+      "sha256": "eabfb043dc0a78b4cc7a5ae91f61085ba01516c245650814b03e24cd38194329"
+    },
+    {
+      "path": "skills/principle-outcome-oriented-execution/SKILL.md",
+      "bytes": 1069,
+      "sha256": "55f1baeb9951f8584399bf82042e78f623e1f1dd560cb9b6413302bde43fd439"
+    },
+    {
+      "path": "skills/principle-prove-it-works/SKILL.md",
+      "bytes": 1362,
+      "sha256": "80ee4a50fe1d87c33463b913a3c894e7fd0048ecf45ec39dfea3832c7e3b5c61"
+    },
+    {
+      "path": "skills/principle-redesign-from-first-principles/SKILL.md",
+      "bytes": 835,
+      "sha256": "418ec688036dadc8e14dbb967065a0e92b165c83417136de362e464d07c0795c"
+    },
+    {
+      "path": "skills/principle-separate-before-serializing-shared-state/SKILL.md",
+      "bytes": 1556,
+      "sha256": "dd432081bc5664ce1a9513a6b58207d8e4685e0d0cb894278204bd08a637f601"
+    },
+    {
+      "path": "skills/principle-sequence-verifiable-units/SKILL.md",
+      "bytes": 1696,
+      "sha256": "5bee6caf5abdf7b05b3e7c8d3e66549d108c2f798d8155c352a1764d030816d7"
+    },
+    {
+      "path": "skills/principle-subtract-before-you-add/SKILL.md",
+      "bytes": 1085,
+      "sha256": "84bfde4d3dc16360264e0cb944b2dfbd8d92a70624322e83b93432f8e35dc60e"
+    },
+    {
+      "path": "skills/principle-test-behavior-not-implementation/SKILL.md",
+      "bytes": 2983,
+      "sha256": "5c7f7def06ef50a1b8cd8518a75879302bc75b9c3ea8fce6caf7dcecc2527a8f"
+    },
+    {
+      "path": "skills/principle-type-system-discipline/SKILL.md",
+      "bytes": 4913,
+      "sha256": "adaa7a27c8794b24112fdaf73d11d7c59f0926c496fd5c9b0b5cb1c0ebbd3536"
+    },
+    {
+      "path": "skills/recall/SKILL.md",
+      "bytes": 5171,
+      "sha256": "e1235be018aea98df28fd139ea7632fc58d638f13fbe148dfd2e7b1726ead700"
+    },
+    {
+      "path": "skills/reflect/SKILL.md",
+      "bytes": 5026,
+      "sha256": "b830e92ad66435d05a04286934b8270b6cc04e8821d7a50bf6e42ec09fe22e82"
+    },
+    {
+      "path": "skills/reflect/references/divergent-reviewer.md",
+      "bytes": 3890,
+      "sha256": "6f69082f8d9b344b0a3a4ba3ec27880bce80c2edf71a63e3361fb99d50486dba"
+    },
+    {
+      "path": "skills/reflect/references/judgment-reviewer.md",
+      "bytes": 3256,
+      "sha256": "2e1c91bffb36dc614cbccf23425038ef523d4898364478e52726e79732f810e6"
+    },
+    {
+      "path": "skills/reflect/references/synthesizer.md",
+      "bytes": 4212,
+      "sha256": "2de436a8109173095e3b96695ecc545986ed1903726e7d4941352517a8240de0"
+    },
+    {
+      "path": "skills/reflect/references/tooling-reviewer.md",
+      "bytes": 4610,
+      "sha256": "c75bb4ebf1cfd03113517743df77f39f1bfab8d1424b5e90e5145f7366d2d9e4"
+    },
+    {
+      "path": "skills/setup-pstack/SKILL.md",
+      "bytes": 11495,
+      "sha256": "370391d3b7ca12fb36da4db3fe7f0fb67d6d11df9de43a554f486dacc88dab2f"
+    },
+    {
+      "path": "skills/show-me-your-work/SKILL.md",
+      "bytes": 6385,
+      "sha256": "6582229a127cbad1a52c44cbae7d94df94008dde8927c1ccf69cc2e27cd80a2f"
+    },
+    {
+      "path": "skills/swarm/SKILL.md",
+      "bytes": 3211,
+      "sha256": "bc3257c8255e880295988d920a17984b9a8bc0f649b2dae4fd950c204b59462b"
+    },
+    {
+      "path": "skills/tdd/SKILL.md",
+      "bytes": 3112,
+      "sha256": "c80ccd382d26288085623e307aeafa91e0a23dc36b3f64030e72793ff070037d"
+    },
+    {
+      "path": "skills/teach/SKILL.md",
+      "bytes": 5903,
+      "sha256": "e887eacc2c83770f83f1803ca2ad22db077a650f0644f06c1033a799b81f59c5"
+    },
+    {
+      "path": "skills/technical-writing/SKILL.md",
+      "bytes": 10174,
+      "sha256": "a450d685f477833640054828477fff97e1fd4ffb396a845b512d131b633c1919"
+    },
+    {
+      "path": "skills/thermo-nuclear-code-quality-review/SKILL.md",
+      "bytes": 12406,
+      "sha256": "3fe9fb20c10a3aeffc059c4c9e0624e2cc5972b02811ded56334daedec4186b2"
+    },
+    {
+      "path": "skills/typescript-best-practices/SKILL.md",
+      "bytes": 2653,
+      "sha256": "fd61fe218e2d08226a63533d344277ccacd6e92fd07a81ca663817594585221d"
+    },
+    {
+      "path": "skills/typescript-best-practices/references/patterns.md",
+      "bytes": 8860,
+      "sha256": "62e9cd32d2fa066a35d0d1349aac22dce31a48ad7d5eaf142570770cfe707384"
+    },
+    {
+      "path": "skills/unslop/SKILL.md",
+      "bytes": 5984,
+      "sha256": "290a10a90e52f080fdf0f225f043088990b5cd8d8b8307c800a91cfeb1568aa4"
+    },
+    {
+      "path": "skills/what-did-i-get-done/SKILL.md",
+      "bytes": 1012,
+      "sha256": "479813c9abaacb5b6b0531f1de7dc5eb2f3bd9673707a992d1073335836e82f8"
+    },
+    {
+      "path": "skills/why/SKILL.md",
+      "bytes": 10283,
+      "sha256": "ecd445975b555d3b82840db7108dafa6c6fe278fc7805555bbd648379bbd98d7"
+    },
+    {
+      "path": "skills/why/references/epistemics.md",
+      "bytes": 7749,
+      "sha256": "fcc0f559c072832c869a5ada72434b4849320a637ae63c09e8ee14f7ad787059"
+    },
+    {
+      "path": "skills/why/references/investigator-prompt.md",
+      "bytes": 6985,
+      "sha256": "6892956a7ab0b5ee6c4babaf4f793703abe89b350ea7cb9463b4a56eea1c8266"
+    },
+    {
+      "path": "skills/why/references/source-playbook.md",
+      "bytes": 1363,
+      "sha256": "9ae9dcb9d09111c9facc68510331c5aba4aed9b1b057314ff1fc0e166ad3993a"
+    },
+    {
+      "path": "skills/why/references/sources/code-archaeology.md",
+      "bytes": 3489,
+      "sha256": "8c14aa382f0de40829b2668d43e3f54814480bb93a486c9282ada4003f6b9dbd"
+    },
+    {
+      "path": "skills/why/references/sources/databricks.md",
+      "bytes": 7058,
+      "sha256": "0405eb29c17932b8e6c7db7c596d99c1a7c660dcc95adb2c43a033c6a936d0b1"
+    },
+    {
+      "path": "skills/why/references/sources/datadog.md",
+      "bytes": 5323,
+      "sha256": "ebe9c07bac28e47757ee7f16fb93b0c01d427a08c501957d047f395a2f37b7e7"
+    },
+    {
+      "path": "skills/why/references/sources/incident-postmortem.md",
+      "bytes": 1973,
+      "sha256": "a899470f05f86029630a13a2696491cc708ca7b56a6e822a69ff6e954d6ff8cf"
+    },
+    {
+      "path": "skills/why/references/sources/linear.md",
+      "bytes": 2996,
+      "sha256": "01304e7f1badfcfb78babbb0edcadeb3cc8dd3f713793420cdff24ba190f907c"
+    },
+    {
+      "path": "skills/why/references/sources/notion.md",
+      "bytes": 2853,
+      "sha256": "3bcfa695c49dfad4ac036d5d7181c12585f55ac04f1936198d16ab75a2788997"
+    },
+    {
+      "path": "skills/why/references/sources/sentry.md",
+      "bytes": 4947,
+      "sha256": "6f292bc4fb1548e956f95e1900b9481abf5134254419f1cd9edec95428c82d73"
+    },
+    {
+      "path": "skills/why/references/sources/slack.md",
+      "bytes": 3105,
+      "sha256": "58fee61d024b3700b407e7acbed367944720ff05adfddb6954d36c88368f3ba7"
+    },
+    {
+      "path": "skills/why/references/synthesizer-prompt.md",
+      "bytes": 7984,
+      "sha256": "733a3e9cf897b1aca56aaddeae01a3832e4bfed024c2f602db2d1bf807d7a73b"
+    }
+  ],
+  "excluded": [
+    "all executable source and scripts",
+    "runtime hooks",
+    "binary assets",
+    "external launcher dependencies"
+  ],
+  "validation": {
+    "sourceBlocksMatchInstalledBytes": true,
+    "payloadBounds": true,
+    "runtimeValidation": "run node check.mjs after packaging",
+    "inference": "not run",
+    "deployment": "not performed"
+  },
+  "licenseIncludedInPayload": true
+}

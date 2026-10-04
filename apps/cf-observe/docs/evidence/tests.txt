@@ -1,0 +1,352 @@
+
+> cf-observe@0.1.0 test
+> node --test tests/*.test.js
+
+TAP version 13
+# (node:3190) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: auth module exists
+ok 1 - auth module exists
+  ---
+  duration_ms: 0.963089
+  type: 'test'
+  ...
+# Subtest: signed sessions cannot be forged and expired sessions are rejected
+ok 2 - signed sessions cannot be forged and expired sessions are rejected
+  ---
+  duration_ms: 7.225309
+  type: 'test'
+  ...
+# Subtest: viewer and ingest tokens have separate privileges
+ok 3 - viewer and ingest tokens have separate privileges
+  ---
+  duration_ms: 17.760406
+  type: 'test'
+  ...
+# Subtest: cross-origin browser requests are rejected
+ok 4 - cross-origin browser requests are rejected
+  ---
+  duration_ms: 0.486582
+  type: 'test'
+  ...
+# Subtest: short or shared secrets fail closed
+ok 5 - short or shared secrets fail closed
+  ---
+  duration_ms: 0.176766
+  type: 'test'
+  ...
+# Subtest: copied example placeholders cannot authenticate a deployment
+ok 6 - copied example placeholders cannot authenticate a deployment
+  ---
+  duration_ms: 0.134272
+  type: 'test'
+  ...
+# Subtest: 10-second archive writes stay within an otherwise-unused Class A allowance
+ok 7 - 10-second archive writes stay within an otherwise-unused Class A allowance
+  ---
+  duration_ms: 0.728816
+  type: 'test'
+  ...
+# Subtest: 1-second writes account for both PUTs and upward billing-unit rounding
+ok 8 - 1-second writes account for both PUTs and upward billing-unit rounding
+  ---
+  duration_ms: 0.134042
+  type: 'test'
+  ...
+# Subtest: idle ingestion does not create R2 files
+ok 9 - idle ingestion does not create R2 files
+  ---
+  duration_ms: 0.970009
+  type: 'test'
+  ...
+# Subtest: invalid cost parameters are rejected
+ok 10 - invalid cost parameters are rejected
+  ---
+  duration_ms: 0.240672
+  type: 'test'
+  ...
+# (node:3192) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: Worker handler exists
+ok 11 - Worker handler exists
+  ---
+  duration_ms: 1.48254
+  type: 'test'
+  ...
+# Subtest: unauthorized ingestion does not reach storage
+ok 12 - unauthorized ingestion does not reach storage
+  ---
+  duration_ms: 18.935533
+  type: 'test'
+  ...
+# Subtest: an authenticated generic event becomes queryable before R2 flush
+ok 13 - an authenticated generic event becomes queryable before R2 flush
+  ---
+  duration_ms: 13.397923
+  type: 'test'
+  ...
+# Subtest: OTLP success returns a valid empty response, not a proprietary receipt body
+ok 14 - OTLP success returns a valid empty response, not a proprietary receipt body
+  ---
+  duration_ms: 2.54685
+  type: 'test'
+  ...
+# Subtest: login sets a secure HttpOnly cookie and exposes no token in response JSON
+ok 15 - login sets a secure HttpOnly cookie and exposes no token in response JSON
+  ---
+  duration_ms: 3.385623
+  type: 'test'
+  ...
+# Subtest: CSP and sensitive response cache protections are set
+ok 16 - CSP and sensitive response cache protections are set
+  ---
+  duration_ms: 1.640979
+  type: 'test'
+  ...
+# Subtest: viewer token cannot write and ingest token cannot read
+ok 17 - viewer token cannot write and ingest token cannot read
+  ---
+  duration_ms: 1.484413
+  type: 'test'
+  ...
+# Subtest: WebSocket upgrades require both authentication and the same origin
+ok 18 - WebSocket upgrades require both authentication and the same origin
+  ---
+  duration_ms: 2.278667
+  type: 'test'
+  ...
+# (node:3223) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: journal class exists
+ok 19 - journal class exists
+  ---
+  duration_ms: 0.790018
+  type: 'test'
+  ...
+# Subtest: acceptance is durable before R2 flush and survives object reconstruction
+ok 20 - acceptance is durable before R2 flush and survives object reconstruction
+  ---
+  duration_ms: 3.983382
+  type: 'test'
+  ...
+# Subtest: flush writes a compressed segment and manifest, then removes pending rows
+ok 21 - flush writes a compressed segment and manifest, then removes pending rows
+  ---
+  duration_ms: 32.793699
+  type: 'test'
+  ...
+# Subtest: failed segment PUT retains all accepted payloads and schedules recovery
+ok 22 - failed segment PUT retains all accepted payloads and schedules recovery
+  ---
+  duration_ms: 4.79306
+  type: 'test'
+  ...
+# Subtest: manifest failure and restart reuse the exact same segment key
+ok 23 - manifest failure and restart reuse the exact same segment key
+  ---
+  duration_ms: 5.135935
+  type: 'test'
+  ...
+# Subtest: empty alarms cause no R2 requests
+ok 24 - empty alarms cause no R2 requests
+  ---
+  duration_ms: 0.42523
+  type: 'test'
+  ...
+# Subtest: explicit idempotency key returns prior receipt without duplicating rows
+ok 25 - explicit idempotency key returns prior receipt without duplicating rows
+  ---
+  duration_ms: 1.930133
+  type: 'test'
+  ...
+# Subtest: reusing an idempotency key with another payload is rejected
+ok 26 - reusing an idempotency key with another payload is rejected
+  ---
+  duration_ms: 3.071961
+  type: 'test'
+  ...
+# Subtest: overloaded journal returns 503 without accepting or dropping a batch
+ok 27 - overloaded journal returns 503 without accepting or dropping a batch
+  ---
+  duration_ms: 0.833514
+  type: 'test'
+  ...
+# Subtest: batches spanning different UTC hours are not put under the wrong manifest
+ok 28 - batches spanning different UTC hours are not put under the wrong manifest
+  ---
+  duration_ms: 4.691306
+  type: 'test'
+  ...
+# Subtest: accepted live frames have no raw fields and expired viewers are closed
+ok 29 - accepted live frames have no raw fields and expired viewers are closed
+  ---
+  duration_ms: 1.085002
+  type: 'test'
+  ...
+# Subtest: live subscriptions filter nested raw fields before creating safe previews
+ok 30 - live subscriptions filter nested raw fields before creating safe previews
+  ---
+  duration_ms: 0.619082
+  type: 'test'
+  ...
+# Subtest: large service attributes do not expand every archive manifest
+ok 31 - large service attributes do not expand every archive manifest
+  ---
+  duration_ms: 4.12808
+  type: 'test'
+  ...
+# Subtest: no live success is emitted before storage synchronization
+ok 32 - no live success is emitted before storage synchronization
+  ---
+  duration_ms: 0.836318
+  type: 'test'
+  ...
+# Subtest: idempotency receipt remains valid after raw data moves to R2
+ok 33 - idempotency receipt remains valid after raw data moves to R2
+  ---
+  duration_ms: 7.806262
+  type: 'test'
+  ...
+# Subtest: protocol module exposes normalize
+ok 34 - protocol module exposes normalize
+  ---
+  duration_ms: 1.071552
+  type: 'test'
+  ...
+# Subtest: OTLP log preserves original nanoseconds, body, unknown fields and resource
+ok 35 - OTLP log preserves original nanoseconds, body, unknown fields and resource
+  ---
+  duration_ms: 1.01057
+  type: 'test'
+  ...
+# Subtest: trace duration does not round timestamps before subtracting
+ok 36 - trace duration does not round timestamps before subtracting
+  ---
+  duration_ms: 0.263607
+  type: 'test'
+  ...
+# Subtest: every metric point is exposed and histogram buckets remain intact
+ok 37 - every metric point is exposed and histogram buckets remain intact
+  ---
+  duration_ms: 0.362335
+  type: 'test'
+  ...
+# Subtest: generic events preserve their full payload
+ok 38 - generic events preserve their full payload
+  ---
+  duration_ms: 0.165039
+  type: 'test'
+  ...
+# Subtest: invalid top-level OTLP container is rejected, not silently accepted empty
+ok 39 - invalid top-level OTLP container is rejected, not silently accepted empty
+  ---
+  duration_ms: 0.364569
+  type: 'test'
+  ...
+# Subtest: valid empty OTLP request is accepted
+ok 40 - valid empty OTLP request is accepted
+  ---
+  duration_ms: 0.162355
+  type: 'test'
+  ...
+# Subtest: preview does not contain sensitive raw attributes and marks abbreviated messages
+ok 41 - preview does not contain sensitive raw attributes and marks abbreviated messages
+  ---
+  duration_ms: 0.293962
+  type: 'test'
+  ...
+# Subtest: protobuf reader preserves uint64 precision and handles packed histogram counts
+ok 42 - protobuf reader preserves uint64 precision and handles packed histogram counts
+  ---
+  duration_ms: 31.090887
+  type: 'test'
+  ...
+# Subtest: previews bound large display fields without changing the raw request
+ok 43 - previews bound large display fields without changing the raw request
+  ---
+  duration_ms: 0.705211
+  type: 'test'
+  ...
+# Subtest: OTLP packed histogram counts retain 64-bit precision
+ok 44 - OTLP packed histogram counts retain 64-bit precision
+  ---
+  duration_ms: 1.018412
+  type: 'test'
+  ...
+# (node:3245) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: query API exists
+ok 45 - query API exists
+  ---
+  duration_ms: 0.806893
+  type: 'test'
+  ...
+# Subtest: all archived and pending events are paginated without duplication
+ok 46 - all archived and pending events are paginated without duplication
+  ---
+  duration_ms: 51.305084
+  type: 'test'
+  ...
+# Subtest: pending-to-R2 transition during query has no gap
+ok 47 - pending-to-R2 transition during query has no gap
+  ---
+  duration_ms: 5.46409
+  type: 'test'
+  ...
+# Subtest: raw event detail can find a live preview after the batch moved to R2
+ok 48 - raw event detail can find a live preview after the batch moved to R2
+  ---
+  duration_ms: 6.04272
+  type: 'test'
+  ...
+# Subtest: service and full-payload text filters find nested attributes
+ok 49 - service and full-payload text filters find nested attributes
+  ---
+  duration_ms: 7.395891
+  type: 'test'
+  ...
+# Subtest: a sparse broad query returns an explicit continuation, not a false complete
+ok 50 - a sparse broad query returns an explicit continuation, not a false complete
+  ---
+  duration_ms: 2.079358
+  type: 'test'
+  ...
+# Subtest: cursor tampering and changing filters are rejected
+ok 51 - cursor tampering and changing filters are rejected
+  ---
+  duration_ms: 6.451915
+  type: 'test'
+  ...
+# Subtest: a continuation uses a fixed watermark and excludes newly ingested records
+ok 52 - a continuation uses a fixed watermark and excludes newly ingested records
+  ---
+  duration_ms: 3.37048
+  type: 'test'
+  ...
+# Subtest: missing archive segment produces a visible error, not silently missing logs
+ok 53 - missing archive segment produces a visible error, not silently missing logs
+  ---
+  duration_ms: 6.529011
+  type: 'test'
+  ...
+# Subtest: dashboard assets are present
+ok 54 - dashboard assets are present
+  ---
+  duration_ms: 4.94652
+  type: 'test'
+  ...
+# Subtest: dashboard avoids HTML injection and persistent token storage
+ok 55 - dashboard avoids HTML injection and persistent token storage
+  ---
+  duration_ms: 1.836202
+  type: 'test'
+  ...
+1..55
+# tests 55
+# suites 0
+# pass 55
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 245.541287

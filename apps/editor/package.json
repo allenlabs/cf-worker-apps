@@ -1,0 +1,63 @@
+{
+  "name": "@cf-worker-apps/editor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Collaborative document service — TanStack Start SSR web worker + HMAC API worker, real-time editing via the @allenlabs/editor package over allenlabs-collab (Yjs).",
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "dev:api": "wrangler dev --config workers/api/wrangler.toml",
+    "build": "vite build",
+    "build:web": "vite build",
+    "deploy:web": "npm run build && wrangler deploy --config workers/web/wrangler.toml dist/server/server.js --assets dist/client",
+    "deploy:api": "wrangler deploy --config workers/api/wrangler.toml",
+    "deploy:cron": "wrangler deploy --config workers/cron/wrangler.toml",
+    "deploy": "npm run deploy:web && npm run deploy:api && npm run deploy:cron",
+    "//db:env": "DATABASE_URL must be set from pass-cli item 'MyPanel PostgreSQL Hetzner' (the allenlabs DB connection string).",
+    "db:migrate": "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f drizzle-pg/0001_init.sql",
+    "db:migrate:0002": "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f drizzle-pg/0002_pages.sql",
+    "db:migrate:0003": "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f drizzle-pg/0003_databases.sql",
+    "db:migrate:0004": "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f drizzle-pg/0004_collab.sql",
+    "db:migrate:0005": "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f drizzle-pg/0005_versions.sql",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "//test:coverage": "Coverage runs the node project only: @cloudflare/vitest-pool-workers can't load @vitest/coverage-v8 (it imports node:inspector/promises, unsupported in the workers runtime — see CF vitest known-issues). The workers integration test runs (uninstrumented) under `npm run test`.",
+    "test:coverage": "vitest run --coverage --project node"
+  },
+  "dependencies": {
+    "@allenlabs/editor": "*",
+    "@allenlabs/i18n": "*",
+    "@microlabs/otel-cf-workers": "^1.0.0-rc.52",
+    "@tanstack/react-router": "1.170.8",
+    "@tanstack/react-start": "^1.168.14",
+    "@tanstack/router-core": "1.171.6",
+    "hono": "4.6.20",
+    "jose": "6.2.3",
+    "postgres": "^3.4.5",
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
+    "turndown": "^7.2.4",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.16.7",
+    "@cloudflare/workers-types": "4.20260521.1",
+    "@types/turndown": "^5.0.6",
+    "@tailwindcss/vite": "^4.3.0",
+    "@tanstack/router-plugin": "1.168.9",
+    "@types/node": "^22.19.19",
+    "@types/react": "19.2.15",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.2",
+    "@vitest/coverage-v8": "4.1.7",
+    "tailwindcss": "4.3.0",
+    "typescript": "5.7.2",
+    "vite": "8.0.14",
+    "vitest": "4.1.7",
+    "wrangler": "4.93.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

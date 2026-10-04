@@ -1,0 +1,46 @@
+# dependencies
+node_modules
+.pnpm-store
+
+# build
+.output
+.vinxi
+.nitro
+dist
+build
+.cache
+
+# tanstack router generated — recreated by `npx @tanstack/router-cli generate`
+# or by `vite dev` / `vite build`.
+**/routeTree.gen.ts
+
+# wrangler / cloudflare
+.wrangler
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+wrangler.local.toml
+.cf-observe/
+
+# drizzle
+drizzle/meta
+
+# editor / OS
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea
+*.log
+
+# env
+.env
+.env.*
+!.env.example
+coverage
+tsr.config.json
+
+# Playwright e2e
+tests/e2e/.auth/
+tests/e2e/test-results/
+tests/e2e/playwright-report/

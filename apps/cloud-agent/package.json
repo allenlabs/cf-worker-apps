@@ -1,0 +1,38 @@
+{
+  "name": "@cf-worker-apps/cloud-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "npm run build:pi && npm run build:events",
+    "build:pi": "node scripts/build.mjs pi",
+    "build:events": "node scripts/build.mjs events",
+    "check": "node tests/workers/check.mjs",
+    "auth-check": "node tests/workers/auth-check.mjs",
+    "admin-check": "node tests/workers/admin-check.mjs",
+    "test": "npm run build && npm run check && npm run auth-check && npm run admin-check && npm run control-check",
+    "test:coverage": "npm run build && npm run check && npm run auth-check && npm run control-check && node tests/workers/admin-check.mjs --coverage",
+    "typecheck": "node --check workers/pi/index.js && node --check workers/pi/admin.js && node --check scripts/build.mjs && node --check tests/workers/check.mjs && node --check tests/workers/auth-check.mjs && node --check tests/workers/admin-check.mjs && node --check tests/workers/control-check.mjs",
+    "dev": "wrangler dev --config workers/pi/wrangler.jsonc",
+    "deploy": "wrangler deploy --config workers/pi/wrangler.jsonc",
+    "control-check": "node tests/workers/control-check.mjs"
+  },
+  "dependencies": {
+    "agents": "0.26.0",
+    "@earendil-works/pi-ai": "1.0.2",
+    "@earendil-works/pi-durable": "1.0.2",
+    "@cloudflare/workers-oauth-provider": "1.2.1",
+    "yaml": "2.9.1",
+    "zod": "4.6.5",
+    "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/sdk": "1.30.0"
+  },
+  "devDependencies": {
+    "wrangler": "4.147.0",
+    "miniflare": "5.20261001.0-alpha"
+  },
+  "description": "Cloudflare Agents and Pi with durable team-chat threads and SSO administration."
+}
