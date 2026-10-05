@@ -1,3 +1,4 @@
+import { piTextModules } from "./pi-modules.mjs";
 import { fileURLToPath } from "node:url";
 process.chdir(fileURLToPath(new URL("../..", import.meta.url)));
 import assert from "node:assert/strict";
@@ -52,12 +53,14 @@ const jwt = (overrides = claimsOverride) => {
   const claims = Buffer.from(JSON.stringify({ iss: "https://auth.openai.com", aud: "fixture-client", sub: "fixture-sub", email, email_verified: true, nonce, exp: Date.now() / 1000 + 3600, "https://api.openai.com/auth": { chatgpt_plan_type: "pro", chatgpt_account_id: "fixture-account" }, ...overrides })).toString("base64url");
   return `${header}.${claims}.${sign("RSA-SHA256", Buffer.from(`${header}.${claims}`), privateKey).toString("base64url")}`;
 };
+const textModules = await piTextModules(resolve("build/pi"));
 const config = {
   name: "cloud-agent",
   modulesRoot: resolve("build/pi"),
-  modules: ["check-wrapper.js", "index.js"].map(name => ({ type: "ESModule", path: resolve("build/pi", name) })),
+  modules: [...["check-wrapper.js", "index.js"].map(name => ({ type: "ESModule", path: resolve("build/pi", name) })), ...textModules],
   compatibilityDate: "2026-10-04",
   compatibilityFlags: ["nodejs_compat"],
+  d1Databases: ["CONVERSATIONS"],
   durableObjects: { Assistant: { className: "Assistant", useSQLite: true }, Credentials: { className: "Credentials", useSQLite: true } },
   bindings: { OWNER_EMAIL_SHA256: createHash("sha256").update(email).digest("hex"), TOKEN_WRAPPING_AAD: "fixture-cloud-agent/v1", PROBE_MODE: "subscription", OPENAI_MODEL: "gpt-6.1-sol", ALLOWED_OPENAI_MODELS:'["gpt-6-luna","gpt-6.1-sol","gpt-6-astra"]', PROBE_DEADLINE_MS: "150", TOKEN_WRAPPING_KEY: randomBytes(32).toString("base64url"), PROBE_KEY_SHA256: createHash("sha256").update(bearer).digest("hex"), PUBLIC_ORIGIN: "https://probe.invalid", PRODUCT_NAME: "Fixture Cloud Agent" },
   outboundService: async request => {

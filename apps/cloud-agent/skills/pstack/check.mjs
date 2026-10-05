@@ -24,7 +24,7 @@ export class Credentials extends ManagementCredentials {
  async adminSession(){return{csrf:'fixture-csrf',principal:{email:'fixture@example.invalid',role:'super_admin'}}}
  async fetch(request){const {action,input}=await request.json();return Response.json(action==='snapshot'?await this.controlSnapshot():await this.adminMutation(action,input,'fixture-session','fixture-csrf'))}
 }`);
-await build({ entryPoints: [entry], outfile: bundle, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', external: ['cloudflare:workers'] });
+await build({ entryPoints: [entry], outfile: bundle, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', external: ['cloudflare:workers'], loader: { '.sql': 'text' } });
 let calls = 0;
 const mf = new Miniflare(convertV4MiniflareOptions({ name: 'pstack-package-check', modulesRoot: scratch, modules: [{ type: 'ESModule', path: bundle }], compatibilityDate: '2026-10-04', compatibilityFlags: ['nodejs_compat'], durableObjects: { Credentials: { className: 'Credentials', useSQLite: true } }, outboundService: () => { calls++; throw new Error('Network is not allowed'); } }));
 const send = async (action, input = {}) => {

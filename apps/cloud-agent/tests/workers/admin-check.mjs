@@ -19,6 +19,7 @@ const admins = { "admin-one@example.invalid": "fixture-admin-one", "admin-two@ex
 const digest = value => createHash("sha256").update(value).digest("hex");
 const operator = randomBytes(32).toString("hex");
 await writeFile(entry, `import {ManagementCredentials,adminRoute} from ${JSON.stringify(resolve("workers/pi/admin.js"))};
+import {conversationDatabase,objectKey,tenantId} from ${JSON.stringify(resolve("workers/pi/conversation-store.js"))};
 export default {fetch:adminRoute};
 export class Credentials extends ManagementCredentials {
  async seal(value){const iv=crypto.getRandomValues(new Uint8Array(12));const key=await crypto.subtle.importKey('raw',Uint8Array.from(atob(this.env.TOKEN_WRAPPING_KEY),c=>c.charCodeAt(0)),{name:'AES-GCM'},false,['encrypt']);return{iv:[...iv],ciphertext:[...new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},key,new TextEncoder().encode(JSON.stringify(value))))]};}
@@ -35,13 +36,13 @@ export class Credentials extends ManagementCredentials {
 }
 export class Assistant extends ManagementCredentials {
  async history(){return[{role:'user',text:'fixture-history'}];}
- async channelHistory(){return{entries:[{text:'fixture-thread-history'}]};}
+ async channelHistory(){const db=await conversationDatabase(this.env),tenant=tenantId(this.env),key=objectKey('assistant',this.ctx.id.toString());await db.batch([db.prepare("INSERT OR IGNORE INTO ca_sessions(tenant_id,object_key,session_id,record) VALUES(?,?,1,?)").bind(tenant,key,JSON.stringify({id:1})),db.prepare("INSERT OR IGNORE INTO ca_entries(tenant_id,object_key,entry_id,session_id,commit_seq,entry) VALUES(?,?,2,1,1,?)").bind(tenant,key,JSON.stringify({id:2,conversationId:1,text:'fixture-thread-history'}))]);return{selected:{sessionId:'1'},receipts:[],entries:[]};}
  async ask(prompt,operationId){return{status:'done',text:prompt,operationId};}
  async manualAsk(prompt,operationId,accountId){const pinned=await this.ctx.storage.get('manualAccountId');if(pinned&&pinned!==accountId)throw Error('manual_account_mismatch');await this.ctx.storage.put('manualAccountId',accountId);await this.env.Credentials.getByName(accountId).recordMockUsage(operationId);return{status:'done',text:prompt,operationId,accountId};}
  async adminSettings(){return{selected:{sessionId:'fixture-session',accountId:'owner',name:await this.ctx.storage.get('sessionName')||''},model:{id:'fixture-model',label:'Fixture'},models:[{id:'fixture-model',label:'Fixture'}],thinking:{value:'medium',label:'Medium'},thinkingChoices:[{value:'medium',label:'Medium'}],sessions:[{id:'fixture-session',name:'Fixture session'}],userEntries:[{id:'fixture-entry',preview:'Fixture user message'}]};}
  async adminControl(input){if(input.args==='busy')throw Error('thread_busy');const receipt=await this.ctx.storage.get(input.operationId);if(receipt)return receipt;const executionCount=(await this.ctx.storage.get('controls')||0)+1;await this.ctx.storage.put('controls',executionCount);if(input.action==='name')await this.ctx.storage.put('sessionName',input.args);const result={operationId:input.operationId,status:'done',message:'Fixture control complete',settings:await this.adminSettings(),executionCount};await this.ctx.storage.put(input.operationId,result);return result;}
 }`);
-await build({ entryPoints: [entry], outfile: bundle, bundle: true, format: "esm", platform: "browser", target: "es2022", external: ["cloudflare:workers"] });
+await build({ entryPoints: [entry], outfile: bundle, bundle: true, format: "esm", platform: "browser", target: "es2022", loader: { ".sql": "text" }, external: ["cloudflare:workers"] });
 const { publicKey, privateKey } = generateKeyPairSync("ed25519");
 const jwk = { ...publicKey.export({ format: "jwk" }), kid: "sso-fixture-key", alg: "EdDSA", use: "sig" };
 let nonce, overrides = {}, tokenCalls = 0, userInfoCalls = 0, missingEmail = false;
@@ -56,6 +57,7 @@ const coverageRequested = process.argv.includes("--coverage");
 const options = {
   inspectorPort: coverageRequested ? 0 : undefined,
   name: "cloud-agent-admin-check", modulesRoot: directory, modules: [{ type: "ESModule", path: bundle }], compatibilityDate: "2026-10-04", compatibilityFlags: ["nodejs_compat"],
+  d1Databases: ["CONVERSATIONS"],
   durableObjects: { Credentials: { className: "Credentials", useSQLite: true }, Assistant: { className: "Assistant", useSQLite: true } },
   bindings: { ALLOWED_CHANNEL_ID: "sample-channel", ALLOWED_CHAT_ID: "sample-group", CHANNEL_APP_ID: "sample-app", PUBLIC_ORIGIN: origin, PRODUCT_NAME: "Fixture Cloud Agent", SSO_ISSUER: issuer, SSO_CLIENT_ID: "fixture-client", SSO_CLIENT_SECRET: rawClientSecret, SUPER_ADMIN_EMAILS: JSON.stringify(Object.keys(admins)), SUPER_ADMIN_SUBJECTS: JSON.stringify(admins), SSO_LOGIN_URL: "https://auth.fixture.invalid/auth/login", SSO_SITE: "sample-site", TOKEN_WRAPPING_KEY: randomBytes(32).toString("base64"), PROBE_KEY_SHA256: digest(operator), DIAGNOSTIC_READS_ENABLED: "true" },
   outboundService: async request => {
@@ -155,7 +157,7 @@ try {
   const accountUi = {}; new Script(uiScript.slice(uiScript.indexOf("const esc="), uiScript.indexOf("async function api(")) + uiScript.slice(uiScript.indexOf("const tokens="), uiScript.indexOf("async function refresh("))).runInNewContext(accountUi);
   const legacyCard = accountUi.accountView({ id: "owner", label: "Legacy", expectedEmail: "configured@example.invalid" }, { defaultAccountId: "owner", accountSelection: { mode: "fixed", poolAccountIds: [] } }); assert.match(legacyCard, /검증 이메일: 제공되지 않음/); assert.match(legacyCard, /설정 이메일: configured@example.invalid/); assert.match(legacyCard, /정보 새로고침으로 확인하세요/);
   const metadataCard = accountUi.accountView({ id: "owner", label: "Account", identity: { source: "verified_id_token", email: "<b>verified@example.invalid</b>", accountId: "selected-account", planType: "plus", workspace: null, organizations: null }, usage: { source: "pi_committed_usage", input: 5, output: 3, totalTokens: 8, cacheRead: 0, cacheWrite: 0, reasoning: 1, quota: null } }, { defaultAccountId: "owner", accountSelection: { mode: "fixed", poolAccountIds: [] } }); assert.match(metadataCard, /&lt;b&gt;verified@example.invalid&lt;\/b&gt;/); assert.match(metadataCard, /워크스페이스: 제공되지 않음/); assert.match(metadataCard, /입력 5 · 출력 3 · 전체 8/); assert.ok(!metadataCard.includes("undefined") && !metadataCard.includes("requests"));
-  const controls = [], nodes = new Map(), ui = { selectedRoot: "first", pendingControls: new Map(), crypto: { randomUUID }, settingsView() {}, $: id => { if (!nodes.has(id)) nodes.set(id, { textContent: "" }); return nodes.get(id); } };
+  const controls = [], nodes = new Map(), ui = { selectedRoot: "first", workspace: { historyVersion: 0 }, safeText: value => value, renderHistory: value => { ui.$("thread-history").textContent = JSON.stringify(value); }, pendingControls: new Map(), crypto: { randomUUID }, settingsView() {}, $: id => { if (!nodes.has(id)) nodes.set(id, { textContent: "" }); return nodes.get(id); } };
   let historyFails = true, finishHistory, historyStarted;
   ui.api = async (path, input) => { if (input) { controls.push(input.operationId); return { status: "done", message: "Applied", settings: {} }; } if (historyFails) throw Error("history_refresh_failed"); return { root: "first" }; };
   new Script(uiScript.slice(uiScript.indexOf("async function threadControl("), uiScript.indexOf("for(const action of ['model'"))).runInNewContext(ui);

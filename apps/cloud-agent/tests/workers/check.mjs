@@ -1,3 +1,4 @@
+import { piTextModules } from "./pi-modules.mjs";
 import { fileURLToPath } from "node:url";
 process.chdir(fileURLToPath(new URL("../..", import.meta.url)));
 import assert from 'node:assert/strict';
@@ -33,13 +34,20 @@ export class Assistant extends BaseAssistant {
     if (args[0] === 'processChannelMessage' && this.env.TEST_FAIL_QUEUE === 'true' && !this.failedQueue) { this.failedQueue=true; throw new Error('fixture queue push failed'); }
     return super.queue(...args);
   }
+  async ask(prompt,operationId,pinned){
+    if(this.failNextAdmission){this.failNextAdmission=false;const store=this.conversationStore,real=store.persist.bind(store);
+      store.persist=async writes=>{if(writes.some(write=>write.type==='submission'&&write.value.requestId===operationId)){store.persist=real;const db=store.db;store.db={prepare:sql=>{if(sql.includes('SELECT checksum,payload'))throw Error('fixture_confirm_unavailable');return db.prepare(sql);},batch:async statements=>{await db.batch(statements);throw Error('fixture_lost_admission_response');}};try{return await real(writes);}finally{store.db=db;}}return real(writes);};
+    }
+    return super.ask(prompt,operationId,pinned);
+  }
   async processChannelMessage(payload) {
     if (this.env.TEST_HOLD === 'accepted') await new Promise(() => {});
     return super.processChannelMessage(payload);
   }
   async fetch(request) {
+    if (new URL(request.url).pathname === '/test/poison-admission') {await this.harness.pi();this.failNextAdmission=true;return Response.json({armed:true});}
     if (new URL(request.url).pathname === '/test/admit') { try {return Response.json(await this.acceptChannel(await request.json()));}catch(error){return Response.json({error:error.message},{status:500});} }
-    if (new URL(request.url).pathname === '/test/state') return Response.json({ ...await this.channelHistory(), queue: await this.getQueues(), pending: await this.harness.pending(), tasks: (await (await this.harness.pi()).inspect(this.piContext)).tasks.map(task=>({id:task.record.id,kind:task.record.kind,conversationId:task.record.conversationId,state:task.state.kind})), sessions: (await this.harness.sessions.list()).map(session=>session.id), nativeUsage: await (await this.harness.pi()).usage(this.piContext), modelCalls: this.faux?.state.callCount ?? 0 });
+    if (new URL(request.url).pathname === '/test/state') return Response.json({ ...await this.channelHistory(), queue: await this.getQueues(), pending: await this.harness.pending(), tasks: (await (await this.harness.pi()).inspect(this.piContext)).tasks.map(task=>({id:task.record.id,kind:task.record.kind,conversationId:task.record.conversationId,state:task.state.kind})), sessions: (await this.harness.sessions.list()).map(session=>session.id), nativeUsage: await (await this.harness.pi()).usage(this.piContext), modelCalls: this.faux?.state.callCount ?? 0, nativeTranscriptRows:this.ctx.storage.sql.exec("SELECT COUNT(*) AS n FROM pi_entries").toArray()[0].n,rawTerminalRows:this.channelSql.exec("SELECT COUNT(*) AS n FROM channel_messages WHERE state='sent' AND (data<>'{}' OR answer IS NOT NULL)").toArray()[0].n });
     if (new URL(request.url).pathname === '/test/manual-ask') {try {const body=await request.json();return Response.json(await this.manualAsk(body.prompt,body.operationId,body.accountId));}catch(error){return Response.json({error:error.message},{status:400});}}
     if (new URL(request.url).pathname === '/test/publish-usage') return Response.json(await this.publishUsage());
     if (new URL(request.url).pathname === '/test/admin-settings') return Response.json(await this.adminSettings());
@@ -137,12 +145,13 @@ const outbound = async request => {
   if (sendMode.get(params.rootMessageId) === 'rejected') return Response.json({error:{code:4,type:'Forbidden',message:'fixture'}});
   return Response.json({result:{message:{id:`bot-${writeCalls}`,rootMessageId:params.rootMessageId,personType:'bot'}}});
 };
+const textModules = await piTextModules(resolve("build/pi"));
 const options = ({hold='',enabled='true',piEnabled=enabled,failQueue='false',tenantChannel=channel}={}) => convertV4MiniflareOptions({
   resourcePersistencePath:storage,
   workers:[{
     name:'mcp-events',modulesRoot:resolve('build/events'),modules:['channel-wrapper.js','index.js'].map(name=>({type:'ESModule',path:resolve('build/events',name)})),compatibilityDate:'2026-10-01',compatibilityFlags:['nodejs_compat','global_fetch_strictly_public'],kvNamespaces:['OAUTH_KV'],durableObjects:{EVENTS:{className:'ChannelEvents',useSQLite:true},THREADS:{className:'ThreadHistory',useSQLite:true},PI_ASSISTANT:{className:'Assistant',scriptName:'cloud-agent',useSQLite:true}},bindings:{OWNER_LOGIN_KEY:'fixture-owner-key-at-least-32-characters',CHANNEL_APP_SIGNING_KEY:'ab'.repeat(32),ALLOWED_CHANNEL_ID:channel,ALLOWED_CHAT_ID:group,CHANNEL_SLUG:'sample-channel',CHANNEL_APP_ID:app,EVENTS_OBJECT_NAME:'sample-channel-events',PUBLIC_ORIGIN:sourceOrigin,OAUTH_OWNER_ID:'sample-owner',CHANNEL_REPLY_ENABLED:enabled},outboundService:async()=>{throw new Error('MCP test attempted outbound callback');}
   },{
-    name:'cloud-agent',modulesRoot:resolve('build/pi'),modules:['channel-wrapper.js','index.js'].map(name=>({type:'ESModule',path:resolve('build/pi',name)})),compatibilityDate:'2026-10-04',compatibilityFlags:['nodejs_compat'],durableObjects:{Assistant:{className:'Assistant',useSQLite:true},Credentials:{className:'Credentials',useSQLite:true}},bindings:{PROBE_MODE:'mock',OPENAI_MODEL:'gpt-6.1-sol',PROBE_DEADLINE_MS:'5000',PROBE_KEY_SHA256:hash(bearer),TOKEN_WRAPPING_KEY:wrapping,CHANNEL_APP_SECRET:'fixture-app-secret-at-least-16',CHANNEL_REPLY_ENABLED:piEnabled,ALLOWED_CHANNEL_ID:tenantChannel,ALLOWED_CHAT_ID:group,CHANNEL_APP_ID:app,TOKEN_WRAPPING_AAD:'fixture-cloud-agent/v1',TEST_HOLD:hold,TEST_FAIL_QUEUE:failQueue,PRODUCT_NAME:'Fixture Cloud Agent',PUBLIC_ORIGIN:origin,DIAGNOSTIC_READS_ENABLED:'true'},outboundService:outbound
+    name:'cloud-agent',d1Databases:['CONVERSATIONS'],modulesRoot:resolve('build/pi'),modules:[...['channel-wrapper.js','index.js'].map(name=>({type:'ESModule',path:resolve('build/pi',name)})),...textModules],compatibilityDate:'2026-10-04',compatibilityFlags:['nodejs_compat'],durableObjects:{Assistant:{className:'Assistant',useSQLite:true},Credentials:{className:'Credentials',useSQLite:true}},bindings:{PROBE_MODE:'mock',OPENAI_MODEL:'gpt-6.1-sol',PROBE_DEADLINE_MS:'5000',PROBE_KEY_SHA256:hash(bearer),TOKEN_WRAPPING_KEY:wrapping,CHANNEL_APP_SECRET:'fixture-app-secret-at-least-16',CHANNEL_REPLY_ENABLED:piEnabled,ALLOWED_CHANNEL_ID:tenantChannel,ALLOWED_CHAT_ID:group,CHANNEL_APP_ID:app,TOKEN_WRAPPING_AAD:'fixture-cloud-agent/v1',TEST_HOLD:hold,TEST_FAIL_QUEUE:failQueue,PRODUCT_NAME:'Fixture Cloud Agent',PUBLIC_ORIGIN:origin,DIAGNOSTIC_READS_ENABLED:'true'},outboundService:outbound
   }]
 });
 let mf = new Miniflare(options());
@@ -199,6 +208,16 @@ try {
   assert.equal(writes.filter(w=>w.rootMessageId==='root-A').length,4);assert.equal(writes.filter(w=>w.rootMessageId==='root-B').length,1);
   assert.equal(writes.filter(w=>w.dto.requestId===operation('reply-A')).length,1);
   assert.equal(a.queue.length,0);assert.deepEqual(a.pending,[]);
+  assert.equal(a.nativeTranscriptRows,0);assert.equal(a.rawTerminalRows,0);
+  const recoveryRoot='ambiguous-admission-root';
+  assert.equal((await (await assistant(recoveryRoot)).fetch('https://private.invalid/test/poison-admission')).status,200);
+  await accept(envelope(recoveryRoot,'AMBIGUOUS_ADMISSION_CONTEXT'));
+  const recoveredAdmission=await waitReceipt(recoveryRoot);
+  assert.equal(recoveredAdmission.modelCalls,1);assert.equal(recoveredAdmission.nativeTranscriptRows,0);assert.equal(recoveredAdmission.rawTerminalRows,0);
+  assert.equal(recoveredAdmission.receipts[0].snapshot.accountId,'owner');assert.equal(recoveredAdmission.receipts[0].snapshot.sessionId,'1');
+  assert.equal(recoveredAdmission.receipts[0].text,'AMBIGUOUS_ADMISSION_CONTEXT');assert.equal(writes.filter(row=>row.rootMessageId===recoveryRoot).length,1);
+  assert.equal(recoveredAdmission.entries.filter(entry=>entry.kind==='pi.user').length,1);assert.deepEqual(recoveredAdmission.pending,[]);
+
   const beforeFilters=writeCalls;
   const skipped=[envelope('wrong-group','ignored',{params:{groupId:'other'}}),envelope('wrong-channel','ignored',{params:{channelId:'999'}}),envelope('customer','ignored',{snapshot:{personType:'user'}}),envelope('self-source','ignored',{params:{sourceAppId:app}})];
   for(const input of skipped){const response=await send(input);assert.equal(response.status,200);assert.notEqual((await response.json()).result.hookHandlingResult,'succeeded');}
@@ -285,7 +304,7 @@ try {
     assert.equal(info.modelCalls,calls);assert.equal(info.entries.length,entries);assert.equal(info.selected.sessionId,originalSession);assert.deepEqual(counters(await accountUsage()),controlsUsage);assert.deepEqual(nativeTokens(info.nativeUsage),controlsNative);
     for(const row of info.receipts.filter(row=>['model','model-ko','thinking','thinking-ko'].includes(row.messageId))) for(const internal of ['세션:', '구독 계정:', '스킬:', 'owner', 'empty']) assert.ok(!row.answer.includes(internal));
     let settings=await (await (await assistant(root)).fetch('https://private.invalid/test/admin-settings')).json();
-    assert.equal(settings.thinking.value,'medium');assert.equal(settings.models.length,1);
+    assert.equal(settings.thinking.value,'medium');assert.equal(settings.models.length,1);assert.equal(settings.userEntries[0].preview,'OLD_CONTEXT_MARKER');
     const adminWrites=writeCalls;
     await control('name','원래 세션');
     const newId='admin-'+crypto.randomUUID();let changed=await control('new','',newId);const newSession=changed.settings.selected.sessionId;
@@ -376,5 +395,5 @@ try {
     const olderReport=await usageCredential.reportUsage({sourceId:snapshotId,usage:{...snapshot,input:9}});assert.equal(olderReport.accepted,false);assert.equal(olderReport.reason,'older_snapshot');assert.deepEqual(counters(await accountUsage(selectedAccount)),counters(aggregateAfter));
     for(const key of ['requests','modelResponses','cost','remaining','limit'])assert.equal(aggregateAfter[key],undefined);assert.equal(aggregateAfter.quota,null);assert.equal(aggregateAfter.source,'pi_committed_usage');assert.ok(aggregateAfter.collectionStartedAt);assert.ok(aggregateAfter.lastUpdated);
   }
-  console.log(JSON.stringify({checks:'PASS',runtime:'workerd',missingChannelConfigDenied:true,coreChecksExecuted:!faultsOnly&&!commandsOnly,commandChecksExecuted:!faultsOnly,...(!faultsOnly?{restrictedStaffCommands:true,koreanAliases:true,advancedSlashNoInference:true,nativeSkillsActivation:true,adminControlsIdempotent:true,adminBusyRejected:true,legacyForbiddenTaskAbortedBeforeResume:true,rootLocalSessionSwitch:true,accountPinsSurviveDefaultChange:true,atomicNewRootRoundRobin:true,roundRobinReplayAndRestart:true,nativeTokenUsage:true,usageSnapshotDeduplication:true,forkDoesNotDuplicateUsage:true,selectedAccountManualTest:true}:{}),...(!commandsOnly?{missingNativeJobRepaired:true,channelRefreshSingleflight:true,tokenFailureCooldown:true}:{}),...(!faultsOnly&&!commandsOnly?{signedNativeIngress:true,perSourceThreadIsolation:true,messageDeduplication:true,orderedFollowups:true,atomicForwardOutbox:true,headBackoffNoAlarmSpin:true,acceptAndAnswerRecovery:true,unknownSendNoRetry:true,staffAndSelfLoopFilters:true,encryptedChannelCredentials:true,singleChannelTokenIssue:true,disableNoBackfill:true,protectedReadOnlyInspection:true}:{}),issueCalls,refreshCalls,writeCalls,realOpenAINetworkCalls:0,realChannelNetworkCalls:0}));
+  console.log(JSON.stringify({checks:'PASS',runtime:'workerd',missingChannelConfigDenied:true,coreChecksExecuted:!faultsOnly&&!commandsOnly,commandChecksExecuted:!faultsOnly,...(!faultsOnly?{restrictedStaffCommands:true,koreanAliases:true,advancedSlashNoInference:true,nativeSkillsActivation:true,adminControlsIdempotent:true,adminBusyRejected:true,legacyForbiddenTaskAbortedBeforeResume:true,rootLocalSessionSwitch:true,accountPinsSurviveDefaultChange:true,atomicNewRootRoundRobin:true,roundRobinReplayAndRestart:true,nativeTokenUsage:true,usageSnapshotDeduplication:true,forkDoesNotDuplicateUsage:true,selectedAccountManualTest:true}:{}),...(!commandsOnly?{missingNativeJobRepaired:true,channelRefreshSingleflight:true,tokenFailureCooldown:true}:{}),...(!faultsOnly&&!commandsOnly?{signedNativeIngress:true,perSourceThreadIsolation:true,messageDeduplication:true,orderedFollowups:true,atomicForwardOutbox:true,headBackoffNoAlarmSpin:true,acceptAndAnswerRecovery:true,ambiguousD1AdmissionRecovery:true,nativeTranscriptRows:0,terminalTranscriptsArchived:true,unknownSendNoRetry:true,staffAndSelfLoopFilters:true,encryptedChannelCredentials:true,singleChannelTokenIssue:true,disableNoBackfill:true,protectedReadOnlyInspection:true}:{}),issueCalls,refreshCalls,writeCalls,realOpenAINetworkCalls:0,realChannelNetworkCalls:0}));
 } finally { await mf.dispose();await rm(storage,{recursive:true,force:true}); }

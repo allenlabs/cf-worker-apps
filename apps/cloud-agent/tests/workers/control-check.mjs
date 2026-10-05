@@ -1,3 +1,4 @@
+import { piTextModules } from "./pi-modules.mjs";
 import assert from 'node:assert/strict';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { copyFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -23,17 +24,28 @@ const wrapping = randomBytes(32).toString('base64url');
 const origin = 'https://cloud-agent.example.invalid';
 const hash = value => createHash('sha256').update(value).digest('hex');
 await copyFile(bundle, join(temp, 'index.js'));
+const textModules = await piTextModules(resolve(base, '../../build/pi'), temp);
 await writeFile(join(temp, 'wrapper.js'), `
 import worker, {Assistant as BaseAssistant, Credentials as BaseCredentials} from './index.js';
 export default worker;
 const hash = async value => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))].map(n=>n.toString(16).padStart(2,'0')).join('');
 export class Assistant extends BaseAssistant {
+  constructor(ctx,env){
+    const fault={armed:false};
+    const wrap=db=>({prepare:sql=>{
+      if(!sql.startsWith('UPDATE ca_streams SET kind='))return db.prepare(sql);
+      return {bind:(...args)=>{const statement=db.prepare(sql).bind(...args);return {run:async()=>{if(fault.armed){fault.armed=false;throw Error('fixture_projection_unavailable');}return statement.run();}};}};
+    },batch:list=>db.batch(list),withSession:constraint=>wrap(db.withSession(constraint))});
+    super(ctx,{...env,CONVERSATIONS:wrap(env.CONVERSATIONS)});this.projectionFault=fault;
+  }
   async fetch(request) {
     const path=new URL(request.url).pathname;
     if(path==='/admit')return Response.json(await this.acceptChannel(await request.json()));
     if(path==='/state'){await this.lifecycle.start();return Response.json({...await this.channelHistory(),modelCalls:this.faux.state.callCount,queue:await this.getQueues(),pending:await this.harness.pending()});}
     if(path==='/usage'){await this.lifecycle.start();await this.publishUsage();return Response.json(await (await this.harness.pi()).usage(this.piContext));}
     if(path==='/resolve-account'){try{await this.env.Credentials.getByName(this.runtime().accountId).access();return Response.json({accountId:this.runtime().accountId,connected:true});}catch(error){return Response.json({accountId:this.runtime().accountId,error:error.message});}}
+    if(path==='/fail-projection'){this.projectionFault.armed=true;return Response.json({armed:true});}
+    if(path==='/projection'){const row=await this.env.CONVERSATIONS.prepare('SELECT metadata FROM ca_streams WHERE tenant_id=? AND object_key=?').bind('default',this.conversationKey()).first();return Response.json(JSON.parse(row.metadata));}
     if(path==='/busy-ledger'){
       const event=await request.json();
       const operationId='ctm-'+await hash(JSON.stringify(['sample-channel','sample-group',event.data.message_id]));
@@ -86,8 +98,8 @@ const writes=[];
 const options = () => convertV4MiniflareOptions({
   resourcePersistencePath: join(temp, 'storage'),
   workers: [{
-    name: 'cloud-agent', modulesRoot: temp,
-    modules: ['wrapper.js', 'index.js'].map(name => ({ type: 'ESModule', path: join(temp, name) })),
+    name: 'cloud-agent', d1Databases: ['CONVERSATIONS'], modulesRoot: temp,
+    modules: [...['wrapper.js', 'index.js'].map(name => ({ type: 'ESModule', path: join(temp, name) })), ...textModules],
     compatibilityDate: '2026-10-04', compatibilityFlags: ['nodejs_compat'],
     durableObjects: { Assistant: { className: 'Assistant', useSQLite: true }, Credentials: { className: 'Credentials', useSQLite: true } },
     bindings: { ALLOWED_CHANNEL_ID: 'sample-channel', ALLOWED_CHAT_ID: 'sample-group', CHANNEL_APP_ID: 'sample-app', TOKEN_WRAPPING_AAD: 'fixture-cloud-agent/v1', PROBE_MODE: 'mock', OPENAI_MODEL: 'gpt-6.1-sol', PRODUCT_NAME: 'Fixture Cloud Agent', PUBLIC_ORIGIN: origin, SSO_ISSUER: 'https://sso.example.invalid/auth', SUPER_ADMIN_EMAILS: '["admin-one@example.invalid","admin-two@example.invalid"]', PROBE_KEY_SHA256: hash(bearer), DIAGNOSTIC_READS_ENABLED: 'true', TOKEN_WRAPPING_KEY: wrapping, CHANNEL_REPLY_ENABLED: 'true' },
@@ -149,7 +161,13 @@ try {
     root=await admit('review-public-'+index,text);assert.equal(root.modelCalls,0);assert.ok(!/구독 계정:|세션:|스킬:/.test(root.receipts.at(-1).answer));
   }
   assert.equal((await json(await api('/api/threads/settings?root=review-root'))).thinking.value,'high');
-  const newId='admin-'+randomUUID();const newControl=await json(await control('new','',newId));assert.equal(newControl.status,'done');const selected=newControl.settings.selected.sessionId;assert.notEqual(selected,'1');
+  const newId='admin-'+randomUUID();
+  await json(await (await assistant()).fetch('https://review.invalid/fail-projection'));
+  const projectionFailed=await control('new','',newId);assert.equal(projectionFailed.status,400);assert.equal((await projectionFailed.json()).error,'admin_control_failed');
+  const mutated=await state();assert.notEqual(mutated.selected.sessionId,'1');assert.equal(mutated.sessions.length,2);
+  assert.equal((await json(await (await assistant()).fetch('https://review.invalid/projection'))).selectedSessionId,'1');
+  const newControl=await json(await control('new','',newId));assert.equal(newControl.status,'done');const selected=newControl.settings.selected.sessionId;assert.equal(selected,mutated.selected.sessionId);assert.equal(newControl.settings.sessions.length,2);
+  assert.equal((await json(await (await assistant()).fetch('https://review.invalid/projection'))).selectedSessionId,selected,'Done replay did not repair the D1 projection');
   const duplicate=await json(await control('new','',newId));assert.equal(duplicate.settings.selected.sessionId,selected);assert.equal(duplicate.settings.sessions.length,2);
   assert.equal((await control('name','different',newId)).status,400);
   await json(await (await assistant()).fetch('https://review.invalid/busy-ledger',{method:'POST',body:JSON.stringify(event('review-orphan','Accepted before native job repair'))}));
@@ -211,7 +229,7 @@ try {
   await mf.dispose();mf=new Miniflare(options());
   assert.equal((await state(nativeRoot)).selected.accountId,account);assert.equal((await state()).selected.accountId,'owner');assert.equal((await credentialState(account)).identityEncrypted,true);
   assert.deepEqual(tokenFields((await credentialState(account)).status.usage),reported,'Usage totals disappeared after isolate restart');
-  console.log(JSON.stringify({ checks: 'PASS', reviewer: 'independent', runtime: 'workerd', bundleSHA256: actual, concurrentAccountCreates: count, concurrentSkillPublications: skills.length, csrfAndCanonicalOrigin: true, legacyBearerMutationDenied: true, ownerGrantPreservedAfterRestart: true, skillStatePreservedAfterRestart: true, scriptAndTraversalDenied: true, staffHelpModelThinkingOnly: true, staffAdvancedWithoutInferenceOrMutation: true, actualRuntimeAdminIdempotencyAndConflict: true, ledgerOnlyPendingBusy409: true, interruptedAdminDoesNotRepeat: true, explicitRoundRobinConcurrentRoots: true, duplicateAndPolicyRetryPreserveCursor: true, fixedAdmissionRetryAndImmutablePins: true, disconnectedPinDoesNotResolveOtherAccount: true, encryptedMetadataNullLegacy: true, actualNativeUsageNoDoubleCountOnRetryCloneFork: true, usageAbsoluteMonotonicAccountIsolatedAndPersistent: true, mockChannelReplies: writes.length, realNetworkCalls: 0, oidcSignatureCheckedBy: 'separate writer admin-check and auth-check' }));
+  console.log(JSON.stringify({ checks: 'PASS', reviewer: 'independent', runtime: 'workerd', bundleSHA256: actual, concurrentAccountCreates: count, concurrentSkillPublications: skills.length, csrfAndCanonicalOrigin: true, legacyBearerMutationDenied: true, ownerGrantPreservedAfterRestart: true, skillStatePreservedAfterRestart: true, scriptAndTraversalDenied: true, staffHelpModelThinkingOnly: true, staffAdvancedWithoutInferenceOrMutation: true, actualRuntimeAdminIdempotencyAndConflict: true, doneAdminReplayRepairsProjectionWithoutMutation: true, ledgerOnlyPendingBusy409: true, interruptedAdminDoesNotRepeat: true, explicitRoundRobinConcurrentRoots: true, duplicateAndPolicyRetryPreserveCursor: true, fixedAdmissionRetryAndImmutablePins: true, disconnectedPinDoesNotResolveOtherAccount: true, encryptedMetadataNullLegacy: true, actualNativeUsageNoDoubleCountOnRetryCloneFork: true, usageAbsoluteMonotonicAccountIsolatedAndPersistent: true, mockChannelReplies: writes.length, realNetworkCalls: 0, oidcSignatureCheckedBy: 'separate writer admin-check and auth-check' }));
 } finally {
   await mf.dispose();
   await rm(temp, { recursive: true, force: true });

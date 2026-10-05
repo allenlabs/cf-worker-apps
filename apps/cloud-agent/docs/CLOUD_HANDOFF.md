@@ -13,7 +13,7 @@ This repository contains generic Cloudflare Agents/Pi code. Organization-specifi
 
 The runtime supports one Assistant Durable Object per native team-chat root, durable replies, account pinning, SSO management, versioned text skills, verified identity metadata, model-token accounting and optional round robin for new roots. Existing comments keep the original account and session context.
 
-The pending management change removes the display-name input. A verified provider account ID supplies the display label; a stable service registration ID is the fallback when the provider omits it. Stored account IDs are unchanged. Old management pages sending the removed `label` field must be refreshed after deployment.
+The management workspace presents conversations as readable messages, with account, skill and Git settings in separate views. Verified provider account IDs supply account labels. D1 is required for native Pi journals and history; configure `CONVERSATIONS` and a fixed `TENANT_ID` before accessing an existing actor. Read [conversation storage](CONVERSATION_STORAGE.md), [customer isolation](TENANCY.md), and [the workspace](WORKSPACE_UI.md).
 
 The pstack hosted adapter is prepared and locally verified but not installed into a production catalog. Its two payloads preserve upstream documentation and its MIT license. The adapter can guide text reasoning and review using skill activation/resource reads. Installing this text does not supply shell, Git, browser or child-agent tools. See `../skills/pstack/README.md`.
 
@@ -29,7 +29,7 @@ SSO administrator identity and model-provider account ownership are separate. Us
 
 ## Runtime expansion
 
-Cloudflare's experimental `@cloudflare/shell` offers a SQLite-backed Workspace and pure-JavaScript Git operations. It does not execute Bash. A Linux Sandbox attached to an Agent can run real commands, package installation, builds and tests. Keep conversation/account state in its existing Durable Object; prototype these execution tools separately before changing the skill adapter's capability declaration. See `../skills/pstack/runtime-expansion.md` for primary sources.
+Cloudflare's experimental `@cloudflare/shell` offers a SQLite-backed Workspace and pure-JavaScript Git operations. It does not execute Bash. A Linux Sandbox attached to an Agent can run real commands, package installation, builds and tests. Keep account and runtime coordination in their existing Durable Objects and conversations in D1. Prototype these execution tools separately before changing the skill adapter's capability declaration. See `../skills/pstack/runtime-expansion.md` for primary sources.
 
 ## Verification and limits
 
@@ -37,4 +37,4 @@ The behavioral suites exercise actual workerd with generated credentials and moc
 
 `test:coverage` attempts the runtime's native Profiler API. The available runtime reports `Profiler is not enabled`; behavioral tests can pass while coverage exits 2. No coverage percentage or reduced threshold is claimed. JavaScript syntax checks are not static type checking.
 
-History export includes the selected session's latest 200 entries and the root's latest 50 receipts. The observed-root index has a 2,000-root ceiling, registration allows 20 accounts, the skill catalog allows 20 entries and the enabled manifest is bounded to 1 MiB. The pstack adapter uses two entries. No ChatGPT scheduled task is required for native team-chat replies.
+History pages and JSON downloads include up to 200 entries per request, with a native entry cursor for older pages and the root's latest 50 receipts. A default page contains 50 entries. The observed-root index has a 2,000-root ceiling, registration allows 20 accounts, the skill catalog allows 20 entries and the enabled manifest is bounded to 1 MiB. The pstack adapter uses two entries. No ChatGPT scheduled task is required for native team-chat replies.
