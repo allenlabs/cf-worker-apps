@@ -5,6 +5,7 @@ import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import { fauxProvider, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { Harness, createRegistry } from "@earendil-works/pi-durable";
 import { ManagementCredentials, adminRoute, channelScope } from "./admin.js";
+export { GitHubAuthoring } from "./github-authoring.js";
 
 const NATIVE = "https://app-store-api.channel.io/general/v1/native/functions";
 const nativeId = value => typeof value === "string" && /^[A-Za-z0-9_:-]{1,255}$/.test(value);

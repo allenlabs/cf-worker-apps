@@ -4,7 +4,7 @@ Cloudflare Agents and Pi keep one durable conversation per Channel Talk team-cha
 
 `PRODUCT_NAME`, authentication policy, Channel Talk routing and the management origin are supplied by deployment configuration. This public checkout contains example configuration only. Read [CLOUD_HANDOFF.md](docs/CLOUD_HANDOFF.md) before creating or updating an installation.
 
-Read [the architecture](docs/ARCHITECTURE.md) for the implemented runtime and [repository content storage](docs/REPOSITORY_CONTENT.md) for the proposed document-source integration. The [filesystem and plugin design](docs/FILESYSTEM_AND_PLUGINS.md) adds administrator uploads and per-root working files. The [common and organization Git plugin design](docs/COMMON_ORG_GIT_PLUGINS.md) describes scoped catalogs and automatic GitHub import. The [personal Git authoring design](docs/PERSONAL_GIT_AUTHORING.md) covers owner-scoped drafts and a container-free GitHub writer. Generic implementation, tests and design are published here before private installation tuning.
+Read [the architecture](docs/ARCHITECTURE.md) for the implemented runtime and [repository content storage](docs/REPOSITORY_CONTENT.md) for the proposed document-source integration. The [filesystem and plugin design](docs/FILESYSTEM_AND_PLUGINS.md) adds administrator uploads and per-root working files. The [common and organization Git plugin design](docs/COMMON_ORG_GIT_PLUGINS.md) describes scoped catalogs and automatic GitHub import. The [personal Git authoring design](docs/PERSONAL_GIT_AUTHORING.md) covers owner-scoped drafts and a container-free GitHub writer. The implemented [GitHub App connector](docs/GITHUB_CONNECTOR.md) adds private administrator drafts, Pi-assisted text authoring and an explicit reviewed atomic commit. Generic implementation, tests and design are published here before private installation tuning.
 
 ## Work in a cloud checkout
 
@@ -17,7 +17,7 @@ npm run -w @cf-worker-apps/cloud-agent test
 node apps/cloud-agent/skills/pstack/check.mjs --implementation-root apps/cloud-agent
 ```
 
-`test` builds the Pi worker and the sibling MCP Events worker, then runs the real-workerd integration, OAuth and management checks with generated credentials and mocked outbound services. No production account or API token is required. `typecheck` checks JavaScript syntax; it is not static type checking. Build files and local runtime state are ignored.
+`test` builds the Pi worker and the sibling MCP Events worker, then runs the real-workerd integration, OAuth, management and GitHub authoring checks with generated credentials and mocked outbound services. No production account or API token is required. `typecheck` checks JavaScript syntax; it is not static type checking. Build files and local runtime state are ignored.
 
 `test:coverage` also attempts native workerd profiling of the management module. If the runtime does not expose the Profiler API, it exits nonzero after the behavioral checks. It does not substitute Node harness coverage or claim application-wide coverage.
 
@@ -27,6 +27,7 @@ node apps/cloud-agent/skills/pstack/check.mjs --implementation-root apps/cloud-a
 - Credentials Durable Objects encrypt OAuth credentials and verified account metadata. An account inventory selects a fixed account or explicit round-robin allocation for new roots.
 - The SSO management page controls accounts, models, thinking levels, sessions and versioned text skills. Staff commands are limited to help, model and thinking, including Korean aliases.
 - Native Pi model-token totals are aggregated per account without counting replayed snapshots or cloned history twice. These are this server's measured tokens, not global subscription quota.
+- A dedicated GitHubAuthoring Durable Object keeps each SSO administrator’s repository draft and Pi transcript separate. GitHub tokens are selected-repository Contents-only, and the model stages files without a publication tool.
 - The [pstack hosted adapter](skills/pstack/README.md) is prepared and locally verified. It has not been installed into the production skill catalog.
 
 The supplied Wrangler configuration uses example domains, empty tenant settings and disabled replies. Supply private installation configuration before deploying. Use the handoff's storage and secret constraints when updating an existing installation. No secret values, login callbacks, session cookies or real conversations are included in this directory.

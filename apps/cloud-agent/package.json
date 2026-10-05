@@ -13,12 +13,13 @@
     "check": "node tests/workers/check.mjs",
     "auth-check": "node tests/workers/auth-check.mjs",
     "admin-check": "node tests/workers/admin-check.mjs",
-    "test": "npm run build && npm run check && npm run auth-check && npm run admin-check && npm run control-check",
-    "test:coverage": "npm run build && npm run check && npm run auth-check && npm run control-check && node tests/workers/admin-check.mjs --coverage",
-    "typecheck": "node --check workers/pi/index.js && node --check workers/pi/admin.js && node --check scripts/build.mjs && node --check tests/workers/check.mjs && node --check tests/workers/auth-check.mjs && node --check tests/workers/admin-check.mjs && node --check tests/workers/control-check.mjs",
+    "test": "npm run build && npm run check && npm run auth-check && npm run admin-check && npm run control-check && npm run github-check",
+    "test:coverage": "npm run build && npm run check && npm run auth-check && npm run control-check && npm run github-check && node tests/workers/admin-check.mjs --coverage",
+    "typecheck": "node --check workers/pi/index.js && node --check workers/pi/admin.js && node --check scripts/build.mjs && node --check tests/workers/check.mjs && node --check tests/workers/auth-check.mjs && node --check tests/workers/admin-check.mjs && node --check tests/workers/control-check.mjs && node --check workers/pi/github.js && node --check workers/pi/github-admin.js && node --check tests/workers/github-check.mjs && node --check workers/pi/github-authoring.js",
     "dev": "wrangler dev --config workers/pi/wrangler.jsonc",
     "deploy": "wrangler deploy --config workers/pi/wrangler.jsonc",
-    "control-check": "node tests/workers/control-check.mjs"
+    "control-check": "node tests/workers/control-check.mjs",
+    "github-check": "node tests/workers/github-check.mjs"
   },
   "dependencies": {
     "agents": "0.26.0",

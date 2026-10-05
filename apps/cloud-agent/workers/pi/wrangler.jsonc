@@ -23,7 +23,11 @@
     "ALLOWED_CHAT_ID": "",
     "CHANNEL_APP_ID": "",
     "OWNER_EMAIL_SHA256": "",
-    "TOKEN_WRAPPING_AAD": "cloud-agent/v1"
+    "TOKEN_WRAPPING_AAD": "cloud-agent/v1",
+    "GITHUB_APP_ID": "",
+    "GITHUB_APP_CLIENT_ID": "",
+    "GITHUB_INSTALLATION_ID": "",
+    "GITHUB_INSTALLATION_OWNER": ""
   },
   "durable_objects": {
     "bindings": [
@@ -34,6 +38,10 @@
       {
         "name": "Credentials",
         "class_name": "Credentials"
+      },
+      {
+        "name": "GitHubAuthoring",
+        "class_name": "GitHubAuthoring"
       }
     ]
   },
@@ -43,6 +51,12 @@
       "new_sqlite_classes": [
         "Assistant",
         "Credentials"
+      ]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": [
+        "GitHubAuthoring"
       ]
     }
   ]

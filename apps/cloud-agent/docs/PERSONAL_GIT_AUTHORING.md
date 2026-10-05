@@ -1,6 +1,6 @@
 # Personal plugin authoring without containers
 
-Status: architecture and a standalone native runtime feasibility check. This is not a deployed GitHub editor or a personal-authoring feature in the current service. The intended user flow is to ask Pi to create or edit a skill, inspect the changed files and save them to an authorized Git source.
+Status: architecture and a standalone native runtime feasibility check. The current [GitHub App connector](GITHUB_CONNECTOR.md) implements the Super Admin subset: private drafts and Pi transcripts, bounded text editing and explicitly reviewed atomic publication. Member self-service, catalog promotion and automatic plugin activation remain design work. The flow is to ask Pi to create or edit a file, inspect the exact preview and save it to an authorized Git source.
 
 ## Select the native GitHub writer
 
@@ -31,7 +31,7 @@ A host-authorized personal profile selects common, organization and the owner's 
 
 Personal drafts belong to an owner-scoped authoring DO and Pi conversation, separate from the team root's shared transcript and files. A team root can contain multiple staff members; keeping only file prefixes separate would still disclose private drafts through its shared model context. The existing team-root Workspace sharing policy remains valid for team work. The personal authoring page/session supplies the different ownership boundary.
 
-Derive member identity from authenticated issuer and stable subject plus host-approved organization membership. For Channel Talk entry points, require a verified sender-to-member mapping. Message text, model arguments and a GitHub display name cannot choose the owner. The current service has Super Admin SSO and one installation; member sessions, personal roles and private authoring routing still need implementation before this feature is offered to staff.
+Derive member identity from authenticated issuer and stable subject plus host-approved organization membership. For Channel Talk entry points, require a verified sender-to-member mapping. Message text, model arguments and a GitHub display name cannot choose the owner. The current service has Super Admin SSO and one installation. Its connector routes administrator authoring to private actor/source Durable Objects; member sessions, personal roles and sender-to-member mapping still need implementation before this feature is offered to staff.
 
 A private Git repository can have many readers. A personal directory inside an organization repository constrains host writes but does not hide those files from repository collaborators. Use an individually authorized private repository when repository-level personal confidentiality is required. The authoring UI must show the registered destination's visibility and collaboration scope before publishing.
 

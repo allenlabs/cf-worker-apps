@@ -1,5 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { parse as parseYaml } from "yaml";
+import { GitHubBroker, GitHubError, validateCommit, githubSources, githubRegister, githubAuthorize, githubContext } from "./github.js";
+import { githubPanel, githubScript } from "./github-admin.js";
 
 const encoder = new TextEncoder();
 const b64 = bytes => btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
@@ -135,6 +137,50 @@ function validateSkill(input) {
 }
 
 export class ManagementCredentials extends DurableObject {
+  githubBroker() { return this.githubClient ??= new GitHubBroker(this.env); }
+  async githubAuthorize(context) { return githubAuthorize(this, context); }
+  async githubRemote(context, action, input) {
+    const source = await this.githubAuthorize(context), broker = this.githubBroker();
+    if (action === "files") { exactKeys(input, ["baseOid"]); return broker.files(source, input.baseOid); }
+    if (action === "read" || action === "readMissing") { exactKeys(input, ["baseOid", "path"]); return broker.read(source, input.baseOid, input.path, action === "readMissing"); }
+    if (action === "prepare") { exactKeys(input, []); return broker.prepare(source); }
+    if (action === "commit") {
+      exactKeys(input, ["payload"]);
+      const payload = input.payload; validateCommit(source, payload);
+      return broker.commit(source, payload);
+    }
+    throw new GitHubError("github_action_invalid");
+  }
+  async githubRead(action, input, sessionToken) {
+    const session = await this.adminSession(sessionToken); requireValue(session, "sso_login_required", 401);
+    if (action === "status") { exactKeys(input, []); return { ...await this.githubBroker().status(), sources: await githubSources(this, session.principal) }; }
+    if (action === "repositories") { exactKeys(input, ["page"]); return this.githubBroker().repositories(input.page); }
+    exactKeys(input, action === "file" ? ["sourceId", "path"] : ["sourceId"]);
+    const pinned = await githubContext(this, session.principal, input.sourceId), author = this.env.GitHubAuthoring.getByName(pinned.objectName);
+    await author.initialize(pinned.context, pinned.baseOid);
+    if (action === "draft") return author.state(pinned.context);
+    if (action === "files") return author.files(pinned.context);
+    if (action === "file") return author.read({ path: input.path }, pinned.context);
+    throw new GitHubError("github_action_invalid");
+  }
+  async githubMutation(action, input, sessionToken, csrf) {
+    const session = await this.adminSession(sessionToken); requireValue(session && session.csrf === csrf, "admin_csrf_invalid", 403);
+    if (action === "source") return githubRegister(this, session.principal, input);
+    if (action === "disable") {
+      exactKeys(input, ["sourceId"]); const pinned = await githubContext(this, session.principal, input.sourceId), rows = await this.ctx.storage.get("githubSources") || [];
+      const source = rows.find(row => row.id === pinned.context.sourceId); source.enabled = false; source.generation++;
+      await this.ctx.storage.put("githubSources", rows); await this.audit(session.principal, "github.source.disable", source.id); return { disabled: true };
+    }
+    const allowed = { stage: ["sourceId", "operationId", "path", "content", "expectedVersion"], preview: ["sourceId", "message"], publish: ["sourceId", "operationId", "planHash"], ask: ["sourceId", "operationId", "prompt"] };
+    requireValue(allowed[action], "github_action_invalid"); exactKeys(input, allowed[action]);
+    const pinned = await githubContext(this, session.principal, input.sourceId), author = this.env.GitHubAuthoring.getByName(pinned.objectName); await author.initialize(pinned.context, pinned.baseOid);
+    let result;
+    if (action === "stage") result = await author.write({ path: input.path, content: input.content, expectedVersion: input.expectedVersion }, input.operationId, pinned.context);
+    if (action === "preview") result = await author.preview({ message: input.message }, pinned.context);
+    if (action === "publish") result = await author.publish({ planHash: input.planHash }, input.operationId, pinned.context);
+    if (action === "ask") result = await author.ask({ prompt: input.prompt, operationId: input.operationId }, pinned.context);
+    await this.audit(session.principal, `github.${action}`, input.sourceId, result.state === "unknown" ? "unknown" : "ok"); return result;
+  }
   async audit(principal, action, target, outcome = "ok") {
     await this.ctx.storage.transaction(async transaction => {
       const rows = await transaction.get("adminAudit") || [];
@@ -267,10 +313,11 @@ export class ManagementCredentials extends DurableObject {
     const pending = prior.catch(() => undefined).then(() => this.performAdminMutation(action, input, sessionToken, csrf));
     this.managementTail = pending;
     try { return await pending; }
-    catch (error) { if (error instanceof AdminError) return { adminError: error.message, status: error.status }; throw error; }
+    catch (error) { if (error instanceof AdminError || error instanceof GitHubError) return { adminError: error.message, status: error.status }; throw error; }
     finally { if (this.managementTail === pending) this.managementTail = undefined; }
   }
   async performAdminMutation(action, input, sessionToken, csrf) {
+    if (action.startsWith("github.")) return this.githubMutation(action.slice(7), input, sessionToken, csrf);
     const session = await this.adminSession(sessionToken);
     requireValue(session && typeof csrf === "string" && csrf === session.csrf, "admin_csrf_invalid", 403);
     const actor = session.principal;
@@ -346,7 +393,7 @@ function page(env, authenticated) {
   const content = authenticated ? `<header><h1>${name}</h1><p id="identity"></p><button id="logout">로그아웃</button></header>
 <section><h2>구독 계정</h2><p>기본 계정 변경은 새 채널톡 원글부터 적용됩니다. 기존 스레드는 연결된 계정을 유지합니다.</p><div id="accounts"></div><form id="account-selection"><label>새 원글의 계정 할당 <select name="mode"><option value="fixed">고정 계정</option><option value="round_robin">선택 계정 순환</option></select></label><label>고정 계정 <select name="defaultAccountId" required></select></label><p>순환 대상은 각 계정에서 직접 선택하세요. 계정별 구독 한도는 그대로 적용됩니다. 잔여 한도에 따른 자동 전환은 하지 않습니다.</p><button>할당 정책 저장</button></form><form id="create-account"><p>표시 이름은 연결 후 확인된 ChatGPT 계정 ID로 자동 지정됩니다. 계정 ID가 제공되지 않으면 등록 ID를 표시합니다.</p><label>연결할 OpenAI 이메일 <input name="expectedEmail" type="email" required></label><button>계정 추가</button></form><label><input id="plan-usage-confirmed" type="checkbox"> 선택한 ChatGPT 계정·워크스페이스의 사용 권한을 연결합니다.</label><div id="connection" hidden><a id="authorize" target="_blank" rel="noopener noreferrer">OpenAI 로그인 열기</a><form id="complete-account"><label>로그인 후 localhost 콜백 주소 전체를 붙여넣으세요 <textarea name="callbackUrl" required spellcheck="false" autocomplete="off"></textarea></label><button>연결 완료</button></form></div></section>
 <section><h2>스킬</h2><p>SKILL.md와 텍스트 참고 파일을 버전으로 저장합니다. 새 스킬은 활성화한 뒤 사용할 수 있습니다.</p><div id="skills"></div><form id="skill-form"><label>SKILL.md <textarea name="rawContent" required spellcheck="false" placeholder="---&#10;name: example&#10;description: 스킬 설명&#10;---&#10;Instructions"></textarea></label><label>텍스트 참고 파일 JSON (선택) <textarea name="resources" spellcheck="false" placeholder='[{"path":"references/example.md","kind":"reference","content":"Reference text"}]'></textarea></label><button type="button" id="validate-skill">검사</button><button>새 버전 저장</button></form><pre id="skill-validate-result"></pre></section>
-<section><h2>수신한 팀 채팅 스레드</h2><button id="refresh">새로고침</button><div id="threads"></div><a id="export-thread" class="button" hidden>선택한 스레드 JSON 다운로드</a><div id="thread-controls" hidden><h3 id="selected-thread"></h3><p id="thread-settings"></p><p>직원 채팅에서는 /ai model, /ai thinking을 사용할 수 있습니다. 나머지 설정은 이 관리 화면에서 변경합니다.</p><form id="thread-model"><label>모델 <select name="args" required></select></label><button>모델 적용</button></form><form id="thread-thinking"><label>사고 수준 <select name="args" required></select></label><button>사고 수준 적용</button></form><form id="thread-name"><label>세션 이름 <input name="args" maxlength="128" required></label><button>이름 저장</button></form><form id="thread-resume"><label>전환할 세션 <select name="args" required></select></label><button>세션 전환</button></form><form id="thread-fork"><label>분기할 사용자 메시지 <select name="args" required></select></label><button>이 메시지에서 분기</button></form><button type="button" data-thread-action="new">새 세션</button><button type="button" data-thread-action="clone">현재 세션 복제</button><button type="button" data-thread-action="reload">스킬 새로고침</button><p>문맥 압축은 현재 지원하지 않습니다.</p><pre id="thread-control-result"></pre></div><pre id="thread-history"></pre></section><section><h2>구독 연결 테스트</h2><p>표시한 수치는 이 Cloud Agent에서 측정한 모델 토큰입니다. 구독 전체 잔여 한도는 제공되지 않습니다. <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer">ChatGPT 사용량 관리</a></p><form id="ask"><label>테스트할 계정 <select name="account" required></select></label><label>테스트 요청 <input name="prompt" required maxlength="8000" value="Reply SUBSCRIPTION_OK only."></label><button>테스트 실행</button></form><pre id="ask-result"></pre></section><section><h2>관리 기록</h2><pre id="audit"></pre></section><p id="notice" role="status"></p>` : `<main><h1>${name}</h1><p>SSO로 로그인하면 계정, 승인한 스킬, 직원 스레드를 관리할 수 있습니다.</p><a class="button" href="/auth/login">SSO 로그인</a></main>`;
+<section><h2>수신한 팀 채팅 스레드</h2><button id="refresh">새로고침</button><div id="threads"></div><a id="export-thread" class="button" hidden>선택한 스레드 JSON 다운로드</a><div id="thread-controls" hidden><h3 id="selected-thread"></h3><p id="thread-settings"></p><p>직원 채팅에서는 /ai model, /ai thinking을 사용할 수 있습니다. 나머지 설정은 이 관리 화면에서 변경합니다.</p><form id="thread-model"><label>모델 <select name="args" required></select></label><button>모델 적용</button></form><form id="thread-thinking"><label>사고 수준 <select name="args" required></select></label><button>사고 수준 적용</button></form><form id="thread-name"><label>세션 이름 <input name="args" maxlength="128" required></label><button>이름 저장</button></form><form id="thread-resume"><label>전환할 세션 <select name="args" required></select></label><button>세션 전환</button></form><form id="thread-fork"><label>분기할 사용자 메시지 <select name="args" required></select></label><button>이 메시지에서 분기</button></form><button type="button" data-thread-action="new">새 세션</button><button type="button" data-thread-action="clone">현재 세션 복제</button><button type="button" data-thread-action="reload">스킬 새로고침</button><p>문맥 압축은 현재 지원하지 않습니다.</p><pre id="thread-control-result"></pre></div><pre id="thread-history"></pre></section><section><h2>구독 연결 테스트</h2><p>표시한 수치는 이 Cloud Agent에서 측정한 모델 토큰입니다. 구독 전체 잔여 한도는 제공되지 않습니다. <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer">ChatGPT 사용량 관리</a></p><form id="ask"><label>테스트할 계정 <select name="account" required></select></label><label>테스트 요청 <input name="prompt" required maxlength="8000" value="Reply SUBSCRIPTION_OK only."></label><button>테스트 실행</button></form><pre id="ask-result"></pre></section>${githubPanel}<section><h2>관리 기록</h2><pre id="audit"></pre></section><p id="notice" role="status"></p>` : `<main><h1>${name}</h1><p>SSO로 로그인하면 계정, 승인한 스킬, 직원 스레드를 관리할 수 있습니다.</p><a class="button" href="/auth/login">SSO 로그인</a></main>`;
   const script = authenticated ? `<script nonce="${nonce}">
 const $=id=>document.getElementById(id); let csrf, connecting, selectedRoot; const pendingControls=new Map();
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -366,6 +413,7 @@ function settingsView(s){$('thread-settings').textContent='계정 '+s.selected.a
 async function selectRoot(root){selectedRoot=root;$('thread-controls').hidden=true;$('export-thread').hidden=true;$('thread-control-result').textContent='';const [history,settings]=await Promise.all([api('/api/threads/history?root='+encodeURIComponent(root)),api('/api/threads/settings?root='+encodeURIComponent(root))]);if(selectedRoot!==root)return;$('thread-history').textContent=JSON.stringify(history,null,2);$('selected-thread').textContent='원글 '+root;settingsView(settings);$('thread-controls').hidden=false;$('export-thread').href='/api/threads/export?root='+encodeURIComponent(root);$('export-thread').hidden=false;}
 async function threadControl(action,args=''){const root=selectedRoot;if(!root)throw Error('관리할 스레드를 먼저 선택하세요');const key=JSON.stringify([root,action,args]);if(!pendingControls.has(key))pendingControls.set(key,'admin-'+crypto.randomUUID());const result=await api('/api/threads/control',{root,action,args,operationId:pendingControls.get(key)});if(selectedRoot===root){$('thread-control-result').textContent=result.status==='uncertain'?'실행 결과를 확정할 수 없습니다. 같은 작업을 재실행해도 중복 처리하지 않습니다. 이력을 확인하세요.':result.message;settingsView(result.settings);const history=await api('/api/threads/history?root='+encodeURIComponent(root));if(selectedRoot===root)$('thread-history').textContent=JSON.stringify(history,null,2);}if(result.status==='done')pendingControls.delete(key);}
 for(const action of ['model','thinking','name','resume','fork'])$('thread-'+action).onsubmit=e=>{e.preventDefault();run(()=>threadControl(action,new FormData(e.target).get('args')));};$('thread-controls').onclick=e=>{const button=e.target.closest('button[data-thread-action]');if(button)run(()=>threadControl(button.dataset.threadAction));};$('threads').onclick=e=>{const b=e.target.closest('button[data-root]');if(b)run(()=>selectRoot(b.dataset.root));};
+${githubScript}
 $('ask').onsubmit=e=>{e.preventDefault();run(async()=>{const data=new FormData(e.target);$('ask-result').textContent=JSON.stringify(await api('/ask?thread=manual-test&account='+encodeURIComponent(data.get('account')),{prompt:data.get('prompt'),operationId:'manual-'+crypto.randomUUID()}),null,2);await refresh();});};$('refresh').onclick=()=>run(refresh);$('logout').onclick=()=>run(async()=>{await api('/api/logout',{});location.assign('/');});run(async()=>{await refresh();const root=new URLSearchParams(location.search).get('root');if(root)await selectRoot(root);});
 </script>` : "";
   return new Response(`<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${name}</title><style nonce="${nonce}">:root{font-family:system-ui,sans-serif;color:#142d36;background:#f3f7f8}body{max-width:1040px;margin:0 auto;padding:28px}header,main,section{background:white;border:1px solid #dce5e8;border-radius:16px;padding:24px;margin-bottom:20px}h1{font-size:30px;margin:0 0 10px}h2{font-size:22px}p{line-height:1.6;color:#49616b}article{padding:14px 0;border-top:1px solid #e3eaed}label{display:block;margin:12px 0}input,textarea,select{box-sizing:border-box;display:block;width:100%;padding:10px;border:1px solid #aac0c9;border-radius:8px;font:inherit}input[type=checkbox]{display:inline;width:auto}textarea{min-height:120px;font-family:monospace}button,.button{display:inline-block;background:#126c70;color:white;border:0;border-radius:8px;padding:10px 14px;cursor:pointer;margin:4px 4px 4px 0;text-decoration:none}button:disabled{opacity:.55;cursor:default}small,pre{overflow-wrap:anywhere}pre{white-space:pre-wrap;background:#f5f8fa;padding:12px;border-radius:8px;max-height:480px;overflow:auto}#notice{position:sticky;bottom:8px;padding:12px;background:#dff2ee;border-radius:8px}a{color:#126c70}button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:3px solid #65b8be;outline-offset:2px}</style></head><body>${content}${script}</body></html>`, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer", "x-content-type-options": "nosniff", "content-security-policy": `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'` } });
@@ -391,6 +439,11 @@ export async function adminRoute(request, env) {
     const diagnostic = env.DIAGNOSTIC_READS_ENABLED === "true" && request.method === "GET" && ["/status", "/channel/status", "/channel/history", "/history"].includes(path) && env.PROBE_KEY_SHA256 && request.headers.get("authorization")?.startsWith("Bearer ") && await hash(request.headers.get("authorization").slice(7)) === env.PROBE_KEY_SHA256;
     requireValue(session || diagnostic, "sso_login_required", 401);
     if (request.method === "GET") {
+      if (path.startsWith("/api/github/")) {
+        requireValue(session, "sso_login_required", 401);
+        const action = path.slice("/api/github/".length), input = action === "status" ? {} : action === "repositories" ? { page: Number(url.searchParams.get("page") || 1) } : action === "file" ? { sourceId: url.searchParams.get("sourceId"), path: url.searchParams.get("path") } : { sourceId: url.searchParams.get("sourceId") };
+        return response(await owner.githubRead(action, input, sessionToken));
+      }
       if (path === "/status") return response(await owner.status());
       if (path === "/channel/status") return response(await owner.channelStatus());
       if (path === "/history") { requireValue(url.searchParams.get("thread") === "manual-test", "diagnostic_thread_invalid"); return response({ thread: "manual-test", entries: await env.Assistant.getByName("manual-test").history() }); }
@@ -433,7 +486,7 @@ export async function adminRoute(request, env) {
       const account = (await owner.accounts()).find(row => row.id === selected); requireValue(account, "account_not_found", 404); requireValue(account.connected && account.directUsageGranted, "account_not_connected", 409);
       return response(await env.Assistant.getByName(selected === "owner" ? "manual-test" : `manual-${selected}`).manualAsk(prompt, input.operationId, selected));
     }
-    const actions = { "/api/logout": "logout", "/api/accounts/create": "account.create", "/api/accounts/start": "account.start", "/api/accounts/complete": "account.complete", "/api/accounts/disconnect": "account.disconnect", "/api/accounts/default": "account.default", "/api/accounts/selection": "account.selection", "/api/accounts/refresh": "account.refresh", "/api/skills/validate": "skill.validate", "/api/skills/publish": "skill.publish", "/api/skills/toggle": "skill.toggle" };
+    const actions = { ...Object.fromEntries(["source", "disable", "stage", "preview", "publish", "ask"].map(action => [`/api/github/${action}`, `github.${action}`])), "/api/logout": "logout", "/api/accounts/create": "account.create", "/api/accounts/start": "account.start", "/api/accounts/complete": "account.complete", "/api/accounts/disconnect": "account.disconnect", "/api/accounts/default": "account.default", "/api/accounts/selection": "account.selection", "/api/accounts/refresh": "account.refresh", "/api/skills/validate": "skill.validate", "/api/skills/publish": "skill.publish", "/api/skills/toggle": "skill.toggle" };
     requireValue(actions[path], "route_not_found", 404);
     const result = await owner.adminMutation(actions[path], input, sessionToken, session.csrf);
     if (result.adminError) throw new AdminError(result.adminError, result.status);
@@ -441,6 +494,6 @@ export async function adminRoute(request, env) {
   } catch (error) {
     const safe = error instanceof AdminError ? error.message : /^[a-z][a-z0-9_]{0,80}$/.test(error?.message || "") ? error.message : "management_request_failed";
     const remoteStatus = safe === "thread_busy" ? 409 : ["super_admin_required", "sso_email_unverified"].includes(safe) ? 403 : ["sso_network_error", "sso_request_failed", "sso_response_invalid"].includes(safe) ? 502 : ["sso_configuration_invalid", "sso_issuer_mismatch", "sso_endpoint_invalid", "sso_protocol_unsupported", "sso_client_not_configured", "sso_policy_invalid"].includes(safe) ? 503 : safe === "sso_busy" ? 429 : 400;
-    return response({ error: safe }, error instanceof AdminError ? error.status : remoteStatus);
+    return response({ error: safe }, (error instanceof AdminError || error instanceof GitHubError) ? error.status : remoteStatus);
   }
 }
