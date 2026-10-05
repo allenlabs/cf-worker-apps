@@ -4,7 +4,7 @@ Cloudflare Agents and Pi keep one durable conversation per Channel Talk team-cha
 
 `PRODUCT_NAME`, authentication policy, Channel Talk routing and the management origin are supplied by deployment configuration. This public checkout contains example configuration only. Read [CLOUD_HANDOFF.md](docs/CLOUD_HANDOFF.md) before creating or updating an installation.
 
-Read [the architecture](docs/ARCHITECTURE.md) for the implemented runtime and [repository content storage](docs/REPOSITORY_CONTENT.md) for the proposed document-source integration. The [filesystem and plugin design](docs/FILESYSTEM_AND_PLUGINS.md) adds administrator uploads and per-root working files. Generic implementation, tests and design are published here before private installation tuning.
+Read [the architecture](docs/ARCHITECTURE.md) for the implemented runtime and [repository content storage](docs/REPOSITORY_CONTENT.md) for the proposed document-source integration. The [filesystem and plugin design](docs/FILESYSTEM_AND_PLUGINS.md) adds administrator uploads and per-root working files. The [common and organization Git plugin design](docs/COMMON_ORG_GIT_PLUGINS.md) describes scoped catalogs and automatic GitHub import. Generic implementation, tests and design are published here before private installation tuning.
 
 ## Work in a cloud checkout
 

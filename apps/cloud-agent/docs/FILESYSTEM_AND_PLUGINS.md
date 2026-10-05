@@ -134,6 +134,8 @@ Reuse the current SSO, Super Admin, CSRF and audit path. Profile targets come fr
 
 Only verified, complete R2 revisions can be activated. If validation, upload or verification fails, retain the existing active profile. Plugin upload does not activate schedules, business-system writes or another channel's trust policy. Refer to [repository content storage](REPOSITORY_CONTENT.md) for commit selection and immutable source publication.
 
+For common and organization catalogs, Git ownership and automatic synchronization, read [common and organization plugins from Git](COMMON_ORG_GIT_PLUGINS.md). That extension uses explicit revision selection and unique skill aliases.
+
 ## Minimal module changes
 
 ```text
