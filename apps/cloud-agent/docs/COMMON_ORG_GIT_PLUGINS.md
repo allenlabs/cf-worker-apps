@@ -124,6 +124,8 @@ type OrganizationPluginProfile = {
 
 Reuse the existing management DO's catalog, serialization and audit; isolate source/delivery job records from account secrets. Put the GitHub reader and sync validation in `workers/pi/plugin-sync.js` when implemented. Keep profile composition in the proposed `plugins.js` and retain operation snapshot capture in `index.js`. No new tenant service is needed to experiment with common and organization scope in the current single installation.
 
+For member-owned drafts, GitHub editing and a container-free writer, read [personal Git authoring](PERSONAL_GIT_AUTHORING.md). Its personal scope extends this selection model; publication does not activate organization policy.
+
 ## Required checks
 
 1. Common and organization references resolve independently of enumeration order; duplicate aliases fail activation and another organization cannot list or read private metadata or files.
