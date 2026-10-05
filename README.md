@@ -2,7 +2,7 @@
 
 ## Cloud Agent
 
-Deployment configuration in this repository uses examples and placeholder resource IDs. Keep real account identifiers, administrator identities, domains and deployment evidence in a separate private configuration repository. Supply that configuration before deploying any app.
+Publish reusable code, tests, technical design and reproducible verification here first; this repository is also an implementation portfolio. Use generated fixtures and example configuration so public commits contain no personal or installation-specific information. Then transfer reviewed public changes to the private deployment repository and apply its configuration and tuning there. See [the publication rules](AGENTS.md). Supply private deployment configuration before deploying any app.
 
 [apps/cloud-agent](apps/cloud-agent/README.md) contains the Cloudflare Agents/Pi
 team-chat agent and SSO management source. Start cloud continuation with its
