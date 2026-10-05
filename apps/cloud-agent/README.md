@@ -21,6 +21,8 @@ node apps/cloud-agent/skills/pstack/check.mjs --implementation-root apps/cloud-a
 
 `test:coverage` also attempts native workerd profiling of the management module. If the runtime does not expose the Profiler API, it exits nonzero after the behavioral checks. It does not substitute Node harness coverage or claim application-wide coverage.
 
+Read [the formal Channel Talk Command and API history](docs/CHANNEL_COMMAND.md) for the separate signed `/ai` WAM, explicit context sharing and current private-history limitations.
+
 ## Runtime and administration
 
 - Each source root has its own Assistant Durable Object. Comments keep its account and Pi session. D1 persists the canonical Pi journal and transcript.

@@ -1,4 +1,5 @@
 import { OAuthProvider, getOAuthApi, AuthorizationError, CimdFetchError, insufficientScope } from '@cloudflare/workers-oauth-provider';
+import { commandFunctions, commandFunction, commandPage } from './command.js';
 
 const SCOPE = 'channel:events';
 const MAX_BODY = 256 * 1024;
@@ -138,6 +139,7 @@ const hookInputSchema = {
   }, required: ['eventId', 'channelId', 'groupId', 'messageId', 'occurredAt', 'snapshot']
 };
 const nativeFunctions = [
+  ...commandFunctions,
   {
     name: 'extension.hook.metadata.getHooks', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     outputSchema: { type: 'object', properties: { hooks: { type: 'array', items: { type: 'object', properties: { type: { const: 'teamChat.messageCreated' }, actionFunctionName: { const: hookName }, systemVersion: { const: 'v1' } }, required: ['type', 'actionFunctionName', 'systemVersion'], additionalProperties: false } } }, required: ['hooks'], additionalProperties: false }
@@ -217,6 +219,7 @@ const mcpHandler = {
 const defaultHandler = {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === '/wam/ai' && request.method === 'GET') return commandPage();
     if (url.pathname === '/health' && request.method === 'GET') return Response.json({ ok: true, provider: 'channel-talk', protocolVersion: '2026-07-28', configured: Boolean(env.OWNER_LOGIN_KEY && env.CHANNEL_APP_SIGNING_KEY && env.OAUTH_KV && env.EVENTS && env.THREADS && identifier(env.ALLOWED_CHAT_ID)) });
     if (url.pathname === '/functions' || url.pathname === '/functions/v1') {
       if (request.method !== 'PUT') return new Response(null, { status: 405, headers: { Allow: 'PUT' } });
@@ -226,8 +229,14 @@ const defaultHandler = {
       if (!await nativeSignature(request, bytes, env)) return nativeError(4, 'UnauthorizedError', 'Invalid app signature', 401);
       let input;
       try { input = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); } catch { return nativeError(2, 'BadRequestError', 'Invalid JSON', 400); }
-      if (!input || typeof input !== 'object' || Array.isArray(input) || input.systemVersion !== 'v1' || typeof input.method !== 'string' || !input.context || typeof input.context !== 'object' || Array.isArray(input.context)) return nativeError(2, 'BadRequestError', 'Invalid Function envelope', 400);
+      if (!input || typeof input !== 'object' || Array.isArray(input) || typeof input.method !== 'string' || !input.context || typeof input.context !== 'object' || Array.isArray(input.context)) return nativeError(2, 'BadRequestError', 'Invalid Function envelope', 400);
+      const unversionedCommand = url.pathname === '/functions' && input.systemVersion === undefined && (input.method === 'extension.core.function.getFunctions' || commandFunctions.some(fn => fn.name === input.method));
+      if (input.systemVersion !== 'v1' && !unversionedCommand) return nativeError(2, 'BadRequestError', 'Invalid Function version', 400);
       if (input.method === 'extension.core.function.getFunctions') return Response.json({ result: { functions: nativeFunctions, success: true, errorMessage: '' } });
+      if (commandFunctions.some(fn => fn.name === input.method)) {
+        try { return Response.json({ result: await commandFunction(input, env) }); }
+        catch (error) { return nativeError(2, 'BadRequestError', error.message?.startsWith('command_') || error.message?.startsWith('source_history_') ? error.message : 'command_failed', 200); }
+      }
       if (input.method === 'extension.hook.metadata.getHooks') {
         if (!input.params || typeof input.params !== 'object' || Array.isArray(input.params) || Object.keys(input.params).length) return nativeError(2, 'BadRequestError', 'Invalid metadata parameters', 400);
         return Response.json({ result: { hooks: [{ type: 'teamChat.messageCreated', actionFunctionName: hookName, systemVersion: 'v1' }] } });

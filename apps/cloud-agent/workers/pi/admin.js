@@ -3,6 +3,7 @@ import { parse as parseYaml } from "yaml";
 import { GitHubBroker, GitHubError, validateCommit, githubSources, githubRegister, githubAuthorize, githubContext } from "./github.js";
 import { adminPage } from "./admin-view.js";
 import { pinTenant, tenantId, objectKey, storedHistory, listConversations } from "./conversation-store.js";
+import { commandAllowed } from "./source-history.js";
 
 const encoder = new TextEncoder();
 const b64 = bytes => btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
@@ -25,6 +26,11 @@ export function channelScope(env) {
 }
 const object = value => !!value && typeof value === "object" && !Array.isArray(value);
 const exactKeys = (value, keys) => requireValue(object(value) && Object.keys(value).every(key => keys.includes(key)), "invalid_fields");
+function observedThread(rows, root, threadKey) {
+  const matches = rows.filter(row => row.rootMessageId === root && (threadKey === undefined || row.threadKey === threadKey));
+  requireValue(matches.length === 1, matches.length ? "thread_root_ambiguous" : "thread_not_observed", matches.length ? 409 : 404);
+  return matches[0];
+}
 const string = (value, limit, code = "invalid_text") => { requireValue(typeof value === "string" && value.trim().length > 0 && encoder.encode(value).length <= limit && !value.includes("\0"), code); return value.trim(); };
 const response = (value, status = 200, headers = {}) => Response.json(value, { status, headers: { "cache-control": "no-store", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer", ...headers } });
 const redirect = (path, headers = {}) => new Response(null, { status: 303, headers: { location: path, "cache-control": "no-store", "referrer-policy": "no-referrer", ...headers } });
@@ -276,7 +282,9 @@ export class ManagementCredentials extends DurableObject {
   }
   async registerThread(identity) {
     const scope = channelScope(this.env);
-    requireValue(object(identity) && identity.channelId === scope.channelId && identity.groupId === scope.groupId && nativeId(identity.rootMessageId) && /^channel-[0-9a-f]{64}$/.test(identity.threadKey), "thread_identity_invalid");
+    requireValue(object(identity) && identity.channelId === scope.channelId && nativeId(identity.rootMessageId) && /^channel-[0-9a-f]{64}$/.test(identity.threadKey), "thread_identity_invalid");
+    if (identity.admission === "command") commandAllowed(identity, this.env);
+    else requireValue(identity.groupId === scope.groupId, "thread_identity_invalid");
     const expected = `channel-${await hash(JSON.stringify([identity.channelId, identity.groupId, identity.rootMessageId]))}`;
     requireValue(identity.threadKey === expected && (identity.accountId === undefined || accountId(identity.accountId)), "thread_identity_invalid");
     const existing = (await this.ctx.storage.get("threadIndex") || []).find(row => row.threadKey === identity.threadKey);
@@ -421,15 +429,14 @@ export async function adminRoute(request, env) {
       if (path === "/history") { requireValue(url.searchParams.get("thread") === "manual-test", "diagnostic_thread_invalid"); return response({ thread: "manual-test", entries: await env.Assistant.getByName("manual-test").history() }); }
       if (path === "/api/threads/settings") {
         const root = url.searchParams.get("root"); requireValue(nativeId(root), "thread_root_invalid");
-        const observed = (await owner.threads()).find(row => row.rootMessageId === root); requireValue(observed, "thread_not_observed", 404);
+        const observed = observedThread(await owner.threads(), root, url.searchParams.get("threadKey") || undefined);
         return response(await env.Assistant.getByName(observed.threadKey).adminSettings());
       }
       if (path === "/api/conversations") return response(await listConversations(env, { before: url.searchParams.get("before") || undefined, limit: Number(url.searchParams.get("limit") || 50), kind: url.searchParams.get("kind") || "channel" }));
       if (path === "/channel/history" || path === "/api/threads/history" || path === "/api/threads/export") {
         const root = url.searchParams.get("root"); requireValue(nativeId(root), "thread_root_invalid");
-        if (path.startsWith("/api/")) requireValue((await owner.threads()).some(row => row.rootMessageId === root), "thread_not_observed", 404);
-        const scope = channelScope(env);
-        const threadKey = `channel-${await hash(JSON.stringify([scope.channelId, scope.groupId, root]))}`;
+        const observed = observedThread(await owner.threads(), root, url.searchParams.get("threadKey") || undefined);
+        const threadKey = observed.threadKey;
         const history = { threadKey, ...await env.Assistant.getByName(threadKey).channelHistory() };
         const page = path.startsWith("/api/") ? await storedHistory(env, objectKey("assistant", env.Assistant.idFromName(threadKey).toString()), url.searchParams.get("session") || history.selected.sessionId, { before: url.searchParams.has("before") ? Number(url.searchParams.get("before")) : undefined, limit: Number(url.searchParams.get("limit") || 50) }) : null;
         const bounded = page ? { ...history, ...page, receipts: history.receipts.slice(-50), displayLimits: { ...page.displayLimits, receipts: 50 } } : history;
@@ -445,10 +452,10 @@ export async function adminRoute(request, env) {
     const raw = await boundedText(request, 400000, "request_too_large", 413);
     let input; try { input = JSON.parse(raw); } catch { throw new AdminError("invalid_json"); }
     if (path === "/api/threads/control") {
-      exactKeys(input, ["root", "operationId", "action", "args"]); requireValue(nativeId(input.root), "thread_root_invalid");
+      exactKeys(input, ["root", "threadKey", "operationId", "action", "args"]); requireValue(nativeId(input.root), "thread_root_invalid");
       requireValue(typeof input.operationId === "string" && /^admin-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(input.operationId), "operation_id_invalid");
       requireValue(["model", "thinking", "new", "resume", "name", "clone", "fork", "reload"].includes(input.action) && typeof input.args === "string" && encoder.encode(input.args).length <= 500 && !input.args.includes("\0"), "thread_control_invalid");
-      const observed = (await owner.threads()).find(row => row.rootMessageId === input.root); requireValue(observed, "thread_not_observed", 404);
+      const observed = observedThread(await owner.threads(), input.root, input.threadKey);
       const result = await env.Assistant.getByName(observed.threadKey).adminControl({ operationId: input.operationId, action: input.action, args: input.args });
       await owner.audit(session.principal, `thread.${input.action}`, input.root, result.status);
       return response(result);

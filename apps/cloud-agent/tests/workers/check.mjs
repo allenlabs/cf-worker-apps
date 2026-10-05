@@ -19,6 +19,13 @@ const storage = await mkdtemp(join(tmpdir(), 'pi-channel-check-'));
 const hash = value => createHash('sha256').update(value).digest('hex');
 const threadKey = root => `channel-${hash(JSON.stringify([channel, group, root]))}`;
 const operation = message => `ctm-${hash(JSON.stringify([channel, group, message]))}`;
+function singleExchange(entries) {
+  assert.deepEqual(entries.filter(entry => entry.kind === 'pi.user' || entry.kind === 'pi.assistant').map(entry => entry.kind), ['pi.user', 'pi.assistant']);
+  assert.ok(entries.every(entry => ['pi.user', 'pi.system', 'pi.assistant'].includes(entry.kind)));
+  // Pi records a system context entry when the source-history tool catalog becomes available.
+  assert.ok(entries.filter(entry => entry.kind === 'pi.system').length <= 1);
+  assert.equal(new Set(entries.map(entry => entry.id)).size, entries.length);
+}
 await writeFile('build/pi/channel-wrapper.js', `import worker, {Assistant as BaseAssistant, Credentials as BaseCredentials} from './index.js';
 export default worker;
 export class Assistant extends BaseAssistant {
@@ -247,7 +254,7 @@ try {
   await waitFor(async()=>{const i=await inspect('recovery-accepted');return i.receipts[0]?.state==='accepted';},'accepted stage not persisted');
   await restart(options());await waitReceipt('recovery-accepted','sent',40000);assert.equal(writes.filter(w=>w.rootMessageId==='recovery-accepted').length,1);
   await restart(options({hold:'answered'}));await accept(envelope('recovery-answer','RECOVER_ANSWER'));await waitReceipt('recovery-answer','answered');
-  await restart(options());const recovered=await waitReceipt('recovery-answer','sent',40000);assert.equal(writes.filter(w=>w.rootMessageId==='recovery-answer').length,1);assert.equal(recovered.receipts.length,1);assert.equal(recovered.entries.length,2);
+  await restart(options());const recovered=await waitReceipt('recovery-answer','sent',40000);assert.equal(writes.filter(w=>w.rootMessageId==='recovery-answer').length,1);assert.equal(recovered.receipts.length,1);singleExchange(recovered.entries);assert.equal(recovered.modelCalls,0,'An answered receipt must not generate again after restart');
   for(const [root,mode,state] of [['unknown-root','unknown','delivery_unknown'],['invalid-receipt','invalid','delivery_unknown'],['rejected-root','rejected','delivery_failed']]) {
     sendMode.set(root,mode);const message=envelope(root,'FAILURE_MARKER');await accept(message);await waitReceipt(root,state);
     await accept({...message,params:{...message.params,eventId:`repeat-${root}`}});await restart(options());await new Promise(resolve=>setTimeout(resolve,100));assert.equal(writes.filter(w=>w.rootMessageId===root).length,1);
@@ -268,13 +275,13 @@ try {
   await waitFor(async()=>{const state=await sourceState();return state.outbox[0]?.attempts>=1;},'failed queue push did not retain durable forward work');
   assert.equal((await sourceState()).outbox.length,1);
   await restart(options());const repaired=await waitReceipt('queue-fault-root');
-  assert.equal(repaired.receipts.length,1);assert.equal(repaired.entries.length,2);assert.equal(writes.filter(row=>row.rootMessageId==='queue-fault-root').length,1);
+  assert.equal(repaired.receipts.length,1);singleExchange(repaired.entries);assert.equal(repaired.modelCalls,1);assert.equal(writes.filter(row=>row.rootMessageId==='queue-fault-root').length,1);
   await restart(options({hold:'accepted'}));
   const missingMessage=envelope('missing-job-root','MISSING_JOB_MARKER');await accept(missingMessage);
   await waitFor(async()=>{const info=await inspect('missing-job-root');return info.receipts[0]?.state==='accepted'&&info.queue.length===1;},'missing job fixture was not admitted');
   await (await assistant('missing-job-root')).fetch('https://private.invalid/test/remove-job',{method:'POST',body:JSON.stringify({operationId:operation('missing-job-root')})});
   await restart(options());await accept({...missingMessage,params:{...missingMessage.params,eventId:'missing-job-new-delivery'}});
-  const missingRepaired=await waitReceipt('missing-job-root');assert.equal(missingRepaired.receipts.length,1);assert.equal(missingRepaired.entries.length,2);assert.equal(writes.filter(row=>row.rootMessageId==='missing-job-root').length,1);
+  const missingRepaired=await waitReceipt('missing-job-root');assert.equal(missingRepaired.receipts.length,1);singleExchange(missingRepaired.entries);assert.equal(missingRepaired.modelCalls,1);assert.equal(writes.filter(row=>row.rootMessageId==='missing-job-root').length,1);
   const cred=async()=>{const ns=await mf.getDurableObjectNamespace('Credentials','cloud-agent');return ns.get(ns.idFromName('owner'));};
   await (await cred()).fetch('https://private.invalid/test/legacy-channel');
   const revision=async()=>(await (await (await cred()).fetch('https://private.invalid/test/channel-revision')).json());

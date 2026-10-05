@@ -29,6 +29,8 @@ Missing or malformed origin, object identity, owner identity or required source 
 4. Set the app Function Endpoint to the configured origin plus `/functions`. Signed `PUT /functions` and `/functions/v1` are accepted. Register the native `hook` extension outside this Worker. Discovery advertises `extension.hook.metadata.getHooks` and `hooks.teamChatMessageCreated` for `teamChat.messageCreated`.
 5. Connect the origin plus `/mcp` to an OAuth-capable MCP host. Enter the owner access key on the browser-bound consent page. Subscribe to `channel.message.created` using the configured `chat_id`; optional `sender_type` filters select staff or bot messages.
 
+The signed endpoint also discovers the formal `command:v1` `/ai` extension. Its WAM panel is served at `/wam/ai`; Command group/manager policy is separate from the automatic Hook allowlist. Read [the Command installation and history contract](../cloud-agent/docs/CHANNEL_COMMAND.md) before enabling it.
+
 ## History and delivery
 
 `integration_status` returns connection state, queue counts and recent source identifiers. `get_thread_history` accepts `{ "thread_id": "sample-root", "limit": 20 }`; the limit is an integer from 1 to 50. A source thread, root-message or observed message ID resolves to its stored grouping reference. These tools work while event monitoring is paused and do not create ChatGPT conversations or scheduled tasks.

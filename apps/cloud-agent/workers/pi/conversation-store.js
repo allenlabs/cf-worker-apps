@@ -107,6 +107,31 @@ export async function channelReceipts(env, key, limit = 50) {
   });
 }
 
+export async function commandReceipt(env, key, operationId, requestHash) {
+  const db = await conversationDatabase(env), row = await db.prepare("SELECT request_hash,response FROM ca_command_receipts WHERE tenant_id=? AND object_key=? AND operation_id=?").bind(tenantId(env), key, operationId).first();
+  if (!row) return null;
+  insist(row.request_hash === requestHash, "command_operation_conflict");
+  return JSON.parse(row.response);
+}
+export async function saveCommandReceipt(env, key, operationId, requestHash, result) {
+  const db = await conversationDatabase(env), response = JSON.stringify(result);
+  await db.prepare("INSERT OR IGNORE INTO ca_command_receipts(tenant_id,object_key,operation_id,request_hash,response) VALUES(?,?,?,?,?)").bind(tenantId(env), key, operationId, requestHash, response).run();
+  const confirmed = await commandReceipt(env, key, operationId, requestHash);
+  insist(JSON.stringify(confirmed) === response, "command_receipt_unconfirmed");
+  return confirmed;
+}
+export async function commandPrompt(env, key, operationId, requestHash, create) {
+  const db = await conversationDatabase(env), tenant = tenantId(env);
+  let row = await db.prepare("SELECT request_hash,prompt FROM ca_asks WHERE tenant_id=? AND object_key=? AND operation_id=?").bind(tenant, key, `cmd-${operationId}`).first();
+  if (!row) {
+    const packet = JSON.stringify(await create());
+    await db.prepare("INSERT OR IGNORE INTO ca_asks(tenant_id,object_key,operation_id,request_hash,prompt) VALUES(?,?,?,?,?)").bind(tenant, key, `cmd-${operationId}`, requestHash, packet).run();
+    row = await db.prepare("SELECT request_hash,prompt FROM ca_asks WHERE tenant_id=? AND object_key=? AND operation_id=?").bind(tenant, key, `cmd-${operationId}`).first();
+  }
+  insist(row?.request_hash === requestHash, "command_operation_conflict");
+  return JSON.parse(row.prompt);
+}
+
 export async function recordAuthoringAsk(env, key, operationId, requestHash, prompt) {
   const db = await conversationDatabase(env), tenant = tenantId(env);
   await db.prepare("INSERT OR IGNORE INTO ca_asks(tenant_id,object_key,operation_id,request_hash,prompt) VALUES(?,?,?,?,?)").bind(tenant, key, operationId, requestHash, prompt).run();
