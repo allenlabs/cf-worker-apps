@@ -92,6 +92,9 @@ export class Credentials extends BaseCredentials {
     if(path==='/test/allocation')return Response.json({selection:await this.accountSelection(),cursor:await this.ctx.storage.get('accountCursor')??0,threads:await this.threads()});
     if(path==='/test/status')return Response.json(await this.status());
     if(path==='/test/access'){try{await this.channelAccess();return Response.json({ok:true});}catch(error){return Response.json({ok:false,error:error.message});}}
+    if(path==='/test/legacy-channel'){await this.ctx.storage.put('channelCredential',await this.seal({access:'fixture-legacy-channel-access',refresh:'fixture-legacy-channel-refresh',expiresAt:Date.now()+3600000}));return Response.json({ok:true});}
+    if(path==='/test/channel-revision'){const sealed=await this.ctx.storage.get('channelCredential'),value=await this.open(sealed);return Response.json({encrypted:!!sealed?.ciphertext&&!('grantVersion'in sealed)&&!('access'in sealed),grantVersion:value?.grantVersion??null});}
+    if(path==='/test/manager'){try{const result=await this.native('getManager',{channelId:this.env.ALLOWED_CHANNEL_ID,managerId:'fixture-manager'},await this.channelAccess());return Response.json({ok:true,manager:result.manager});}catch(error){return Response.json({ok:false,error:error.message});}}
     if(path==='/test/expire'){const value=await this.open(await this.ctx.storage.get('channelCredential'));value.expiresAt=Date.now()+1000;await this.ctx.storage.put('channelCredential',await this.seal(value));return Response.json({ok:true});}
     if(path==='/test/clear'){await this.ctx.storage.delete('channelCredential');await this.ctx.storage.delete('channelAuthBlockedUntil');return Response.json({ok:true});}
     return Response.json({credential:await this.ctx.storage.get('channelCredential')});
@@ -128,6 +131,12 @@ const outbound = async request => {
     refreshCalls++;
     assert.equal(params.refreshToken,'fixture-channel-refresh');
     return Response.json({result:{accessToken:'fixture-renewed-channel-access',refreshToken:'fixture-rotated-channel-refresh',expiresIn:3600}});
+  }
+  if (method === 'getManager') {
+    if(request.headers.get('x-access-token')==='fixture-legacy-channel-access')return Response.json({error:{code:4,message:'fixture token has no getManager grant'}});
+    assert.ok(['fixture-channel-access','fixture-renewed-channel-access'].includes(request.headers.get('x-access-token')));
+    assert.equal(params.channelId,channel);assert.equal(params.managerId,'fixture-manager');
+    return Response.json({result:{manager:{id:'fixture-manager',name:'Fixture Manager'}}});
   }
   assert.equal(method,'writeGroupMessage');
   assert.ok(['fixture-channel-access','fixture-renewed-channel-access'].includes(request.headers.get('x-access-token')));
@@ -267,10 +276,21 @@ try {
   await restart(options());await accept({...missingMessage,params:{...missingMessage.params,eventId:'missing-job-new-delivery'}});
   const missingRepaired=await waitReceipt('missing-job-root');assert.equal(missingRepaired.receipts.length,1);assert.equal(missingRepaired.entries.length,2);assert.equal(writes.filter(row=>row.rootMessageId==='missing-job-root').length,1);
   const cred=async()=>{const ns=await mf.getDurableObjectNamespace('Credentials','cloud-agent');return ns.get(ns.idFromName('owner'));};
+  await (await cred()).fetch('https://private.invalid/test/legacy-channel');
+  const revision=async()=>(await (await (await cred()).fetch('https://private.invalid/test/channel-revision')).json());
+  assert.deepEqual(await revision(),{encrypted:true,grantVersion:null});
+  const upgradeIssueBefore=issueCalls,upgradeRefreshBefore=refreshCalls;
+  const upgrade=await Promise.all(['/test/access','/test/manager','/test/access'].map(async path=>(await (await (await cred()).fetch('https://private.invalid'+path)).json())));
+  assert.equal(issueCalls,upgradeIssueBefore+1,'Legacy channel grants must be reissued once across concurrent calls');assert.equal(refreshCalls,upgradeRefreshBefore,'Legacy grants must not be retained through refresh');
+  assert.ok(upgrade.every(result=>result.ok));assert.deepEqual(upgrade[1].manager,{id:'fixture-manager',name:'Fixture Manager'});assert.deepEqual(await revision(),{encrypted:true,grantVersion:1});
+  await restart(options());
+  assert.deepEqual(await revision(),{encrypted:true,grantVersion:1});assert.equal((await (await (await cred()).fetch('https://private.invalid/test/manager')).json()).ok,true);
+  assert.equal(issueCalls,upgradeIssueBefore+1,'Restart reissued a current grant revision');assert.equal(refreshCalls,upgradeRefreshBefore);
   await (await cred()).fetch('https://private.invalid/test/expire');
   const refreshBefore=refreshCalls;
   const cached=await Promise.all(Array.from({length:3},async()=> (await (await cred()).fetch('https://private.invalid/test/access')).json()));
-  assert.ok(cached.every(result=>result.ok));assert.equal(refreshCalls,refreshBefore+1);
+  assert.ok(cached.every(result=>result.ok));assert.equal(refreshCalls,refreshBefore+1);assert.equal(issueCalls,upgradeIssueBefore+1);assert.deepEqual(await revision(),{encrypted:true,grantVersion:1});
+  assert.equal((await (await (await cred()).fetch('https://private.invalid/test/manager')).json()).ok,true);
   await (await cred()).fetch('https://private.invalid/test/clear');tokenFault=true;
   const issueBefore=issueCalls;
   const rejected=await Promise.all(Array.from({length:3},async()=> (await (await cred()).fetch('https://private.invalid/test/access')).json()));
@@ -395,5 +415,5 @@ try {
     const olderReport=await usageCredential.reportUsage({sourceId:snapshotId,usage:{...snapshot,input:9}});assert.equal(olderReport.accepted,false);assert.equal(olderReport.reason,'older_snapshot');assert.deepEqual(counters(await accountUsage(selectedAccount)),counters(aggregateAfter));
     for(const key of ['requests','modelResponses','cost','remaining','limit'])assert.equal(aggregateAfter[key],undefined);assert.equal(aggregateAfter.quota,null);assert.equal(aggregateAfter.source,'pi_committed_usage');assert.ok(aggregateAfter.collectionStartedAt);assert.ok(aggregateAfter.lastUpdated);
   }
-  console.log(JSON.stringify({checks:'PASS',runtime:'workerd',missingChannelConfigDenied:true,coreChecksExecuted:!faultsOnly&&!commandsOnly,commandChecksExecuted:!faultsOnly,...(!faultsOnly?{restrictedStaffCommands:true,koreanAliases:true,advancedSlashNoInference:true,nativeSkillsActivation:true,adminControlsIdempotent:true,adminBusyRejected:true,legacyForbiddenTaskAbortedBeforeResume:true,rootLocalSessionSwitch:true,accountPinsSurviveDefaultChange:true,atomicNewRootRoundRobin:true,roundRobinReplayAndRestart:true,nativeTokenUsage:true,usageSnapshotDeduplication:true,forkDoesNotDuplicateUsage:true,selectedAccountManualTest:true}:{}),...(!commandsOnly?{missingNativeJobRepaired:true,channelRefreshSingleflight:true,tokenFailureCooldown:true}:{}),...(!faultsOnly&&!commandsOnly?{signedNativeIngress:true,perSourceThreadIsolation:true,messageDeduplication:true,orderedFollowups:true,atomicForwardOutbox:true,headBackoffNoAlarmSpin:true,acceptAndAnswerRecovery:true,ambiguousD1AdmissionRecovery:true,nativeTranscriptRows:0,terminalTranscriptsArchived:true,unknownSendNoRetry:true,staffAndSelfLoopFilters:true,encryptedChannelCredentials:true,singleChannelTokenIssue:true,disableNoBackfill:true,protectedReadOnlyInspection:true}:{}),issueCalls,refreshCalls,writeCalls,realOpenAINetworkCalls:0,realChannelNetworkCalls:0}));
+  console.log(JSON.stringify({checks:'PASS',runtime:'workerd',missingChannelConfigDenied:true,coreChecksExecuted:!faultsOnly&&!commandsOnly,commandChecksExecuted:!faultsOnly,...(!faultsOnly?{restrictedStaffCommands:true,koreanAliases:true,advancedSlashNoInference:true,nativeSkillsActivation:true,adminControlsIdempotent:true,adminBusyRejected:true,legacyForbiddenTaskAbortedBeforeResume:true,rootLocalSessionSwitch:true,accountPinsSurviveDefaultChange:true,atomicNewRootRoundRobin:true,roundRobinReplayAndRestart:true,nativeTokenUsage:true,usageSnapshotDeduplication:true,forkDoesNotDuplicateUsage:true,selectedAccountManualTest:true}:{}),...(!commandsOnly?{missingNativeJobRepaired:true,channelGrantRevisionUpgradeOnce:true,managerGrantAfterUpgrade:true,encryptedRevisionSurvivesRestart:true,channelRefreshSingleflight:true,tokenFailureCooldown:true}:{}),...(!faultsOnly&&!commandsOnly?{signedNativeIngress:true,perSourceThreadIsolation:true,messageDeduplication:true,orderedFollowups:true,atomicForwardOutbox:true,headBackoffNoAlarmSpin:true,acceptAndAnswerRecovery:true,ambiguousD1AdmissionRecovery:true,nativeTranscriptRows:0,terminalTranscriptsArchived:true,unknownSendNoRetry:true,staffAndSelfLoopFilters:true,encryptedChannelCredentials:true,singleChannelTokenIssue:true,disableNoBackfill:true,protectedReadOnlyInspection:true}:{}),issueCalls,refreshCalls,writeCalls,realOpenAINetworkCalls:0,realChannelNetworkCalls:0}));
 } finally { await mf.dispose();await rm(storage,{recursive:true,force:true}); }

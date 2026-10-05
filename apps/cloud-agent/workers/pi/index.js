@@ -11,6 +11,7 @@ export { GitHubAuthoring } from "./github-authoring.js";
 import { storageError } from "./pi-journal.js";
 import { resolveManagers } from "./manager-directory.js";
 const NATIVE = "https://app-store-api.channel.io/general/v1/native/functions";
+const CHANNEL_GRANT_VERSION = 1;
 const nativeId = value => typeof value === "string" && /^[A-Za-z0-9_:-]{1,255}$/.test(value);
 const channelThreadKey = (root, env) => digest(JSON.stringify([env.ALLOWED_CHANNEL_ID, env.ALLOWED_CHAT_ID, root])).then(hash => `channel-${hash}`);
 const channelOperation = (messageId, env) => digest(JSON.stringify([env.ALLOWED_CHANNEL_ID, env.ALLOWED_CHAT_ID, messageId])).then(hash => `ctm-${hash}`);
@@ -173,7 +174,8 @@ export class Credentials extends ManagementCredentials {
     if (this.channelRefreshing) return this.channelRefreshing;
     this.channelRefreshing = (async () => {
       channelScope(this.env);
-      const stored = await this.open(await this.ctx.storage.get("channelCredential"));
+      const credential = await this.open(await this.ctx.storage.get("channelCredential"));
+      const stored = credential?.grantVersion === CHANNEL_GRANT_VERSION ? credential : null;
       if (stored && stored.expiresAt - Date.now() > 180000) return stored.access;
       requireCondition(typeof this.env.CHANNEL_APP_SECRET === "string" && this.env.CHANNEL_APP_SECRET.length >= 16, "channel_secret_missing");
       const blockedUntil = await this.ctx.storage.get("channelAuthBlockedUntil");
@@ -188,7 +190,7 @@ export class Credentials extends ManagementCredentials {
         await this.ctx.storage.put("channelAuthBlockedUntil", Date.now() + 1800000);
         throw error;
       }
-      const value = { access: token.accessToken, refresh: token.refreshToken, expiresAt: Date.now() + token.expiresIn * 1000 };
+      const value = { access: token.accessToken, refresh: token.refreshToken, expiresAt: Date.now() + token.expiresIn * 1000, grantVersion: CHANNEL_GRANT_VERSION };
       await this.ctx.storage.put("channelCredential", await this.seal(value));
       return value.access;
     })();
