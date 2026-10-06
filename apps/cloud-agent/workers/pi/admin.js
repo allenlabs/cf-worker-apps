@@ -1,4 +1,5 @@
 import { workflowFromSkill } from "./workflow.js";
+import { threadStartPreferences, startReceipts, recoverStart } from "./command-start.js";
 import { serveImageAsset } from "./image-tool.js";
 import { DurableObject } from "cloudflare:workers";
 import { parse as parseYaml } from "yaml";
@@ -290,6 +291,7 @@ export class ManagementCredentials extends DurableObject {
     else requireValue(identity.groupId === scope.groupId, "thread_identity_invalid");
     const expected = `channel-${await hash(JSON.stringify([identity.channelId, identity.groupId, identity.rootMessageId]))}`;
     requireValue(identity.threadKey === expected && (identity.accountId === undefined || accountId(identity.accountId)), "thread_identity_invalid");
+    await threadStartPreferences(this, { channelId: identity.channelId, groupId: identity.groupId, rootMessageId: identity.rootMessageId });
     const existing = (await this.ctx.storage.get("threadIndex") || []).find(row => row.threadKey === identity.threadKey);
     const selection = !existing && identity.accountId === undefined ? await this.accountSelection() : null;
     // ponytail: account health across DOs is a snapshot; later disconnects fail on the pinned account instead of switching it.
@@ -318,6 +320,7 @@ export class ManagementCredentials extends DurableObject {
       return rows.find(row => row.threadKey === identity.threadKey);
     });
   }
+  async commandStartReceipts() { return startReceipts(this); }
   async threads() { return (await this.ctx.storage.get("threadIndex") || []).slice().reverse(); }
   async adminAudit() { return (await this.ctx.storage.get("adminAudit") || []).slice().reverse(); }
   async adminMutation(action, input, sessionToken, csrf) {
@@ -334,6 +337,7 @@ export class ManagementCredentials extends DurableObject {
     const session = await this.adminSession(sessionToken);
     requireValue(session && typeof csrf === "string" && csrf === session.csrf, "admin_csrf_invalid", 403);
     const actor = session.principal;
+    if (action === "command-start.recover") { const result = await recoverStart(this, input); await this.audit(actor, action, input.operationId, result.status); return result; }
     if (action === "logout") {
       exactKeys(input, []); await this.ctx.storage.delete(`adminSession:${await hash(sessionToken)}`); await this.audit(actor, "sso.logout", "management"); return { loggedOut: true };
     }
@@ -459,7 +463,7 @@ export async function adminRoute(request, env) {
         requireValue(encoder.encode(JSON.stringify(bounded)).length <= 1048576, "thread_history_too_large", 413);
         return response(bounded, 200, path.endsWith("/export") ? { "content-disposition": `attachment; filename="thread-${root.replace(/[^A-Za-z0-9_-]/g, "_")}.json"` } : {});
       }
-      if (path === "/api/overview") { const [accounts, snapshot, skills, threads, audit, accountSelection] = await Promise.all([owner.accounts(), owner.controlSnapshot(), owner.skillCatalog(), owner.threads(), owner.adminAudit(), owner.accountSelection()]); return response({ tenant: { id: tenantId(env), name: env.TENANT_NAME || productName(env) }, principal: session.principal, csrf: session.csrf, expiresAt: session.expiresAt, accounts, defaultAccountId: accountSelection.defaultAccountId, accountSelection, manifestVersion: snapshot.manifest.version, skills, threads, audit }); }
+      if (path === "/api/overview") { const [accounts, snapshot, skills, threads, audit, accountSelection] = await Promise.all([owner.accounts(), owner.controlSnapshot(), owner.skillCatalog(), owner.threads(), owner.adminAudit(), owner.accountSelection()]); return response({ tenant: { id: tenantId(env), name: env.TENANT_NAME || productName(env) }, principal: session.principal, csrf: session.csrf, expiresAt: session.expiresAt, accounts, defaultAccountId: accountSelection.defaultAccountId, accountSelection, manifestVersion: snapshot.manifest.version, skills, threads, audit, commandStarts: await owner.commandStartReceipts() }); }
       if (path === "/api/skills/source") { const skill = await owner.skillSource(url.searchParams.get("name"), url.searchParams.get("revision") || undefined); requireValue(skill, "skill_not_found", 404); return response(skill); }
       throw new AdminError("route_not_found", 404);
     }
@@ -483,7 +487,7 @@ export async function adminRoute(request, env) {
       const account = (await owner.accounts()).find(row => row.id === selected); requireValue(account, "account_not_found", 404); requireValue(account.connected && account.inferenceReady, "account_not_connected", 409);
       return response(await env.Assistant.getByName(selected === "owner" ? "manual-test" : `manual-${selected}`).manualAsk(prompt, input.operationId, selected));
     }
-    const actions = { "/api/images/start": "image.start", "/api/images/check": "image.check", "/api/images/disconnect": "image.disconnect", ...Object.fromEntries(["source", "disable", "stage", "preview", "publish", "ask"].map(action => [`/api/github/${action}`, `github.${action}`])), "/api/logout": "logout", "/api/accounts/create": "account.create", "/api/accounts/start": "account.start", "/api/accounts/check": "account.check", "/api/accounts/complete": "account.complete", "/api/accounts/disconnect": "account.disconnect", "/api/accounts/default": "account.default", "/api/accounts/selection": "account.selection", "/api/accounts/refresh": "account.refresh", "/api/skills/validate": "skill.validate", "/api/skills/publish": "skill.publish", "/api/skills/toggle": "skill.toggle" };
+    const actions = { "/api/command-start/recover": "command-start.recover", "/api/images/start": "image.start", "/api/images/check": "image.check", "/api/images/disconnect": "image.disconnect", ...Object.fromEntries(["source", "disable", "stage", "preview", "publish", "ask"].map(action => [`/api/github/${action}`, `github.${action}`])), "/api/logout": "logout", "/api/accounts/create": "account.create", "/api/accounts/start": "account.start", "/api/accounts/check": "account.check", "/api/accounts/complete": "account.complete", "/api/accounts/disconnect": "account.disconnect", "/api/accounts/default": "account.default", "/api/accounts/selection": "account.selection", "/api/accounts/refresh": "account.refresh", "/api/skills/validate": "skill.validate", "/api/skills/publish": "skill.publish", "/api/skills/toggle": "skill.toggle" };
     requireValue(actions[path], "route_not_found", 404);
     const result = await owner.adminMutation(actions[path], input, sessionToken, session.csrf);
     if (result.adminError) throw new AdminError(result.adminError, result.status);

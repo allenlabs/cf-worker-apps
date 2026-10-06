@@ -372,7 +372,8 @@ export class ChannelEvents {
       CREATE TABLE IF NOT EXISTS metadata (id TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS history_lookup (id TEXT PRIMARY KEY, partition TEXT NOT NULL, expiresAt INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS pi_outbox (id TEXT PRIMARY KEY, threadKey TEXT NOT NULL, event TEXT NOT NULL, attempts INTEGER NOT NULL, nextAttempt INTEGER NOT NULL);
-      CREATE INDEX IF NOT EXISTS pi_outbox_due ON pi_outbox(nextAttempt);`);
+      CREATE INDEX IF NOT EXISTS pi_outbox_due ON pi_outbox(nextAttempt);
+      CREATE INDEX IF NOT EXISTS pi_outbox_thread ON pi_outbox(threadKey);`);
   }
   channelId() { return this.env.ALLOWED_CHANNEL_ID || this.sql.exec("SELECT value FROM metadata WHERE id = 'channelId'").toArray()[0]?.value || null; }
   cleanup() {
@@ -382,7 +383,7 @@ export class ChannelEvents {
     for (const table of ['seen', 'operations', 'verified', 'history_lookup']) this.sql.exec(`DELETE FROM ${table} WHERE expiresAt <= ?`, now);
   }
   async schedule() {
-    const next = this.sql.exec(this.env.CHANNEL_REPLY_ENABLED === 'true' ? 'SELECT MIN(nextAttempt) AS time FROM (SELECT nextAttempt FROM jobs UNION ALL SELECT nextAttempt FROM (SELECT nextAttempt FROM pi_outbox ORDER BY rowid LIMIT 1))' : 'SELECT MIN(nextAttempt) AS time FROM jobs').toArray()[0]?.time;
+    const next = this.sql.exec(this.env.CHANNEL_REPLY_ENABLED === 'true' ? 'SELECT MIN(nextAttempt) AS time FROM (SELECT nextAttempt FROM jobs UNION ALL SELECT p.nextAttempt FROM pi_outbox p WHERE NOT EXISTS (SELECT 1 FROM pi_outbox earlier WHERE earlier.threadKey=p.threadKey AND earlier.rowid<p.rowid))' : 'SELECT MIN(nextAttempt) AS time FROM jobs').toArray()[0]?.time;
     if (next != null) await this.context.storage.setAlarm(Math.max(Date.now() + 10, next));
     else await this.context.storage.setAlarm(Date.now() + 86400000);
   }
@@ -532,10 +533,9 @@ export class ChannelEvents {
   }
   async drainPi() {
     if (this.env.CHANNEL_REPLY_ENABLED !== 'true' || !this.env.PI_ASSISTANT) return;
-    // ponytail: one low-volume group forwards serially; shard the outbox per thread before adding tenants.
-    const rows = this.sql.exec('SELECT * FROM pi_outbox ORDER BY rowid LIMIT 25').toArray();
+    // ponytail: at most 25 thread heads forward serially per alarm; parallelize independent heads if admission latency grows.
+    const rows = this.sql.exec('SELECT p.* FROM pi_outbox p WHERE p.nextAttempt<=? AND NOT EXISTS (SELECT 1 FROM pi_outbox earlier WHERE earlier.threadKey=p.threadKey AND earlier.rowid<p.rowid) ORDER BY p.nextAttempt,p.rowid LIMIT 25', Date.now()).toArray();
     for (const row of rows) {
-      if (row.nextAttempt > Date.now()) break;
       try {
         const result = await this.env.PI_ASSISTANT.get(this.env.PI_ASSISTANT.idFromName(row.threadKey)).acceptChannel(JSON.parse(row.event));
         if (!result?.accepted || result.threadKey !== row.threadKey) throw new Error('Pi admission rejected');
@@ -545,7 +545,6 @@ export class ChannelEvents {
         });
       } catch {
         this.sql.exec('UPDATE pi_outbox SET attempts = attempts + 1, nextAttempt = ? WHERE id = ?', Date.now() + Math.min(1000 * 2 ** Math.min(row.attempts, 8), 60000), row.id);
-        break;
       }
     }
   }

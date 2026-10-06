@@ -38,3 +38,5 @@ tag = "v2"
 new_sqlite_classes = ["ThreadHistory"]
 
 # Add a PI_ASSISTANT binding to the deployment's Assistant class before enabling replies.
+# Add PI_CREDENTIALS to that deployment's existing Credentials class for rootless /ai setup.
+# Both external bindings point to existing namespaces; do not create a new credential owner.

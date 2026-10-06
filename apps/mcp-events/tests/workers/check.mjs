@@ -170,7 +170,7 @@ try {
   const discovery = { method: 'extension.core.function.getFunctions', params: {}, context: {}, systemVersion: 'v1' };
   const functions = (await (await ingress(discovery)).json()).result;
   assert.equal(functions.success, true);
-  assert.deepEqual(functions.functions.map(item => item.name), ['extension.command.metadata.getCommands', 'commands.ai.open', 'commands.ai.bindThread', 'commands.ai.workflow', 'commands.ai.visit', 'commands.ai.execute', 'commands.ai.status', 'extension.hook.metadata.getHooks', 'hooks.teamChatMessageCreated']);
+  assert.deepEqual(functions.functions.map(item => item.name), ['extension.command.metadata.getCommands', 'commands.ai.open', 'commands.ai.start', 'commands.ai.bindThread', 'commands.ai.workflow', 'commands.ai.visit', 'commands.ai.execute', 'commands.ai.status', 'extension.hook.metadata.getHooks', 'hooks.teamChatMessageCreated']);
   const workflow = functions.functions.find(item => item.name === 'commands.ai.workflow');
   assert.deepEqual(workflow.inputSchema.properties.action.enum, ['catalog', 'prefill', 'prepare', 'send', 'status']);
   assert.deepEqual(workflow.inputSchema.required, ['targetCapability', 'action']);
