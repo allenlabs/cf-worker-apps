@@ -37,5 +37,11 @@ Focused checks: `npm run pi-mcp-check`, `npm run image-check`, `npm run codex-im
 - A hosted staff root received an automatic workflow reply. The committed transcript contained `activate_skill(announcement-review)`; the reply preserved unapproved/unpublished status while drafting the requested translation.
 - A signed App command in that same root committed real `search_visit_patients` and `get_visit_context` tool calls through the hosted Gateway. It returned 20 synthetic visit records. The backend bounds the returned list to 20; this is a returned-row count, not a complete lifetime visit count.
 - A separate synthetic printer thread produced a triage/handoff reply that distinguished accepted ownership from verified resolution and preserved unknown deadlines. No people were invited or real equipment modified.
-- Hosted Codex device-code issuance succeeded. User login and a real subscription image remain unverified; native OAuth/JWKS, replay, storage and UI checks use mocked outbound endpoints.
+- Hosted Codex device authentication and a real subscription image succeeded. The PNG was validated and stored in private R2 at its actual 1254×1254 dimensions, and the SSO asset view rendered it. A signed ordinary chat request also returned its expected text. Native OAuth/JWKS, replay and failure-path checks use mocked outbound endpoints.
 - Behavioral checks pass. Native coverage collection reports `Profiler is not enabled`; no numeric coverage result is claimed or threshold relaxed.
+
+### Channel image delivery
+
+`IMAGE_CHANNEL_DELIVERY_ENABLED` defaults to false. Test it only in the configured synthetic room and verify that Channel Talk retains its own file copy before routine use. A ready image from a signed image command or an admitted user's model tool request is attached to the same pinned root, with room broadcast disabled. Both paths reuse the private R2 original and the source operation ID.
+
+Delivery stores its claim before sending. Interrupted or ambiguous sends remain unknown and are never automatically repeated. The transfer endpoint accepts a random, expiring capability for one tenant-owned image; its token is hashed in storage and excluded from command receipts and UI. Confirmed copied-file receipts revoke the capability. The original R2 bucket has no public domain, and `/assets` retains the management SSO gate.

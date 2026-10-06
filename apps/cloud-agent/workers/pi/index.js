@@ -13,6 +13,7 @@ import { resolveManagers } from "./manager-directory.js";
 import { Type } from "typebox";
 import { installVisitMcpTools } from "./visit-mcp.js";
 import { installImageTool } from "./image-tool.js";
+import { deliverChannelImage, readImageTransfer } from "./channel-image.js";
 import { codexImageStart, codexImageCheck, codexImageAccess, codexImageStatus, codexImageDisconnect, codexImageRequest } from "./codex-images-auth.js";
 import { commandAllowed, sourceThreadKey, readSourceThread } from "./source-history.js";
 const NATIVE = "https://app-store-api.channel.io/general/v1/native/functions";
@@ -651,6 +652,20 @@ export class Assistant extends Agent {
     return readSourceThread(target, this.env, args);
   }
 
+  async deliverImage(image, sourceOperationId, target) {
+    if (this.env.IMAGE_CHANNEL_DELIVERY_ENABLED !== "true") return { status: "disabled" };
+    let access;
+    try { access = await this.env.Credentials.getByName("owner").channelAccess(); }
+    catch { return { status: "failed", code: "image_channel_auth_failed" }; }
+    return deliverChannelImage({ env: this.env, ledger: this.ctx.storage, actorId: this.ctx.id.toString(), target, sourceOperationId, image, access });
+  }
+
+  async imageTransfer(token, method) {
+    await this.tenantReady;
+    const response = await readImageTransfer({ env: this.env, ledger: this.ctx.storage, token, method });
+    return { status: response.status, headers: Object.fromEntries(response.headers), body: method === "HEAD" ? null : new Uint8Array(await response.arrayBuffer()) };
+  }
+
   commandRequest(input) {
     commandAllowed(input?.target, this.env);
     requireCondition(input.target.rootMessageId && typeof input.operationId === "string" && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(input.operationId) && ["help", "model", "thinking", "ask", "history", "image"].includes(input.action) && typeof input.args === "string" && encoder.encode(input.args).length <= 8000 && !input.args.includes("\0"), "command_operation_invalid");
@@ -740,6 +755,14 @@ export class Assistant extends Agent {
           } else result = { operationId, status: "done", message: await this.staffCommand({ action: request.action, args: request.args }, snapshot) };
           if (result.image?.status !== "ready") result.settings = await this.adminSettings();
         }
+        if (result.image?.status === "ready") {
+          result.delivery = await this.deliverImage(result.image, operationId, request.target);
+          if (result.delivery.status === "sent") result.message = "이미지를 이 스레드에 첨부했습니다.";
+          else if (result.delivery.status !== "disabled") {
+            result.status = result.delivery.status === "unknown" ? "uncertain" : "failed";
+            result.message = "이미지는 저장됐지만 채널톡 첨부를 확인하지 못했습니다. 같은 요청을 자동으로 다시 보내지 않습니다.";
+          }
+        }
       }
     } catch (error) {
       if (error?.retryable || /reset because its code was updated|this script has been upgraded|network connection lost|Internal error in Durable Object storage caused object to be reset/i.test(String(error?.message))) throw error;
@@ -805,6 +828,13 @@ export class Assistant extends Agent {
       if (result.status !== "done" || typeof result.text !== "string" || !result.text.trim()) { this.channelState(operationId, "generation_failed", result.error ?? "generation_unanswered"); return; }
       this.channelSql.exec("UPDATE channel_messages SET state = 'answered', answer = ?, error = NULL, updatedAt = ? WHERE operationId = ?", replyText(result.text), Date.now(), operationId);
       row = this.channelSql.exec("SELECT * FROM channel_messages WHERE operationId = ?", operationId).toArray()[0];
+    }
+    const image = await this.executeImage.resultFor({ tenantId: tenantId(this.env), sourceOperationId: operationId });
+    if (image?.status === "ready" && this.env.IMAGE_CHANNEL_DELIVERY_ENABLED === "true") {
+      const delivery = await this.deliverImage(image, operationId, { channelId: this.env.ALLOWED_CHANNEL_ID, groupId: this.env.ALLOWED_CHAT_ID, rootMessageId: event.rootMessageId });
+      if (delivery.status === "sent") this.channelSql.exec("UPDATE channel_messages SET state='sent',replyId=?,error=NULL,updatedAt=? WHERE operationId=?", delivery.replyId, Date.now(), operationId);
+      else this.channelState(operationId, delivery.status === "unknown" ? "delivery_unknown" : "delivery_failed", delivery.code ?? "image_channel_send_failed");
+      return;
     }
     let access;
     try { access = await this.env.Credentials.getByName("owner").channelAccess(); }
@@ -943,8 +973,18 @@ export class Assistant extends Agent {
 export default {
   async fetch(request, env) {
     let response;
-    try { response = await adminRoute(request, env); }
+    try {
+      const url = new URL(request.url), transfer = url.pathname.match(/^\/image-transfer\/([a-f0-9]{64})\/([a-f0-9]{64})$/);
+      if (url.pathname.startsWith("/image-transfer/")) {
+        if (!transfer || url.search || !["GET", "HEAD"].includes(request.method) || env.IMAGE_CHANNEL_DELIVERY_ENABLED !== "true") response = new Response(null, { status: 404 });
+        else {
+          const data = await env.Assistant.get(env.Assistant.idFromString(transfer[1])).imageTransfer(transfer[2], request.method);
+          response = new Response(data.body, { status: data.status, headers: data.headers });
+        }
+      } else response = await adminRoute(request, env);
+    }
     catch (error) {
+      if (new URL(request.url).pathname.startsWith("/image-transfer/")) return new Response(null, { status: 404, headers: { "Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff" } });
       const code = error?.name === "LoginError" && /^[a-z0-9_]{1,80}$/.test(error.message) ? error.message : "internal_error";
       response = Response.json({ error: code }, { status: 400 });
     }

@@ -15,6 +15,7 @@
     "CHANNEL_REPLY_ENABLED": "false",
     "VISIT_MCP_GROUP_ID": "",
     "IMAGE_ENABLED": "false",
+    "IMAGE_CHANNEL_DELIVERY_ENABLED": "false",
     "IMAGE_PROVIDER": "codex",
     "IMAGE_MODEL": "gpt-image-2",
     "PRODUCT_NAME": "Cloud Agent",
