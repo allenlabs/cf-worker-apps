@@ -20,7 +20,7 @@ export default {fetch:adminRoute};
 export class Credentials extends ManagementCredentials {
  async seal(value){const iv=crypto.getRandomValues(new Uint8Array(12)),key=await crypto.subtle.importKey('raw',Uint8Array.from(atob(this.env.TOKEN_WRAPPING_KEY),c=>c.charCodeAt(0)),{name:'AES-GCM'},false,['encrypt']);return {iv:[...iv],ciphertext:[...new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},key,new TextEncoder().encode(JSON.stringify(value))))]};}
  async open(value){const key=await crypto.subtle.importKey('raw',Uint8Array.from(atob(this.env.TOKEN_WRAPPING_KEY),c=>c.charCodeAt(0)),{name:'AES-GCM'},false,['decrypt']);return JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:new Uint8Array(value.iv)},key,new Uint8Array(value.ciphertext))));}
- async status(){return {connected:this.env.TEST_ACCOUNT_DISABLED!=="true",directUsageGranted:true};}
+ async status(){return {connected:this.env.TEST_ACCOUNT_DISABLED!=="true",directUsageGranted:true,inferenceReady:true};}
  async reportUsage(input){await this.ctx.storage.put("fixtureGithubUsage",input);return {recorded:true};}
 }
 `);

@@ -291,7 +291,7 @@ export class ManagementCredentials extends DurableObject {
     const existing = (await this.ctx.storage.get("threadIndex") || []).find(row => row.threadKey === identity.threadKey);
     const selection = !existing && identity.accountId === undefined ? await this.accountSelection() : null;
     // ponytail: account health across DOs is a snapshot; later disconnects fail on the pinned account instead of switching it.
-    const candidates = selection ? (await this.accounts()).filter(row => row.connected && row.directUsageGranted).map(row => row.id) : [];
+    const candidates = selection ? (await this.accounts()).filter(row => row.connected && row.inferenceReady).map(row => row.id) : [];
     return this.ctx.storage.transaction(async transaction => {
       const rows = await transaction.get("threadIndex") || [];
       const found = rows.find(row => row.threadKey === identity.threadKey);
@@ -348,7 +348,7 @@ export class ManagementCredentials extends DurableObject {
     if (action === "account.selection") {
       exactKeys(input, ["mode", "defaultAccountId", "poolAccountIds"]);
       requireValue(["fixed", "round_robin"].includes(input.mode) && accountId(input.defaultAccountId) && Array.isArray(input.poolAccountIds) && input.poolAccountIds.length <= 20 && input.poolAccountIds.every(accountId) && new Set(input.poolAccountIds).size === input.poolAccountIds.length, "account_selection_invalid");
-      const accounts = await this.accounts(), connected = accounts.filter(row => row.connected && row.directUsageGranted).map(row => row.id);
+      const accounts = await this.accounts(), connected = accounts.filter(row => row.connected && row.inferenceReady).map(row => row.id);
       requireValue(accounts.some(row => row.id === input.defaultAccountId) && input.poolAccountIds.every(id => accounts.some(row => row.id === id)), "account_not_found", 404);
       requireValue(input.poolAccountIds.every(id => connected.includes(id)) && (input.mode === "fixed" ? connected.includes(input.defaultAccountId) : input.poolAccountIds.length > 0), "account_not_connected", 409);
       const selection = { mode: input.mode, defaultAccountId: input.defaultAccountId, poolAccountIds: input.poolAccountIds };
@@ -374,11 +374,12 @@ export class ManagementCredentials extends DurableObject {
       const fields = action === "account.start" ? ["id", "planUsageConfirmed"] : action === "account.complete" ? ["id", "callbackUrl"] : action === "account.disconnect" ? ["id", "confirmed"] : ["id"];
       exactKeys(input, fields); requireValue(accountId(input.id) && (await this.accountInventory()).some(row => row.id === input.id), "account_not_found", 404);
       const credentials = input.id === "owner" ? this : this.env.Credentials.getByName(input.id); let result;
-      if (action === "account.start") { requireValue(input.planUsageConfirmed === true, "plan_usage_ui_unconfirmed"); result = await credentials.start(true); }
+      if (action === "account.start") { requireValue(input.planUsageConfirmed === true, "plan_usage_ui_unconfirmed"); result = await credentials.startCodex(); }
+      else if (action === "account.check") { result = await credentials.checkCodex(); }
       else if (action === "account.refresh") { result = await credentials.refreshStatus(); }
       else if (action === "account.complete") { string(input.callbackUrl, 16384, "callback_url_invalid"); result = await credentials.complete(input.callbackUrl); }
       else if (action === "account.disconnect") { requireValue(input.confirmed === true, "disconnect_confirmation_required"); result = await credentials.disconnect(); }
-      else if (action === "account.default") { const status = await credentials.status(); requireValue(status.connected && status.directUsageGranted, "account_not_connected", 409); const selection = { ...await this.accountSelection(), mode: "fixed", defaultAccountId: input.id }; await this.ctx.storage.transaction(async transaction => { await transaction.put({ defaultAccountId: input.id, accountSelection: selection, accountCursor: 0 }); }); result = { ...selection, appliesTo: "new_roots_only" }; }
+      else if (action === "account.default") { const status = await credentials.status(); requireValue(status.connected && status.inferenceReady, "account_not_connected", 409); const selection = { ...await this.accountSelection(), mode: "fixed", defaultAccountId: input.id }; await this.ctx.storage.transaction(async transaction => { await transaction.put({ defaultAccountId: input.id, accountSelection: selection, accountCursor: 0 }); }); result = { ...selection, appliesTo: "new_roots_only" }; }
       else throw new AdminError("action_not_found", 404);
       await this.audit(actor, action, input.id); return result;
     }
@@ -477,10 +478,10 @@ export async function adminRoute(request, env) {
       exactKeys(input, ["prompt", "operationId"]); requireValue(url.searchParams.get("thread") === "manual-test", "manual_thread_invalid");
       const prompt = string(input.prompt, 16384); requireValue(typeof input.operationId === "string" && /^manual-[A-Za-z0-9-]{1,128}$/.test(input.operationId), "operation_id_invalid");
       const selected = url.searchParams.get("account") || "owner"; requireValue(accountId(selected), "account_not_found", 404);
-      const account = (await owner.accounts()).find(row => row.id === selected); requireValue(account, "account_not_found", 404); requireValue(account.connected && account.directUsageGranted, "account_not_connected", 409);
+      const account = (await owner.accounts()).find(row => row.id === selected); requireValue(account, "account_not_found", 404); requireValue(account.connected && account.inferenceReady, "account_not_connected", 409);
       return response(await env.Assistant.getByName(selected === "owner" ? "manual-test" : `manual-${selected}`).manualAsk(prompt, input.operationId, selected));
     }
-    const actions = { "/api/images/start": "image.start", "/api/images/check": "image.check", "/api/images/disconnect": "image.disconnect", ...Object.fromEntries(["source", "disable", "stage", "preview", "publish", "ask"].map(action => [`/api/github/${action}`, `github.${action}`])), "/api/logout": "logout", "/api/accounts/create": "account.create", "/api/accounts/start": "account.start", "/api/accounts/complete": "account.complete", "/api/accounts/disconnect": "account.disconnect", "/api/accounts/default": "account.default", "/api/accounts/selection": "account.selection", "/api/accounts/refresh": "account.refresh", "/api/skills/validate": "skill.validate", "/api/skills/publish": "skill.publish", "/api/skills/toggle": "skill.toggle" };
+    const actions = { "/api/images/start": "image.start", "/api/images/check": "image.check", "/api/images/disconnect": "image.disconnect", ...Object.fromEntries(["source", "disable", "stage", "preview", "publish", "ask"].map(action => [`/api/github/${action}`, `github.${action}`])), "/api/logout": "logout", "/api/accounts/create": "account.create", "/api/accounts/start": "account.start", "/api/accounts/check": "account.check", "/api/accounts/complete": "account.complete", "/api/accounts/disconnect": "account.disconnect", "/api/accounts/default": "account.default", "/api/accounts/selection": "account.selection", "/api/accounts/refresh": "account.refresh", "/api/skills/validate": "skill.validate", "/api/skills/publish": "skill.publish", "/api/skills/toggle": "skill.toggle" };
     requireValue(actions[path], "route_not_found", 404);
     const result = await owner.adminMutation(actions[path], input, sessionToken, session.csrf);
     if (result.adminError) throw new AdminError(result.adminError, result.status);

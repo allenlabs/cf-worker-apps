@@ -1,7 +1,7 @@
 import { Agent } from "agents";
 import { PiHarness, skills } from "agents/harness/pi";
 import { createModels } from "@earendil-works/pi-ai/models";
-import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
+import { installSubscriptionModels, subscriptionModel } from "./subscription-models.js";
 import { fauxProvider, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { Harness, createRegistry } from "@earendil-works/pi-durable";
 import { ManagementCredentials, adminRoute, channelScope } from "./admin.js";
@@ -147,7 +147,10 @@ export class Credentials extends ManagementCredentials {
     return value;
   }
 
-  async verifyCodexImageIdentity(token, clientId, expectedEmailHash) { return identityFromToken(token, clientId, undefined, await this.ctx.storage.get("registration"), expectedEmailHash); }
+  async verifyCodexImageIdentity(token, clientId, expectedEmailHash, explicitPin) { return identityFromToken(token, clientId, undefined, explicitPin === undefined ? await this.ctx.storage.get("registration") : explicitPin, expectedEmailHash); }
+  startCodex() { requireCondition(!this.completing && !this.refreshing, "oauth_busy"); return codexImageStart(this, true); }
+  checkCodex() { return codexImageCheck(this, this.verifyCodexImageIdentity.bind(this)); }
+  codexAccess(forceRefresh = false) { return codexImageAccess(this, this.verifyCodexImageIdentity.bind(this), forceRefresh, true); }
   startCodexImages() { return codexImageStart(this); }
   checkCodexImages() { return codexImageCheck(this, this.verifyCodexImageIdentity.bind(this)); }
   codexImageAccess() { return codexImageAccess(this, this.verifyCodexImageIdentity.bind(this)); }
@@ -167,6 +170,7 @@ export class Credentials extends ManagementCredentials {
   async disconnect() {
     requireCondition(!this.completing && !this.refreshing, "oauth_busy");
     return this.ctx.blockConcurrencyWhile(async () => {
+      await codexImageDisconnect(this, true);
       await this.ctx.storage.delete(["credential", "pending"]);
       return this.status();
     });
@@ -294,14 +298,19 @@ export class Credentials extends ManagementCredentials {
     const registration = await this.ctx.storage.get("registration");
     const credential = await this.open(await this.ctx.storage.get("credential"));
     const identity = await this.open(await this.ctx.storage.get("identity"));
-    return { image: await codexImageStatus(this), label: (await this.ctx.storage.get("identityPolicy"))?.label ?? "Current connected account", connected: !!credential, loginPending: !!await this.ctx.storage.get("pending"), identityVerified: !!registration, planUsageConfirmed: registration?.planUsageConfirmed ?? registration?.personalProConfirmed ?? false, planClaim: identity ? identity.planType : registration?.plan ?? null, identity, usage: await this.ctx.storage.get("nativeUsageTotals") ?? null, subjectFingerprint: registration?.subjectHash?.slice(0, 12) ?? null, expiresAt: credential ? new Date(credential.expiresAt).toISOString() : null, directUsageGranted: credential?.scopes.includes("chatgpt.tokens.use.direct") ?? false, endpoint: `${RESOURCE}/responses`, automaticInference: this.env.CHANNEL_REPLY_ENABLED === "true" };
+    const image = await codexImageStatus(this), unified = image.unified;
+    const selectedIdentity = unified ? image.identity : identity;
+    const directUsageGranted = credential?.scopes.includes("chatgpt.tokens.use.direct") ?? false;
+    return { image, provider: unified ? "codex" : "siwc", inferenceReady: unified ? image.inferenceReady : (!!credential && directUsageGranted), capabilities: { inference: unified ? image.inferenceReady : (!!credential && directUsageGranted), images: image.connected && !image.reconnectRequired }, label: (await this.ctx.storage.get("identityPolicy"))?.label ?? "Current connected account", connected: unified || !!credential, loginPending: image.loginPending || !!await this.ctx.storage.get("pending"), legacyLoginPending: !!await this.ctx.storage.get("pending"), loginFailed: image.loginFailed, identityVerified: unified || !!registration, planUsageConfirmed: unified || (registration?.planUsageConfirmed ?? registration?.personalProConfirmed ?? false), planClaim: selectedIdentity ? selectedIdentity.planType : registration?.plan ?? null, identity: selectedIdentity, usage: await this.ctx.storage.get("nativeUsageTotals") ?? null, subjectFingerprint: unified ? await digest(selectedIdentity.accountId).then(value => value.slice(0, 12)) : registration?.subjectHash?.slice(0, 12) ?? null, expiresAt: unified ? image.expiresAt : credential ? new Date(credential.expiresAt).toISOString() : null, directUsageGranted, endpoint: unified ? "https://chatgpt.com/backend-api/codex/responses" : `${RESOURCE}/responses`, automaticInference: this.env.CHANNEL_REPLY_ENABLED === "true" };
   }
 
   async refreshStatus() {
-    const previous = await this.ctx.storage.get("identity");
-    await this.access(true);
-    const current = await this.ctx.storage.get("identity");
-    return { ...await this.status(), identityRefreshStatus: current && current.iv !== previous?.iv ? "updated" : "not_returned" };
+    const unified = (await codexImageStatus(this)).unified;
+    const key = unified ? "codexImageProfile" : "identity";
+    const previous = await this.open(await this.ctx.storage.get(key));
+    if (unified) await this.codexAccess(true); else await this.access(true);
+    const current = await this.open(await this.ctx.storage.get(key));
+    return { ...await this.status(), identityRefreshStatus: current && (unified ? current.metadata.verifiedAt !== previous?.metadata.verifiedAt : current.verifiedAt !== previous?.verifiedAt) ? "updated" : "not_returned" };
   }
 
   async reportUsage({ sourceId, usage }) {
@@ -364,9 +373,7 @@ export class Assistant extends Agent {
       models.setProvider(this.faux.provider);
       this.model = this.faux.getModel();
     } else {
-      const provider = openaiProvider();
-      provider.auth = { apiKey: { name: "Verified ChatGPT subscription bearer", resolve: async () => ({ auth: { apiKey: await env.Credentials.getByName(this.runtime().accountId).access() }, source: "ChatGPT subscription" }) } };
-      models.setProvider(provider);
+      installSubscriptionModels(models, () => env.Credentials.getByName(this.runtime().accountId));
       this.model = models.getModel("openai", env.OPENAI_MODEL);
       if (!this.model) throw new Error("Requested OpenAI model is absent from Pi catalog");
     }
@@ -456,11 +463,13 @@ export class Assistant extends Agent {
     return conversation;
   }
 
-  async operationSnapshot() {
+  async operationSnapshot(pinnedModel) {
     const runtime = this.runtime();
     const control = await this.env.Credentials.getByName("owner").controlSnapshot();
     const agent = await (await this.conversation(runtime.sessionId)).agent(this.piContext);
-    return { accountId: runtime.accountId, sessionId: runtime.sessionId, model: { provider: agent.model?.provider ?? this.model.provider, id: agent.model?.modelId ?? this.model.id }, thinkingLevel: agent.thinkingLevel, manifestVersion: control.manifest.version };
+    const id = pinnedModel?.id ?? agent.model?.modelId ?? this.model.id;
+    const model = pinnedModel ?? (this.faux ? { provider: this.model.provider, id } : await subscriptionModel(this.models, this.env.Credentials.getByName(runtime.accountId), id));
+    return { accountId: runtime.accountId, sessionId: runtime.sessionId, model, thinkingLevel: agent.thinkingLevel, manifestVersion: control.manifest.version };
   }
 
   async prepareSnapshot(snapshot) {
@@ -468,6 +477,8 @@ export class Assistant extends Agent {
     const manifest = await this.env.Credentials.getByName("owner").skillManifest(snapshot.manifestVersion);
     requireCondition(manifest && manifest.version === snapshot.manifestVersion && Array.isArray(manifest.skills), "skill_revision_unavailable");
     this.registry.install(await skills([skillSource(manifest)]));
+    requireCondition(this.faux || ["openai", "openai-codex"].includes(snapshot.model.provider), "subscription_provider_invalid");
+    requireCondition(this.models.getModel(snapshot.model.provider, snapshot.model.id), "subscription_model_unavailable");
     await this.harness.session(snapshot.sessionId).setModel(snapshot.model);
     await (await this.conversation(snapshot.sessionId)).configure({ thinkingLevel: snapshot.thinkingLevel }, this.piContext);
     return manifest;
@@ -529,7 +540,28 @@ export class Assistant extends Agent {
     if (!current) this.saveRuntime({ accountId, sessionId: "1", names: {} });
     await this.harness.pi();
     await updateConversation(this.env, this.conversationKey(), this.conversationMetadata());
-    return this.ask(prompt, operationId);
+    requireCondition(typeof operationId === "string" && /^[A-Za-z0-9._:-]{1,135}$/.test(operationId), "manual_operation_invalid");
+    const key = `manualOperation:${operationId}`, requestHash = await digest(JSON.stringify([accountId, prompt]));
+    let admission = await this.ctx.storage.get(key);
+    if (!admission) {
+      const existing = await this.conversationStore.submissionByRequest(Number(this.runtime().sessionId), operationId, this.piContext);
+      let previousModel;
+      if (existing) {
+        const answer = existing.answer === undefined ? null : await this.conversationStore.entry(existing.answer, this.piContext);
+        const captured = answer?.model?.find(message => message.role === "assistant");
+        // ponytail: pre-migration unfinished submissions lack a model snapshot; retain their sole supported SIWC provider and current model ID.
+        previousModel = { provider: captured?.provider ?? "openai", id: captured?.model ?? (await (await this.conversation(this.runtime().sessionId)).agent(this.piContext)).model?.modelId ?? this.env.OPENAI_MODEL };
+      }
+      const snapshot = await this.operationSnapshot(previousModel);
+      admission = await this.ctx.storage.transaction(async storage => {
+        const previous = await storage.get(key);
+        if (previous) return previous;
+        const pinned = { requestHash, snapshot };
+        await storage.put(key, pinned); return pinned;
+      });
+    }
+    requireCondition(admission.requestHash === requestHash, "manual_operation_conflict");
+    return this.ask(prompt, operationId, admission.snapshot);
   }
 
   async acceptChannel(event) {
@@ -748,16 +780,16 @@ export class Assistant extends Agent {
     return `세션·계정·스킬 등 다른 설정은 관리자 페이지에서 변경할 수 있습니다.\n${this.env.PUBLIC_ORIGIN || ""}\n직원 명령: /ai 모델 · /ai 생각 · /ai 도움말`;
   }
 
-  allowedModels() {
+  allowedModels(provider = "openai") {
     const preferred = [{ id: "gpt-6-luna", alias: "빠르게", label: "빠르게 (GPT-6 Luna)" }, { id: "gpt-6.1-sol", alias: "기본", label: "기본 (GPT-6.1 Sol)" }, { id: "gpt-6-astra", alias: "깊게", label: "깊게 (GPT-6 Astra)" }];
     const ids = this.env.ALLOWED_OPENAI_MODELS ? JSON.parse(this.env.ALLOWED_OPENAI_MODELS) : [this.env.OPENAI_MODEL];
     requireCondition(Array.isArray(ids) && ids.every(id => typeof id === "string"), "model_config_invalid");
     if (this.faux) return [{ model: this.model, id: this.model.id, alias: "기본", label: "기본 (Probe)" }];
-    return [...preferred.filter(item => ids.includes(item.id)), ...ids.filter(id => !preferred.some(item => item.id === id)).map(id => ({ id, label: id }))].map(item => ({ ...item, model: this.models.getModel("openai", item.id) })).filter(item => item.model);
+    return [...preferred.filter(item => ids.includes(item.id)), ...ids.filter(id => !preferred.some(item => item.id === id)).map(id => ({ id, label: id }))].map(item => ({ ...item, model: this.models.getModel(provider, item.id) })).filter(item => item.model);
   }
 
-  selectedModel(args) {
-    const choices = this.allowedModels();
+  selectedModel(args, provider) {
+    const choices = this.allowedModels(provider);
     const selected = choices.find((item, index) => args === String(index + 1) || args === item.alias || args === item.id || args === `${item.model.provider}/${item.id}` || args === item.label);
     requireCondition(selected, "model_not_permitted");
     return selected;
@@ -771,7 +803,7 @@ export class Assistant extends Agent {
 
   async changeSettings(action, args, snapshot) {
     if (action === "model") {
-      const selected = this.selectedModel(args);
+      const selected = this.selectedModel(args, snapshot.model.provider);
       await this.harness.session(snapshot.sessionId).setModel(selected.model);
       return `이 대화의 모델을 ${selected.label}로 변경했습니다.`;
     }
@@ -781,9 +813,9 @@ export class Assistant extends Agent {
   }
 
   async staffCommand(command, snapshot) {
-    if (command.action === "help") return `모델 확인: /ai 모델\n모델 변경: ${this.allowedModels().map((item, index) => `/ai 모델 ${index + 1} (${item.label})`).join(" · ")}\n생각 수준 변경: /ai 생각 낮음 · /ai 생각 보통 · /ai 생각 높음\n다른 설정은 관리자 페이지를 이용해 주세요.\n${this.env.PUBLIC_ORIGIN || ""}`;
+    if (command.action === "help") return `모델 확인: /ai 모델\n모델 변경: ${this.allowedModels(snapshot.model.provider).map((item, index) => `/ai 모델 ${index + 1} (${item.label})`).join(" · ")}\n생각 수준 변경: /ai 생각 낮음 · /ai 생각 보통 · /ai 생각 높음\n다른 설정은 관리자 페이지를 이용해 주세요.\n${this.env.PUBLIC_ORIGIN || ""}`;
     if (command.args) return this.changeSettings(command.action, command.args, snapshot);
-    if (command.action === "model") return `현재 모델: ${this.allowedModels().find(item => item.id === snapshot.model.id)?.label ?? snapshot.model.id}\n${this.allowedModels().map((item, index) => `${index + 1}. ${item.label} → /ai 모델 ${item.alias ?? index + 1}`).join("\n")}`;
+    if (command.action === "model") return `현재 모델: ${this.allowedModels(snapshot.model.provider).find(item => item.id === snapshot.model.id)?.label ?? snapshot.model.id}\n${this.allowedModels(snapshot.model.provider).map((item, index) => `${index + 1}. ${item.label} → /ai 모델 ${item.alias ?? index + 1}`).join("\n")}`;
     return `현재 생각 수준: ${thinkingChoices.find(item => item.value === snapshot.thinkingLevel)?.label ?? snapshot.thinkingLevel}\n낮음: 간단한 질문 · 보통: 일반적인 질문 · 높음: 복잡한 질문\n변경 예: /ai 생각 보통`;
   }
 
@@ -791,9 +823,11 @@ export class Assistant extends Agent {
     await this.lifecycle.start();
     const runtime = this.runtime();
     const agent = await (await this.conversation(runtime.sessionId)).agent(this.piContext);
+    const account = await this.env.Credentials.getByName(runtime.accountId).status();
+    const choices = this.allowedModels(account.provider === "codex" ? "openai-codex" : "openai");
     const sessions = await this.harness.sessions.list();
     const entries = await this.harness.session(runtime.sessionId).messages();
-    return { selected: { accountId: runtime.accountId, sessionId: runtime.sessionId, name: runtime.names[runtime.sessionId] ?? "" }, model: { id: agent.model?.modelId, label: this.allowedModels().find(item => item.id === agent.model?.modelId)?.label ?? agent.model?.modelId }, models: this.allowedModels().map(({ id, label }) => ({ id, label })), thinking: { value: agent.thinkingLevel, label: thinkingChoices.find(item => item.value === agent.thinkingLevel)?.label ?? agent.thinkingLevel }, thinkingChoices, sessions: sessions.map(item => ({ id: item.id, parent: item.parent, busy: item.busy, name: runtime.names[item.id] ?? "" })), userEntries: entries.filter(entry => entry.kind === "pi.user").slice(-50).map(entry => ({ id: entry.id, preview: entry.model.map(message => typeof message.content === "string" ? message.content : message.content.filter(block => block.type === "text").map(block => block.text).join(" ")).join(" ") })).map(entry => ({ ...entry, preview: (this.conversationMetadata().kind === "channel" && entry.preview.startsWith(staffPrompt(this.env, "")) ? entry.preview.slice(staffPrompt(this.env, "").length) : entry.preview).slice(0, 160) })) };
+    return { selected: { accountId: runtime.accountId, sessionId: runtime.sessionId, name: runtime.names[runtime.sessionId] ?? "" }, model: { id: agent.model?.modelId, label: choices.find(item => item.id === agent.model?.modelId)?.label ?? agent.model?.modelId }, models: choices.map(({ id, label }) => ({ id, label })), thinking: { value: agent.thinkingLevel, label: thinkingChoices.find(item => item.value === agent.thinkingLevel)?.label ?? agent.thinkingLevel }, thinkingChoices, sessions: sessions.map(item => ({ id: item.id, parent: item.parent, busy: item.busy, name: runtime.names[item.id] ?? "" })), userEntries: entries.filter(entry => entry.kind === "pi.user").slice(-50).map(entry => ({ id: entry.id, preview: entry.model.map(message => typeof message.content === "string" ? message.content : message.content.filter(block => block.type === "text").map(block => block.text).join(" ")).join(" ") })).map(entry => ({ ...entry, preview: (this.conversationMetadata().kind === "channel" && entry.preview.startsWith(staffPrompt(this.env, "")) ? entry.preview.slice(staffPrompt(this.env, "").length) : entry.preview).slice(0, 160) })) };
   }
 
   async adminControl({ operationId, action, args }) {
@@ -818,7 +852,7 @@ export class Assistant extends Agent {
         const snapshot = await this.operationSnapshot();
         const runtime = this.runtime();
         if (["new", "clone", "reload"].includes(action)) requireCondition(!args, "command_argument_invalid");
-        if (action === "model") this.selectedModel(args);
+        if (action === "model") this.selectedModel(args, snapshot.model.provider);
         if (action === "thinking") this.selectedThinking(args);
         if (action === "name") requireCondition(args.trim() && encoder.encode(args).length <= 128 && !/[\x00-\x1f]/.test(args), "session_name_invalid");
         if (action === "resume") requireCondition((await this.harness.sessions.list()).some(item => item.id === args), "session_unknown");

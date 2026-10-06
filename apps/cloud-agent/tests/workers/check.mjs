@@ -85,7 +85,7 @@ export class Assistant extends BaseAssistant {
   }
 }
 export class Credentials extends BaseCredentials {
-  async status() {return {...await super.status(), connected:true, directUsageGranted:true};}
+  async status() {return {...await super.status(), connected:true, directUsageGranted:true,inferenceReady:true};}
   async controlSnapshot() { return await this.ctx.storage.get('fixtureControl') ?? super.controlSnapshot(); }
   async skillManifest(version) { return await this.ctx.storage.get('fixtureManifest:'+version) ?? super.skillManifest(version); }
   async channelAccess() {

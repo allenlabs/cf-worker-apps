@@ -103,7 +103,7 @@ try {
   assert(!JSON.stringify([...o.data]).includes("fixture-access"));
   assert(!JSON.stringify(await codexImageStatus(o)).includes("fixture-refresh"));
   assert(!JSON.stringify(await codexImageStatus(o)).includes("clientId"));
-  assert(o.touched.every(key => key.startsWith("codexImage") || key === "registration"));
+  assert(o.touched.every(key => key.startsWith("codexImage") || key === "registration" || key === "codexRegistration"));
   assert.deepEqual(o.data.get("credential"), { fixture: "untouched-siwc" });
 
   const restarted = owner(o.data);

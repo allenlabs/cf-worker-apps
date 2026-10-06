@@ -1,7 +1,7 @@
 const ISSUER = "https://auth.openai.com";
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const IMAGE_ENDPOINT = "https://chatgpt.com/backend-api/codex/images/generations";
-const PENDING = "codexImagePending", PROFILE = "codexImageProfile";
+const PENDING = "codexImagePending", PROFILE = "codexImageProfile", REGISTRATION = "codexRegistration";
 const MAX_RESPONSE = 24 * 1024 * 1024;
 const encoder = new TextEncoder();
 const active = new WeakMap();
@@ -69,33 +69,52 @@ function tokenFields(token, previous) {
   return { access: token.access_token, refresh, expiresAt };
 }
 
-async function identity(owner, verifyIdentity, idToken, clientId, pinned) {
+async function identity(owner, verifyIdentity, idToken, clientId, pinned, registrationPin) {
   check(text(idToken), "codex_image_id_token_missing");
-  const verified = await verifyIdentity(idToken, clientId, await owner.expectedEmailHash());
+  const verified = await verifyIdentity(idToken, clientId, await owner.expectedEmailHash(), registrationPin);
   check(verified && text(verified.subjectHash, 256) && text(verified.accountHash, 256) && text(verified.metadata?.accountId, 256) && text(verified.metadata?.email, 320), "codex_image_identity_invalid");
   check(text(verified.metadata.planType, 64) && verified.metadata.planType.toLowerCase() !== "free", "codex_image_subscription_required");
   check(!pinned || (pinned.subjectHash === verified.subjectHash && pinned.accountHash === verified.accountHash && pinned.metadata.accountId === verified.metadata.accountId), "codex_image_identity_mismatch");
   return verified;
 }
 
-async function checkRegistration(owner, profile) {
+const registrationIdentity = value => value ? { clientId: value.clientId ?? null, subjectHash: value.subjectHash ?? null, accountHash: value.accountHash ?? null } : null;
+const registrationFingerprint = value => JSON.stringify(registrationIdentity(value));
+async function checkRegistration(owner, profile, requireCodexPin = true) {
   const pinned = await owner.ctx.storage.get("registration");
-  check((!pinned?.subjectHash || pinned.subjectHash === profile.subjectHash) && (!pinned?.accountHash || pinned.accountHash === profile.accountHash), "codex_image_identity_mismatch");
+  if (profile.unified) {
+    const codexPin = await read(owner, REGISTRATION);
+    check(!requireCodexPin || codexPin, "codex_registration_missing");
+    check(!codexPin || (codexPin.issuer === ISSUER && codexPin.clientId === profile.clientId && codexPin.expectedEmailHash === profile.expectedEmailHash && codexPin.subjectHash === profile.subjectHash && codexPin.accountHash === profile.accountHash && codexPin.metadata.accountId === profile.metadata.accountId), "codex_image_identity_mismatch");
+    check(profile.migration?.intent === "admin_unified_connection" && profile.migration.registrationFingerprint === registrationFingerprint(pinned), "codex_image_identity_policy_changed");
+    check(!pinned?.accountHash || pinned.accountHash === profile.accountHash, "codex_image_identity_mismatch");
+    check(pinned?.clientId !== profile.clientId || !pinned.subjectHash || pinned.subjectHash === profile.subjectHash, "codex_image_identity_mismatch");
+  } else check((!pinned?.subjectHash || pinned.subjectHash === profile.subjectHash) && (!pinned?.accountHash || pinned.accountHash === profile.accountHash), "codex_image_identity_mismatch");
+}
+function checkAccessAccount(profile) {
+  let claims;
+  try { const parts = profile.access.split("."); check(parts.length === 3, "codex_access_account_invalid"); claims = JSON.parse(atob(parts[1].replaceAll("-", "+").replaceAll("_", "/"))); } catch { throw new Error("codex_access_account_invalid"); }
+  check(claims?.["https://api.openai.com/auth"]?.chatgpt_account_id === profile.metadata.accountId, "codex_access_account_mismatch");
 }
 
-export function codexImageStart(owner) {
+export function codexImageStart(owner, unified = false) {
   return exclusive(owner, "start", async () => {
     const expectedEmailHash = await owner.expectedEmailHash();
-    const previous = await read(owner, PROFILE);
-    const clientId = previous?.clientId ?? owner.env.CODEX_IMAGE_CLIENT_ID ?? CLIENT_ID;
+    const previous = await read(owner, PROFILE), codexPin = await read(owner, REGISTRATION);
+    check(unified || (!previous?.unified && !codexPin), "codex_unified_connection_required");
+    const clientId = codexPin?.clientId ?? previous?.clientId ?? owner.env.CODEX_IMAGE_CLIENT_ID ?? CLIENT_ID;
     check(text(clientId, 255) && /^[A-Za-z0-9._:-]+$/.test(clientId), "codex_image_client_invalid");
+    const registration = await owner.ctx.storage.get("registration");
+    const migration = unified ? { intent: "admin_unified_connection", registrationFingerprint: registrationFingerprint(registration), registration: registrationIdentity(registration) } : undefined;
     const response = await request(`${ISSUER}/api/accounts/deviceauth/usercode`, { client_id: clientId });
     check(response.ok, `codex_image_oauth_http_${response.status}`);
     const result = await json(response);
     const userCode = result.user_code ?? result.usercode;
     const interval = Number(result.interval);
     check(text(result.device_auth_id, 4096) && text(userCode, 128) && Number.isSafeInteger(interval) && interval >= 1 && interval <= 300, "codex_image_device_response_invalid");
-    const pending = { type: "codex_image_v1", attemptId: crypto.randomUUID(), phase: "pending", clientId, expectedEmailHash, deviceAuthId: result.device_auth_id, userCode, interval, expiresAt: Date.now() + 900000, nextAt: Date.now() + interval * 1000 };
+    check(expectedEmailHash === await owner.expectedEmailHash(), "codex_image_identity_policy_changed");
+    if (unified) check(migration.registrationFingerprint === registrationFingerprint(await owner.ctx.storage.get("registration")), "codex_image_identity_policy_changed");
+    const pending = { unified, migration, type: "codex_image_v1", attemptId: crypto.randomUUID(), phase: "pending", clientId, expectedEmailHash, deviceAuthId: result.device_auth_id, userCode, interval, expiresAt: Date.now() + 900000, nextAt: Date.now() + interval * 1000 };
     await write(owner, PENDING, pending);
     return { verificationUrl: `${ISSUER}/codex/device`, userCode, expiresAt: new Date(pending.expiresAt).toISOString(), nextCheckAt: new Date(pending.nextAt).toISOString() };
   });
@@ -109,6 +128,7 @@ export function codexImageCheck(owner, verifyIdentity) {
     check(pending.phase === "pending", "codex_image_attempt_failed_restart_login");
     if (pending.expiresAt <= Date.now()) { await owner.ctx.storage.delete(PENDING); throw new Error("codex_image_attempt_expired"); }
     check(pending.expectedEmailHash === await owner.expectedEmailHash(), "codex_image_identity_policy_changed");
+    if (pending.unified) check(pending.migration?.intent === "admin_unified_connection" && pending.migration.registrationFingerprint === registrationFingerprint(await owner.ctx.storage.get("registration")), "codex_image_identity_policy_changed");
     if (pending.nextAt > Date.now()) return { pending: true, nextCheckAt: new Date(pending.nextAt).toISOString() };
     // Persist before polling too: a lost successful poll must not replay a consumed code.
     await write(owner, PENDING, { ...pending, phase: "checking" });
@@ -129,9 +149,25 @@ export function codexImageCheck(owner, verifyIdentity) {
       check(exchange.ok, `codex_image_oauth_http_${exchange.status}`);
       const token = await json(exchange);
       const credential = tokenFields(token);
-      const verified = await identity(owner, verifyIdentity, token.id_token, pending.clientId, await read(owner, PROFILE));
-      await write(owner, PROFILE, { type: "codex_image_v1", attemptId: pending.attemptId, clientId: pending.clientId, expectedEmailHash: pending.expectedEmailHash, ...credential, ...verified });
-      await owner.ctx.storage.delete(PENDING);
+      const previous = await read(owner, PROFILE);
+      const legacy = pending.migration?.registration;
+      const registrationPin = pending.unified ? { ...(legacy?.accountHash ? { accountHash: legacy.accountHash } : {}), ...(legacy?.clientId === pending.clientId && legacy.subjectHash ? { subjectHash: legacy.subjectHash } : {}) } : undefined;
+      const verified = await identity(owner, verifyIdentity, token.id_token, pending.clientId, await read(owner, REGISTRATION) ?? (previous?.clientId === pending.clientId ? previous : null), registrationPin);
+      const profile = { type: "codex_image_v1", unified: pending.unified === true, migration: pending.migration, attemptId: pending.attemptId, clientId: pending.clientId, expectedEmailHash: pending.expectedEmailHash, ...credential, ...verified };
+      await checkRegistration(owner, profile, false);
+      if (profile.unified) checkAccessAccount(profile);
+      check(pending.expectedEmailHash === await owner.expectedEmailHash(), "codex_image_identity_policy_changed");
+      if (profile.unified) {
+        const pin = { type: "codex_registration_v1", issuer: ISSUER, clientId: profile.clientId, expectedEmailHash: profile.expectedEmailHash, subjectHash: profile.subjectHash, accountHash: profile.accountHash, metadata: { accountId: profile.metadata.accountId } };
+        const sealedProfile = await owner.seal(profile), sealedPin = await owner.seal(pin);
+        await owner.ctx.storage.transaction(async storage => {
+          check(pending.migration.registrationFingerprint === registrationFingerprint(await storage.get("registration")), "codex_image_identity_policy_changed");
+          check(pending.expectedEmailHash === ((await storage.get("identityPolicy"))?.expectedEmailHash ?? owner.env.OWNER_EMAIL_SHA256), "codex_image_identity_policy_changed");
+          const existingPin = await owner.open(await storage.get(REGISTRATION));
+          check(!existingPin || JSON.stringify(existingPin) === JSON.stringify(pin), "codex_image_identity_mismatch");
+          await storage.put(PROFILE, sealedProfile); await storage.put(REGISTRATION, sealedPin); await storage.delete(PENDING);
+        });
+      } else { await write(owner, PROFILE, profile); await owner.ctx.storage.delete(PENDING); }
       return codexImageStatus(owner);
     } catch (error) {
       await write(owner, PENDING, { type: pending.type, attemptId: pending.attemptId, phase: "failed", expiresAt: pending.expiresAt });
@@ -142,33 +178,39 @@ export function codexImageCheck(owner, verifyIdentity) {
 
 export async function codexImageStatus(owner) {
   const profile = await read(owner, PROFILE), pending = await read(owner, PENDING);
-  return { provider: "codex", connected: profile?.type === "codex_image_v1", identity: profile?.metadata ?? null, expiresAt: profile ? new Date(profile.expiresAt).toISOString() : null, loginPending: pending?.phase === "pending" && pending.expiresAt > Date.now(), loginFailed: !!pending && pending.phase !== "pending", nextCheckAt: pending?.phase === "pending" ? new Date(pending.nextAt).toISOString() : null };
+  let valid = !profile?.refreshFailed;
+  if (profile?.unified) { try { await checkRegistration(owner, profile); checkAccessAccount(profile); check(profile.expectedEmailHash === await owner.expectedEmailHash(), "codex_image_identity_policy_changed"); } catch { valid = false; } }
+  return { provider: "codex", unified: profile?.unified === true, inferenceReady: profile?.unified === true && valid, reconnectRequired: !!profile && !valid, connected: profile?.type === "codex_image_v1", identity: profile?.metadata ?? null, expiresAt: profile ? new Date(profile.expiresAt).toISOString() : null, loginPending: pending?.phase === "pending" && pending.expiresAt > Date.now(), loginFailed: !!pending && pending.phase !== "pending", nextCheckAt: pending?.phase === "pending" ? new Date(pending.nextAt).toISOString() : null };
 }
 
-export function codexImageAccess(owner, verifyIdentity) {
+export function codexImageAccess(owner, verifyIdentity, forceRefresh = false, inference = false) {
   return exclusive(owner, "access", async () => {
     const profile = await read(owner, PROFILE);
     check(profile?.type === "codex_image_v1", "codex_image_login_required");
+
     check(profile.expectedEmailHash === await owner.expectedEmailHash(), "codex_image_identity_policy_changed");
     await checkRegistration(owner, profile);
-    if (profile.expiresAt - Date.now() > 60000) return { kind: "codex_image_v1", clientId: profile.clientId, access: profile.access, accountId: profile.metadata.accountId };
+    if (profile.unified) checkAccessAccount(profile);
     check(!profile.refreshFailed, "codex_image_refresh_failed_restart_login");
+    if (!forceRefresh && profile.expiresAt - Date.now() > 60000) return { kind: "codex_image_v1", clientId: profile.clientId, access: profile.access, accountId: profile.metadata.accountId, unified: profile.unified === true };
     // A refresh token may rotate; a crashed exchange requires a new login instead of replay.
     await write(owner, PROFILE, { ...profile, refreshFailed: true });
     const response = await request(`${ISSUER}/oauth/token`, { grant_type: "refresh_token", client_id: profile.clientId, refresh_token: profile.refresh });
     check(response.ok, `codex_image_oauth_http_${response.status}`);
     const token = await json(response);
     const credential = tokenFields(token, profile);
-    const verified = token.id_token === undefined ? profile : await identity(owner, verifyIdentity, token.id_token, profile.clientId, profile);
+    const verified = token.id_token === undefined ? profile : await identity(owner, verifyIdentity, token.id_token, profile.clientId, profile, profile.unified ? {} : undefined);
     const renewed = { ...profile, ...credential, subjectHash: verified.subjectHash, accountHash: verified.accountHash, metadata: verified.metadata, refreshFailed: false };
     await checkRegistration(owner, renewed);
+    if (renewed.unified) checkAccessAccount(renewed);
     await write(owner, PROFILE, renewed);
-    return { kind: "codex_image_v1", clientId: renewed.clientId, access: renewed.access, accountId: renewed.metadata.accountId };
-  });
+    return { kind: "codex_image_v1", clientId: renewed.clientId, access: renewed.access, accountId: renewed.metadata.accountId, unified: renewed.unified === true };
+  }).then(profile => { check(!inference || profile.unified, "codex_unified_login_required"); return profile; });
 }
 
-export function codexImageDisconnect(owner) {
+export function codexImageDisconnect(owner, all = false) {
   return exclusive(owner, "disconnect", async () => {
+    check(all || (!(await read(owner, PROFILE))?.unified && !await read(owner, REGISTRATION)), "codex_unified_disconnect_requires_account_action");
     await owner.ctx.storage.delete([PENDING, PROFILE]);
     return codexImageStatus(owner);
   });

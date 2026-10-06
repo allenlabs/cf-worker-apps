@@ -170,7 +170,7 @@ export async function githubSources(owner, principal) {
 export async function githubRegister(owner, principal, input) {
   fields(input, ["repositoryId", "branch", "prefix", "accountId"]);
   insist(accountId(input.accountId), "github_account_invalid");
-  const selected = (await owner.accounts()).find(row => row.id === input.accountId); insist(selected?.connected && selected.directUsageGranted, "github_account_unavailable", 409);
+  const selected = (await owner.accounts()).find(row => row.id === input.accountId); insist(selected?.connected && selected.inferenceReady, "github_account_unavailable", 409);
   const source = await owner.githubBroker().source(input.repositoryId, input.branch, input.prefix), actor = await githubPrincipal(principal);
   const rows = await owner.ctx.storage.get("githubSources") || []; insist(rows.length < 100, "github_source_limit", 409);
   const stored = { ...source, id: crypto.randomUUID(), actor, accountId: input.accountId, generation: 1, enabled: true, createdAt: new Date().toISOString() };
@@ -183,7 +183,7 @@ export async function githubAuthorize(owner, context) {
   // Stored issuer/subject must still be in the current SSO policy, even during a model tool call.
   let admins, pins; try { admins = JSON.parse(owner.env.SUPER_ADMIN_EMAILS || "[]"); pins = JSON.parse(owner.env.SUPER_ADMIN_SUBJECTS || "{}"); } catch { throw new GitHubError("github_principal_revoked", 403); }
   insist(context.issuer === owner.env.SSO_ISSUER && admins.includes(context.email) && (!Object.keys(pins).length || pins[context.email] === context.subject) && await githubPrincipal({ ...context, role: "super_admin" }) === context.actor, "github_principal_revoked", 403);
-  const selected = (await owner.accounts()).find(row => row.id === source.accountId); insist(selected?.connected && selected.directUsageGranted, "github_account_unavailable", 409);
+  const selected = (await owner.accounts()).find(row => row.id === source.accountId); insist(selected?.connected && selected.inferenceReady, "github_account_unavailable", 409);
   return source;
 }
 export async function githubContext(owner, principal, sourceId) {
