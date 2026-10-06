@@ -28,6 +28,23 @@ export function visitTarget(value) {
   return { channelId: value.channelId, groupId: value.groupId, rootMessageId: value.rootMessageId, managerId: value.managerId };
 }
 
+export function visitIdentity(value) {
+  requireValue(keys(value, ["subjectId", "siteId"]) && typeof value.subjectId === "string" && /^[A-Za-z0-9_:-]{1,255}$/.test(value.subjectId) && typeof value.siteId === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value.siteId), "visit_identity_invalid");
+  return { subjectId: value.subjectId, siteId: value.siteId };
+}
+
+export function visitGatewayActor(value) {
+  requireValue(object(value));
+  if (value.kind === "channel") {
+    requireValue(keys(value, ["kind", "target"]));
+    return { kind: "channel", target: visitTarget(value.target) };
+  }
+  requireValue(value.kind === "mcp" && keys(value, ["kind", "identity"]));
+  return { kind: "mcp", identity: visitIdentity(value.identity) };
+}
+
+export const visitErrors = Object.freeze(["visit_input_invalid", "visit_target_invalid", "visit_identity_invalid", "visit_selection_required", "visit_not_configured", "visit_record_denied", "visit_not_found_for_patient", "visit_backend_unavailable", "visit_response_invalid", "visit_response_too_large"]);
+
 export async function visitJson(message, limit = 65536) {
   const reader = message.body?.getReader();
   requireValue(reader, "visit_response_invalid");
@@ -60,6 +77,10 @@ function unique(values) { backendValue(new Set(values.map(value => value.id)).si
 
 export function visitResult(value, input) {
   backendValue(object(value) && ["test", "live"].includes(value.mode));
+  if (input.action === "draft") {
+    backendValue(value.kind === "draft" && object(value.draft) && text(value.draft.text, 4000) && Array.isArray(value.draft.missingFields) && value.draft.missingFields.length <= 4 && new Set(value.draft.missingFields).size === value.draft.missingFields.length && value.draft.missingFields.every(field => ["concernArea", "revision", "schedulingExceptions", "externalNameChecked"].includes(field)) && typeof value.draft.ready === "boolean" && value.draft.ready === (value.draft.missingFields.length === 0) && date(value.observedAt) && value.observedAt.includes("T"));
+    return { mode: value.mode, kind: "draft", draft: { text: value.draft.text, missingFields: value.draft.missingFields, ready: value.draft.ready }, observedAt: value.observedAt };
+  }
   if (input.action === "patientSearch") {
     backendValue(value.kind === "patients" && Array.isArray(value.patients) && value.patients.length <= 20);
     const patients = value.patients.map(patient); unique(patients);

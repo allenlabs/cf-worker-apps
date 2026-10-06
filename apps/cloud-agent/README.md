@@ -17,13 +17,15 @@ npm run -w @cf-worker-apps/cloud-agent test
 node apps/cloud-agent/skills/pstack/check.mjs --implementation-root apps/cloud-agent
 ```
 
-`test` builds the Pi worker and the sibling MCP Events worker, then runs the real-workerd integration, OAuth, management and GitHub authoring checks with generated credentials and mocked outbound services. No production account or API token is required. `typecheck` checks JavaScript syntax; it is not static type checking. Build files and local runtime state are ignored.
+`test` builds the Pi worker and the sibling MCP Events worker, then runs the real-workerd integration, OAuth, management and GitHub authoring checks with generated credentials and mocked outbound services. No production account or API token is required. `typecheck` checks JavaScript syntax and the Gateway declaration contract with the workspace's installed TypeScript compiler. It does not statically check the JavaScript implementation. Build files and local runtime state are ignored.
 
 `test:coverage` also attempts native workerd profiling of the management module. If the runtime does not expose the Profiler API, it exits nonzero after the behavioral checks. It does not substitute Node harness coverage or claim application-wide coverage.
 
 Read [the formal Channel Talk Command and API history](docs/CHANNEL_COMMAND.md) for the separate signed `/ai` WAM, explicit context sharing and current private-history limitations.
 
 The separate [visit read/draft workflow](docs/VISIT_WORKFLOW.md) adds explicit patient/visit selection and deterministic handoff drafts in the WAM. Its private service binding and typed business RPC require installation-specific staff/site authorization; this path has no model, clinical transcript or message-send effects.
+
+The reusable [Visit Gateway](docs/VISIT_GATEWAY.md) provides a Channel ingress helper and separate authenticated MCP reads. It keeps ingress/backend credentials and Channel/MCP identities separate while sharing the existing projected visit contract.
 
 ## Runtime and administration
 

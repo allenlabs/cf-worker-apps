@@ -1,6 +1,6 @@
 import { commandAllowed, sourceId, sourceThreadKey } from "../../../cloud-agent/workers/pi/source-history.js";
 import { aiPanel } from "./command-view.js";
-import { visitInput, visitJson, visitOutputSize, visitResult } from "../../../cloud-agent/workers/visit/contract.js";
+import { visitErrors, visitInput, visitJson, visitOutputSize, visitResult } from "../../../cloud-agent/workers/visit/contract.js";
 const encoder = new TextEncoder();
 const b64 = bytes => btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
 const unb64 = text => Uint8Array.from(atob(text.replaceAll("-", "+").replaceAll("_", "/")), value => value.charCodeAt(0));
@@ -71,12 +71,9 @@ export async function commandFunction(input, env) {
     catch { throw Error("visit_backend_unavailable"); }
     const result = await visitJson(response);
     if (!response.ok) {
-      const errors = ["visit_input_invalid", "visit_target_invalid", "visit_selection_required", "visit_not_configured", "visit_record_denied", "visit_not_found_for_patient", "visit_backend_unavailable", "visit_response_invalid", "visit_response_too_large"];
-      throw Error(errors.includes(result.error) ? result.error : "visit_backend_unavailable");
+      throw Error(visitErrors.includes(result?.error) ? result.error : "visit_backend_unavailable");
     }
-    if (visit.action !== "draft") return visitResult(result, visit);
-    requireValue(object(result) && ["test", "live"].includes(result.mode) && result.kind === "draft" && object(result.draft) && typeof result.draft.text === "string" && result.draft.text.length <= 4000 && !result.draft.text.includes("\0") && Array.isArray(result.draft.missingFields) && result.draft.missingFields.length <= 4 && new Set(result.draft.missingFields).size === result.draft.missingFields.length && result.draft.missingFields.every(field => ["concernArea", "revision", "schedulingExceptions", "externalNameChecked"].includes(field)) && typeof result.draft.ready === "boolean" && result.draft.ready === (result.draft.missingFields.length === 0) && typeof result.observedAt === "string" && Number.isFinite(Date.parse(result.observedAt)), "visit_response_invalid");
-    return visitOutputSize({ mode: result.mode, kind: "draft", draft: { text: result.draft.text, missingFields: result.draft.missingFields, ready: result.draft.ready }, observedAt: result.observedAt });
+    return visitOutputSize(visitResult(result, visit));
   }
   requireValue(Object.keys(params).every(name => Object.hasOwn(operationSchema.properties, name)) && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(params.operationId) && ["help", "model", "thinking", "ask", "history"].includes(params.action) && typeof params.args === "string" && encoder.encode(params.args).length <= 8000 && !params.args.includes("\0"), "command_operation_invalid");
   const target = await verify(params.targetCapability, input.context, env);

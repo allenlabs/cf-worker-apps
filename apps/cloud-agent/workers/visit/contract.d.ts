@@ -1,0 +1,47 @@
+export type VisitTarget = { channelId: string; groupId: string; rootMessageId: string; managerId: string };
+export type VisitIdentity = { subjectId: string; siteId: string };
+export type ChannelVisitActor = { kind: "channel"; target: VisitTarget; identity?: never };
+export type McpVisitActor = { kind: "mcp"; identity: VisitIdentity; target?: never };
+export type VisitGatewayActor = ChannelVisitActor | McpVisitActor;
+export type PatientSearchInput = { action: "patientSearch"; query: string };
+export type VisitSelectInput = { action: "visitSelect"; patientId: string; visitId?: string | null };
+export type ArrivalFields = {
+  kind: "arrival" | "treatment";
+  concernArea: string;
+  revision: "unknown" | "yes" | "no";
+  schedulingExceptions: string;
+  externalNameChecked: "unknown" | "yes" | "no";
+};
+export type VisitDraftInput = { action: "draft"; patientId: string; visitId: string; fields: ArrivalFields };
+export type VisitReadInput = PatientSearchInput | VisitSelectInput;
+export type VisitInput = VisitReadInput | VisitDraftInput;
+export type ParsedVisitInput = PatientSearchInput | Required<VisitSelectInput> | VisitDraftInput;
+export type PatientCandidate = { id: string; label: string; reference: string | null };
+export type VisitMode = "test" | "live";
+export type PatientSearchResult = { mode: VisitMode; kind: "patients"; patients: PatientCandidate[] };
+export type VisitContextResult = {
+  mode: VisitMode;
+  kind: "context";
+  patient: PatientCandidate;
+  reservations: { id: string; at: string | null; type: string | null; status: string | null }[];
+  visits: { id: string; date: string | null; reservationId: string | null; status: string | null }[];
+  selectedVisitId: string | null;
+  observedAt: string;
+};
+export type VisitDraftResult = {
+  mode: VisitMode;
+  kind: "draft";
+  draft: { text: string; missingFields: (Exclude<keyof ArrivalFields, "kind">)[]; ready: boolean };
+  observedAt: string;
+};
+export type VisitReadResult = PatientSearchResult | VisitContextResult;
+export type VisitResult = VisitReadResult | VisitDraftResult;
+export function visitInput(value: unknown): ParsedVisitInput;
+export function visitTarget(value: unknown): VisitTarget;
+export function visitIdentity(value: unknown): VisitIdentity;
+export function visitGatewayActor(value: unknown): VisitGatewayActor;
+export const visitErrors: readonly string[];
+export function visitJson(message: Request | Response, limit?: number): Promise<unknown>;
+export function visitResult(value: unknown, input: ParsedVisitInput): VisitResult;
+export function visitDraft(context: VisitContextResult, fields: ArrivalFields): VisitDraftResult;
+export function visitOutputSize<T>(value: T): T;
