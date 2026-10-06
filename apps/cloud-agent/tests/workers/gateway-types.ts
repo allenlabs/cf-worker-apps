@@ -16,3 +16,8 @@ readGatewayVisit(env, { kind: "mcp", identity, target }, { action: "patientSearc
 const mixedActor: { kind: "mcp"; identity: typeof identity; target: typeof target } = { kind: "mcp", identity, target };
 // @ts-expect-error Mixed variables cannot bypass the exclusive actor variants.
 readGatewayVisit(env, mixedActor, { action: "patientSearch", query: "Synthetic" });
+
+const workflow = { schemaVersion: 1, title: "Fixture manual form", source: "none", fields: [{ id: "notice", label: "Notice", type: "text", required: true, maxLength: 100 }], template: "{{notice}}", confirmations: [] } satisfies import("../../workers/pi/workflow.js").WorkflowDefinition;
+const visitWorkflow = { ...workflow, source: "visit-context", fields: [{ ...workflow.fields[0], source: "reservation.procedureText" }] } satisfies import("../../workers/pi/workflow.js").WorkflowDefinition;
+const workflowSend = { action: "send", name: "fixture-form", revision: "0".repeat(64), values: { notice: "Fixture" }, operationId: "fixture-operation", draftToken: "fixture-token", confirmed: true, confirmations: [] } satisfies import("../../workers/pi/workflow.js").WorkflowInput;
+void [visitWorkflow, workflowSend];

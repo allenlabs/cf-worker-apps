@@ -51,7 +51,7 @@ const readBackend = async (body, token = backend) => {
   return { status: response.status, ...await response.json() };
 };
 try {
-  assert.match(await (await (await mf.getWorker("events")).fetch("https://events.example.invalid/wam/ai")).text(), /내원 도우미/);
+  assert.match(await (await (await mf.getWorker("events")).fetch("https://events.example.invalid/wam/ai")).text(), /업무 양식/);
   const opened = await event("commands.ai.open", { chat: { type: "group", id: group }, trigger: { attributes: { rootMessageId: root } } });
   const targetCapability = opened.result.attributes.wamArgs.targetCapability, command = input => event("commands.ai.visit", { targetCapability, ...input });
   assert.equal((await event("commands.ai.visit", { targetCapability, ...search }, false)).status, 401);

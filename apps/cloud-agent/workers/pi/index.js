@@ -15,6 +15,8 @@ import { installVisitMcpTools } from "./visit-mcp.js";
 import { installImageTool } from "./image-tool.js";
 import { deliverChannelImage, readImageTransfer } from "./channel-image.js";
 import { codexImageStart, codexImageCheck, codexImageAccess, codexImageStatus, codexImageDisconnect, codexImageRequest } from "./codex-images-auth.js";
+import { workflowFromSkill, workflowHash, workflowRender } from "./workflow.js";
+import { visitJson, visitTarget } from "../visit/contract.js";
 import { commandAllowed, sourceThreadKey, readSourceThread } from "./source-history.js";
 const NATIVE = "https://app-store-api.channel.io/general/v1/native/functions";
 const CHANNEL_GRANT_VERSION = 1;
@@ -650,6 +652,68 @@ export class Assistant extends Agent {
     requireCondition(target.channelId === identity.channelId && target.groupId === identity.groupId && target.rootMessageId === identity.rootMessageId, "command_target_mismatch");
     if (request?.contextSource === "shared") return { source: "shared_by_user", complete: false, incompleteReason: "user_selected_context", text: request.sharedContext, untrustedData: true };
     return readSourceThread(target, this.env, args);
+  }
+
+  async workflowTarget(value) {
+    await this.tenantReady;
+    const target = visitTarget(value); commandAllowed(target, this.env);
+    requireCondition(this.ctx.id.toString() === this.env.Assistant.idFromName(await sourceThreadKey(target)).toString(), "workflow_actor_mismatch");
+    const identity = this.channelSql.exec("SELECT data FROM channel_identity WHERE id=1").toArray()[0];
+    if (identity) { const pinned = JSON.parse(identity.data); requireCondition(["channelId", "groupId", "rootMessageId"].every(key => pinned[key] === target[key]), "workflow_target_denied"); }
+    return target;
+  }
+
+  async workflowCatalog(target) {
+    await this.workflowTarget(target);
+    const owner = this.env.Credentials.getByName("owner"), rows = await owner.skillCatalog(), catalog = [];
+    for (const row of rows.filter(row => row.enabled)) {
+      const definition = workflowFromSkill(await owner.publishedSkill(row.name, row.revision));
+      if (definition) catalog.push({ name: row.name, revision: row.revision, definition });
+    }
+    return { kind: "catalog", workflows: catalog };
+  }
+
+  async workflowDefinition(target, name, revision) {
+    await this.workflowTarget(target);
+    requireCondition(typeof name === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) && name.length <= 64 && /^[a-f0-9]{64}$/.test(revision ?? ""), "workflow_input_invalid");
+    const definition = workflowFromSkill(await this.env.Credentials.getByName("owner").publishedSkill(name, revision));
+    requireCondition(definition, "workflow_skill_unavailable");
+    return { definition, scope: await workflowHash(JSON.stringify([tenantId(this.env), this.ctx.id.toString(), target])) };
+  }
+
+  async workflowStatus(target, operationId, requestDigest) {
+    await this.workflowTarget(target);
+    requireCondition(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(operationId ?? "") && /^[a-f0-9]{64}$/.test(requestDigest ?? ""), "workflow_input_invalid");
+    const row = await this.ctx.storage.get(`workflow-delivery:${operationId}`);
+    requireCondition(!row || row.requestDigest === requestDigest, "workflow_operation_conflict");
+    return row ? { operationId, status: row.state === "sending" ? "uncertain" : row.state, ...(row.replyId ? { replyId: row.replyId } : {}) } : null;
+  }
+
+  async workflowSend(input) {
+    requireCondition(input && typeof input === "object" && !Array.isArray(input) && Object.keys(input).every(key => ["target", "operationId", "requestDigest", "name", "revision", "values", "source", "textHash", "confirmed"].includes(key)) && input.confirmed === true, "workflow_input_invalid");
+    const previous = await this.workflowStatus(input.target, input.operationId, input.requestDigest);
+    if (previous) return previous;
+    requireCondition(input.target.groupId === this.env.VISIT_MCP_GROUP_ID && this.env.CHANNEL_REPLY_ENABLED === "true", "workflow_delivery_denied");
+    const { definition } = await this.workflowDefinition(input.target, input.name, input.revision);
+    requireCondition(definition.source === "none" ? input.source === null : input.source && typeof input.source === "object", "workflow_input_invalid");
+    const rendered = workflowRender(definition, input.values, input.source);
+    requireCondition(await workflowHash(rendered.text) === input.textHash, "workflow_draft_changed");
+    const claim = await this.ctx.storage.transaction(async transaction => {
+      const row = await transaction.get(`workflow-delivery:${input.operationId}`);
+      requireCondition(!row || row.requestDigest === input.requestDigest, "workflow_operation_conflict");
+      if (row) return false;
+      await transaction.put(`workflow-delivery:${input.operationId}`, { requestDigest: input.requestDigest, state: "sending" }); return true;
+    });
+    if (!claim) return this.workflowStatus(input.target, input.operationId, input.requestDigest);
+    let result;
+    try {
+      const access = await this.env.Credentials.getByName("owner").channelAccess();
+      const response = await fetch(NATIVE, { method: "PUT", redirect: "manual", signal: AbortSignal.timeout(15000), headers: { "content-type": "application/json", "x-access-token": access }, body: JSON.stringify({ method: "writeGroupMessage", params: { channelId: input.target.channelId, groupId: input.target.groupId, rootMessageId: input.target.rootMessageId, broadcast: false, dto: { plainText: rendered.text, botName: this.env.PRODUCT_NAME || "Cloud Agent", requestId: `wfl-${input.operationId}` } } }) });
+      const envelope = await visitJson(response, 262144);
+      result = !response.ok || envelope.error ? { state: [400, 401, 403, 404, 422].includes(response.status) ? "failed" : "uncertain" } : nativeId(envelope.result?.message?.id) ? { state: "sent", replyId: envelope.result.message.id } : { state: "uncertain" };
+    } catch { result = { state: "uncertain" }; }
+    await this.ctx.storage.put(`workflow-delivery:${input.operationId}`, { requestDigest: input.requestDigest, ...result });
+    return this.workflowStatus(input.target, input.operationId, input.requestDigest);
   }
 
   async deliverImage(image, sourceOperationId, target) {

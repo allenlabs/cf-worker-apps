@@ -235,7 +235,7 @@ const defaultHandler = {
       if (input.method === 'extension.core.function.getFunctions') return Response.json({ result: { functions: nativeFunctions, success: true, errorMessage: '' } });
       if (commandFunctions.some(fn => fn.name === input.method)) {
         try { return Response.json({ result: await commandFunction(input, env) }); }
-        catch (error) { return nativeError(2, 'BadRequestError', error.message?.startsWith('command_') || error.message?.startsWith('source_history_') || error.message?.startsWith('visit_') ? error.message : 'command_failed', 200); }
+        catch (error) { return nativeError(2, 'BadRequestError', error.message?.startsWith('command_') || error.message?.startsWith('source_history_') || error.message?.startsWith('visit_') || error.message?.startsWith('workflow_') ? error.message : 'command_failed', 200); }
       }
       if (input.method === 'extension.hook.metadata.getHooks') {
         if (!input.params || typeof input.params !== 'object' || Array.isArray(input.params) || Object.keys(input.params).length) return nativeError(2, 'BadRequestError', 'Invalid metadata parameters', 400);

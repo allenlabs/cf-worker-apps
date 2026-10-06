@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "title": "직원 안내",
+  "source": "none",
+  "fields": [
+    {"id":"audience","label":"안내 대상","type":"choice","required":true,"maxLength":20,"choices":["운영팀","지원팀"]},
+    {"id":"notice","label":"안내 내용","type":"text","required":true,"maxLength":1000},
+    {"id":"when","label":"적용 시점","type":"text","required":false,"maxLength":100}
+  ],
+  "template": "[직원 안내]\n대상: {{audience}}\n{{notice}}\n적용 시점: {{when}}",
+  "confirmations": [{"id":"review","label":"안내 내용과 현재 스레드를 직접 확인했습니다."}]
+}

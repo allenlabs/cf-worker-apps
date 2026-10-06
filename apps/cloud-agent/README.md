@@ -23,7 +23,7 @@ node apps/cloud-agent/skills/pstack/check.mjs --implementation-root apps/cloud-a
 
 Read [the formal Channel Talk Command and API history](docs/CHANNEL_COMMAND.md) for the separate signed `/ai` WAM, explicit context sharing and current private-history limitations.
 
-The separate [visit read/draft workflow](docs/VISIT_WORKFLOW.md) adds explicit patient/visit selection and deterministic handoff drafts in the WAM. Its private service binding and typed business RPC require installation-specific staff/site authorization; this path has no model, clinical transcript or message-send effects.
+The [customer workflow skill forms](docs/WORKFLOW_SKILLS.md) load versioned form definitions from normal skill resources. They support explicit patient/visit selection, editable reservation candidates, manual forms, reviewed exact-text delivery and durable reply receipts. The authorized [visit read contract](docs/VISIT_WORKFLOW.md) remains separate from general Ask/Pi context. Its legacy fixed draft API is retained only for active clients; see [deprecated interfaces](docs/DEPRECATED.md).
 
 The reusable [Visit Gateway](docs/VISIT_GATEWAY.md) provides a Channel ingress helper and separate authenticated MCP reads. It keeps ingress/backend credentials and Channel/MCP identities separate while sharing the existing projected visit contract.
 

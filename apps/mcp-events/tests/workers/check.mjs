@@ -170,7 +170,12 @@ try {
   const discovery = { method: 'extension.core.function.getFunctions', params: {}, context: {}, systemVersion: 'v1' };
   const functions = (await (await ingress(discovery)).json()).result;
   assert.equal(functions.success, true);
-  assert.deepEqual(functions.functions.map(item => item.name), ['extension.command.metadata.getCommands', 'commands.ai.open', 'commands.ai.bindThread', 'commands.ai.visit', 'commands.ai.execute', 'commands.ai.status', 'extension.hook.metadata.getHooks', 'hooks.teamChatMessageCreated']);
+  assert.deepEqual(functions.functions.map(item => item.name), ['extension.command.metadata.getCommands', 'commands.ai.open', 'commands.ai.bindThread', 'commands.ai.workflow', 'commands.ai.visit', 'commands.ai.execute', 'commands.ai.status', 'extension.hook.metadata.getHooks', 'hooks.teamChatMessageCreated']);
+  const workflow = functions.functions.find(item => item.name === 'commands.ai.workflow');
+  assert.deepEqual(workflow.inputSchema.properties.action.enum, ['catalog', 'prefill', 'prepare', 'send', 'status']);
+  assert.deepEqual(workflow.inputSchema.required, ['targetCapability', 'action']);
+  assert.equal(workflow.inputSchema.additionalProperties, false);
+  assert.equal(workflow.outputSchema.type, 'object');
   assert.deepEqual((await (await signedRequest(JSON.stringify({ ...discovery, method: 'extension.hook.metadata.getHooks' }), undefined, '/functions')).json()).result.hooks, [{ type: 'teamChat.messageCreated', actionFunctionName: 'hooks.teamChatMessageCreated', systemVersion: 'v1' }]);
   assert.equal((await rpc('owner-test-key-at-least-thirty-two-characters', 'events/list')).status, 401, 'Owner login key is not an MCP bearer token');
   for (const missing of ['CHANNEL_APP_SIGNING_KEY', 'ALLOWED_CHAT_ID', 'PUBLIC_ORIGIN', 'EVENTS_OBJECT_NAME', 'OAUTH_OWNER_ID', 'CHANNEL_SLUG', 'CHANNEL_APP_ID']) {

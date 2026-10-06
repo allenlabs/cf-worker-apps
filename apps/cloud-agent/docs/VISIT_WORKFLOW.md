@@ -1,6 +1,9 @@
-# Signed visit read and handoff drafts
+# Visit read contract and legacy drafts
 
-The `/ai` WAM has a separate **내원 도우미** section: search → explicitly select a patient → explicitly select a visit → confirm fields → display a consultation-arrival or treatment-room draft. No action sends a message or changes a reservation, visit, status, clinical record or billing record. Model/Thinking controls continue to affect the existing AI path only. The visit path requires no connected model account.
+The current `/ai` WAM uses [versioned customer workflow skills](WORKFLOW_SKILLS.md). Its shared patient/visit picker and authorized reads remain live. The rest of this document records the fixed `commands.ai.visit action="draft"` compatibility API; its old WAM fields/buttons were removed. Do not extend that draft API. See [DEPRECATED.md](DEPRECATED.md).
+
+
+The legacy fixed draft API explicitly selects a patient and visit, validates arrival/treatment fields and displays a deterministic draft. This API sends no message and changes no reservation, visit, status, clinical record or billing record. It requires no connected model account. The current WAM uses the shared read picker inside workflow skill forms; its separate workflow send action has an explicit review and delivery receipt.
 
 ## Runtime boundary
 

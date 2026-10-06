@@ -1,3 +1,4 @@
+import { workflowFromSkill } from "./workflow.js";
 import { serveImageAsset } from "./image-tool.js";
 import { DurableObject } from "cloudflare:workers";
 import { parse as parseYaml } from "yaml";
@@ -141,6 +142,7 @@ function validateSkill(input) {
     requireValue(size <= 65536, "skill_resource_size_invalid"); total += size; paths.add(resource.path);
   }
   requireValue(total <= 262144, "skill_bundle_size_invalid");
+  workflowFromSkill({ resources });
   return { ...parsed, metadata, rawContent, resources: resources.map(resource => ({ ...resource, encoding: "text", size: encoder.encode(resource.content).length })) };
 }
 

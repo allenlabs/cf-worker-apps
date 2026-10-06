@@ -1,0 +1,54 @@
+# Versioned customer workflow forms
+
+Administrators can add a customer form without changing runtime code. A normal hosted skill bundle contains `SKILL.md` and the reserved text resource `references/workflow.json`. The `/ai` panel lists enabled workflow skills, pins the selected content revision, fills authorized source candidates and renders the declared fields. Staff check the requested confirmations, review the exact message and explicitly send it to their current approved thread. This path does not use a model account or grant a message-send tool to Pi.
+
+The [visit handoff](../skills/workflows/visit-handoff/SKILL.md) and [manual notice](../skills/workflows/staff-notice/SKILL.md) examples use the same runner. Keep customer definitions in Git. Upload `SKILL.md` as rawContent and its JSON as a `reference` resource at `references/workflow.json` through the existing administrator skill bundle publish UI/API. Publishing creates a retained content-hash revision and leaves it disabled. Review, enable, and refresh the staff panel's catalog. The hosted registry supports text resources; no scripts or `agents/openai.yaml` belong in these bundles. GitHub authoring can maintain these source files, but publication to the enabled hosted catalog remains an explicit administrator action.
+
+## Definition contract
+
+```json
+{
+  "schemaVersion": 1,
+  "title": "Staff notice",
+  "source": "none",
+  "fields": [
+    {"id":"team","label":"Team","type":"choice","required":true,"maxLength":20,"choices":["Operations","Support"]},
+    {"id":"notice","label":"Notice","type":"text","required":true,"maxLength":500}
+  ],
+  "template": "{{team}}\n{{notice}}",
+  "confirmations": [{"id":"review","label":"I checked the message and current thread."}]
+}
+```
+
+Definitions have only these keys. IDs use lower-case letters, digits and underscores, starting with a letter. There are at most 20 fields and 10 checks. Fields are `text` or `choice`, with an explicit required flag and maximum length of 1–1,000 characters. Choice lists contain 1–20 distinct nonempty strings. Required choices begin empty in the UI. No choice or approval becomes true from a database read or model inference. Templates replace only declared `{{fieldId}}` placeholders. Expressions, scripts, executable URLs, SQL selectors, destinations, credentials and tenant selection are unsupported. The definition JSON is capped at 32 KiB and the rendered message at 4,000 characters / 16 KiB. Validation runs at publish and every retained-revision load.
+
+`source:"none"` never queries the visit adapter. Staff enter the form values manually. `source:"visit-context"` requires explicit patient and visit selection through the existing authorized `VISIT_API`/Gateway path. A field can map one of:
+
+- `patient.label` or `patient.reference`.
+- `visit.date` or `visit.status` for the selected visit.
+- `reservation.at`, `reservation.type`, `reservation.status`, `reservation.procedureText` or `reservation.note` for that visit's linked reservation.
+
+Patient and selected-visit fields are read-only. Reservation fields are editable candidates. There is no fallback to the first/latest reservation. No link means blank values. `procedureText` and `note` are optional, nullable projected text, capped at 1,000 characters by the common contract. They are discarded on every unrelated or unselected reservation. An installation can impose a smaller ceiling. A procedure menu is not a clinical fact and cannot establish revision status. Put that decision in an explicit staff field/check.
+
+Each backend read must enforce current staff/site/dataset authorization. The generic administrator and Channel group policy do not grant clinical access. The supplied examples do not enable production data. Current multi-customer support means tenant-isolated installations with a fixed deployment `TENANT_ID` and tenant-pinned owner Credentials/Assistant objects. There is no browser tenant switch or shared-host cross-tenant catalog.
+
+## Signed actions and review token
+
+`commands.ai.workflow` shares the platform signature, manager identity, root capability expiry, group policy and fixed Assistant binding used by the other `/ai` actions. Extra input properties are rejected. The actions are:
+
+1. `catalog` returns current enabled workflow definitions and content revisions.
+2. `prefill` accepts name/revision and, for visit sources, `{patientId,visitId}`. It performs an authorized fresh read.
+3. `prepare` adds the exact declared values. It rereads the selected source, validates the values and renders the template. It returns a new operation UUID, exact text, a ten-minute draft token and expiry.
+4. `send` requires that UUID, token, exact values/selection, `confirmed:true`, and all declared confirmation IDs. `status` accepts the same UUID/token and never sends.
+
+The HMAC token is authenticated, not encrypted. It contains only the operation ID, skill name/revision, expiry and hashes binding the manager/root/tenant actor scope, selection, final values, exact text, source projection and confirmation IDs. It contains no patient IDs, labels, source text or field contents. Do not put it in URLs or logs. The actual source hash excludes observation time so a fresh read timestamp alone does not invalidate a review. It includes the selected patient, visit and reservation IDs and their relationship, patient identity, visit status/date and linked reservation facts. IDs are internal hash inputs, not available field source paths. Source changes, field edits, selected patient/visit changes and confirmation changes require a fresh review. A new token cannot be reused under another operation UUID.
+
+Before the first send, the route rechecks current enabled skill state and rereads authorization/source facts. It compares the reconstructed message and hashes with the review token. The Assistant also checks tenant pin, exact actor/root, current skill revision and configured `VISIT_MCP_GROUP_ID` plus reply policy. It sends the server-rendered template using the owner Channel credential, the pinned source root and `broadcast:false`. Definitions cannot change the destination. The internal RPC is available only through trusted service bindings; it is not registered as a Pi tool or public HTTP endpoint.
+
+Only the request digest, state and optional native reply ID enter the dedicated workflow receipt in the existing Assistant storage. No clinical drafts, fields or source context enter generic command operations, D1 transcripts or Pi sessions. A durable sending claim precedes native HTTP. Replays return the existing receipt without another source read or send, including after source changes or skill disable. A crash or ambiguous response leaves the request uncertain and prevents automatic resend. The UI retains the original operation and offers status confirmation.
+
+## Verification
+
+Run `npm run -w @cf-worker-apps/cloud-agent workflow-check` after `npm run -w @cf-worker-apps/cloud-agent build`. The workerd suite publishes two fictional customer forms, checks selected-only source projection, revision pin/disable, bound digest-only tokens, changed source/authorization, unchecked confirmations, exact-root send, replay/conflict, cold restart, uncertain sending and transcript isolation. `visit-ui-check` exercises actual rendered DOM controls, editable candidates, invalidation/stale responses and lost-response status. These use generated identities and mocked outbound services. They do not prove a deployment's actual clinical authorization or a live native send.
+
+The old fixed `commands.ai.visit` draft action remains for active compatibility clients only. See [DEPRECATED.md](DEPRECATED.md). New forms use workflow skills.

@@ -88,9 +88,10 @@ export function visitResult(value, input) {
   }
   backendValue(value.kind === "context" && object(value.patient) && value.patient.id === input.patientId && Array.isArray(value.reservations) && value.reservations.length <= 20 && Array.isArray(value.visits) && value.visits.length <= 20 && value.selectedVisitId === input.visitId && date(value.observedAt) && value.observedAt.includes("T"));
   const selectedPatient = patient(value.patient);
+  const selectedReservationId = value.visits.find(row => object(row) && row.id === input.visitId)?.reservationId ?? null;
   const reservations = value.reservations.map(row => {
-    backendValue(object(row) && uuid(row.id) && (row.at === null || date(row.at)) && nullableText(row.type, 80) && nullableText(row.status, 80));
-    return { id: row.id, at: row.at, type: row.type, status: row.status };
+    backendValue(object(row) && uuid(row.id) && (row.at === null || date(row.at)) && nullableText(row.type, 80) && nullableText(row.status, 80) && (row.id !== selectedReservationId || (row.procedureText === undefined || nullableText(row.procedureText, 1000)) && (row.note === undefined || nullableText(row.note, 1000))));
+    return { id: row.id, at: row.at, type: row.type, status: row.status, ...(row.id !== selectedReservationId || row.procedureText === undefined ? {} : { procedureText: row.procedureText }), ...(row.id !== selectedReservationId || row.note === undefined ? {} : { note: row.note }) };
   });
   const reservationIds = new Set(reservations.map(row => row.id)); unique(reservations);
   const visits = value.visits.map(row => {
