@@ -6,10 +6,12 @@ const unb64 = text => Uint8Array.from(atob(text.replaceAll("-", "+").replaceAll(
 const requireValue = (ok, code) => { if (!ok) throw new Error(code); };
 const object = value => value && typeof value === "object" && !Array.isArray(value);
 const actionSchema = { type: "object", properties: { chat: { type: "object", properties: { type: { type: "string" }, id: { type: "string" } }, required: ["type", "id"] }, trigger: { type: "object", additionalProperties: true }, input: { type: "object", additionalProperties: true }, language: { type: "string" } }, additionalProperties: false };
+const bindSchema = { type: "object", properties: { targetCapability: { type: "string" }, rootMessageId: { type: "string", maxLength: 255 } }, required: ["targetCapability", "rootMessageId"], additionalProperties: false };
 const operationSchema = { type: "object", properties: { targetCapability: { type: "string" }, operationId: { type: "string", format: "uuid" }, action: { type: "string", enum: ["help", "model", "thinking", "ask", "history"] }, args: { type: "string", maxLength: 8000 }, contextSource: { type: "string", enum: ["api", "shared"] }, sharedContext: { type: "string", maxLength: 32768 } }, required: ["targetCapability", "operationId", "action", "args"], additionalProperties: false };
 export const commandFunctions = [
   { name: "extension.command.metadata.getCommands", inputSchema: { type: "object", properties: {}, additionalProperties: false }, outputSchema: { type: "object", properties: { commands: { type: "array", items: { type: "object", additionalProperties: true } } }, required: ["commands"] } },
   { name: "commands.ai.open", inputSchema: actionSchema, outputSchema: { type: "object", properties: { type: { type: "string" }, attributes: { type: "object", additionalProperties: true } }, required: ["type"] } },
+  { name: "commands.ai.bindThread", inputSchema: bindSchema, outputSchema: { type: "object", additionalProperties: true } },
   ...["execute", "status"].map(name => ({ name: `commands.ai.${name}`, inputSchema: operationSchema, outputSchema: { type: "object", additionalProperties: true } }))
 ];
 function caller(context, env) {
@@ -48,6 +50,12 @@ export async function commandFunction(input, env) {
     requireValue(rootMessageId === undefined || sourceId(rootMessageId), "command_root_invalid");
     const target = commandAllowed({ version: 1, channelId: input.context.channel?.id, groupId: params.chat.id, ...(rootMessageId === undefined ? {} : { rootMessageId }), managerId: caller(input.context, env), expiresAt: Date.now() + 1200000, nonce: crypto.randomUUID() }, env);
     return { type: "wam", attributes: { appId: env.CHANNEL_APP_ID, name: "ai", wamArgs: { targetCapability: await capability(target, env), rootAvailable: rootMessageId !== undefined } } };
+  }
+  if (input.method === "commands.ai.bindThread") {
+    requireValue(Object.keys(params).every(name => Object.hasOwn(bindSchema.properties, name)) && sourceId(params.rootMessageId), "command_root_invalid");
+    const target = await verify(params.targetCapability, input.context, env);
+    requireValue(target.rootMessageId === undefined || target.rootMessageId === params.rootMessageId, "command_root_retarget_denied");
+    return { targetCapability: await capability({ ...target, rootMessageId: params.rootMessageId }, env), rootAvailable: true, rootSource: target.rootMessageId === undefined ? "wam-selection" : "bound" };
   }
   requireValue(Object.keys(params).every(name => Object.hasOwn(operationSchema.properties, name)) && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(params.operationId) && ["help", "model", "thinking", "ask", "history"].includes(params.action) && typeof params.args === "string" && encoder.encode(params.args).length <= 8000 && !params.args.includes("\0"), "command_operation_invalid");
   const target = await verify(params.targetCapability, input.context, env);

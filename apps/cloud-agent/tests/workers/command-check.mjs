@@ -69,6 +69,7 @@ const run = async input => {
 };
 const read = async (args = {}, target = { channelId: channel, groupId: group, rootMessageId: "source-root", managerId: manager }) => (await (await mf.getWorker("cloud")).fetch("https://internal.invalid/test/read", { method: "POST", body: JSON.stringify({ target, args }) })).json();
 try {
+  const hostRoute = await (await mf.getWorker("events")).fetch(origin + "/wam/ai/"); assert.match(await hostRoute.text(), /AI 스레드 도우미/, "Channel Talk appends a trailing slash to the WAM name");
   const discovery = await call(envelope("extension.core.function.getFunctions")); assert.ok(discovery.result.functions.some(row => row.name === "hooks.teamChatMessageCreated")); assert.ok(discovery.result.functions.some(row => row.name === "commands.ai.execute"));
   assert.ok((await call({ ...envelope("extension.core.function.getFunctions"), systemVersion: undefined })).result);
   assert.equal((await call({ ...envelope("commands.ai.open", { chat: { type: "group", id: group } }), systemVersion: "v2" })).status, 400);
@@ -84,6 +85,16 @@ try {
   assert.equal((await run(operation(missing.result.attributes.wamArgs.targetCapability, "help"))).result.status, "done");
   for (const action of ["ask", "history", "model", "thinking"]) assert.equal((await run(operation(missing.result.attributes.wamArgs.targetCapability, action, action === "ask" ? "hello" : ""))).error.message, "command_thread_required");
   assert.equal(apiRequests.length, 0); assert.equal(nativeRequests.length, 0);
+  const missingCapability = missing.result.attributes.wamArgs.targetCapability;
+  const bind = (targetCapability, rootMessageId, context) => call(envelope("commands.ai.bindThread", { targetCapability, rootMessageId }, context));
+  const bound = await bind(missingCapability, "host-selected-root"); assert.equal(bound.result.rootAvailable, true); assert.equal(bound.result.rootSource, "wam-selection");
+  const decode = value => JSON.parse(Buffer.from(value.split(".")[0], "base64url").toString());
+  const originalTarget = decode(missingCapability), selectedTarget = decode(bound.result.targetCapability); assert.equal(selectedTarget.rootMessageId, "host-selected-root"); assert.equal(selectedTarget.nonce, originalTarget.nonce); assert.equal(selectedTarget.expiresAt, originalTarget.expiresAt); assert.equal(selectedTarget.groupId, originalTarget.groupId);
+  assert.equal((await bind(bound.result.targetCapability, "host-selected-root")).result.targetCapability, bound.result.targetCapability);
+  assert.equal((await bind(bound.result.targetCapability, "other-root")).error.message, "command_root_retarget_denied");
+  assert.ok((await bind(missingCapability, "root", { caller: { type: "manager", id: "another-manager" } })).error);
+  for (const invalidRoot of ["", "https://example.invalid/root", "root/other", null, 42]) assert.equal((await bind(missingCapability, invalidRoot)).error.message, "command_root_invalid");
+  assert.equal(apiRequests.length, 0); assert.equal(nativeRequests.length, 0);
   const opened = await open("root-A"), capability = opened.result.attributes.wamArgs.targetCapability;
   const bareOpen = await call({ ...envelope("commands.ai.open", { chat: { type: "group", id: group }, trigger: { type: "thread", attributes: { rootMessageId: "root-A" } } }), systemVersion: undefined }); assert.equal(bareOpen.result.type, "wam");
   assert.equal(opened.result.type, "wam"); assert.equal(opened.result.attributes.name, "ai"); assert.ok(!Object.hasOwn(opened.result.attributes.wamArgs, "rootMessageId"));
@@ -92,6 +103,8 @@ try {
   const [payload] = capability.split("."), target = JSON.parse(Buffer.from(payload, "base64url").toString()); target.expiresAt = Date.now() - 1;
   const expiredPayload = Buffer.from(JSON.stringify(target)).toString("base64url"), expired = expiredPayload + "." + createHmac("sha256", Buffer.from("ab".repeat(32), "hex")).update("channel-command-target/v1:" + expiredPayload).digest("base64url");
   assert.ok((await run(operation(expired, "help"))).error);
+  assert.ok((await bind(expired, "root-A")).error);
+  assert.equal((await bind(capability, "other-root")).error.message, "command_root_retarget_denied");
   const help = operation(capability, "help"); assert.equal((await run(help)).result.status, "done"); assert.equal((await inspect("root-A")).modelCalls, 0); assert.equal(apiRequests.length, 0);
   const bareHelp = operation(bareOpen.result.attributes.wamArgs.targetCapability, "help"); assert.ok((await call({ ...envelope("commands.ai.execute", bareHelp), systemVersion: undefined })).result); assert.equal((await run(bareHelp)).result.status, "done");
   assert.equal((await run({ ...help, action: "history" })).error.message, "command_operation_conflict");

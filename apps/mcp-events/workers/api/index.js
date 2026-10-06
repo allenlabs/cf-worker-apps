@@ -219,7 +219,7 @@ const mcpHandler = {
 const defaultHandler = {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (url.pathname === '/wam/ai' && request.method === 'GET') return commandPage();
+    if (['/wam/ai', '/wam/ai/'].includes(url.pathname) && request.method === 'GET') return commandPage();
     if (url.pathname === '/health' && request.method === 'GET') return Response.json({ ok: true, provider: 'channel-talk', protocolVersion: '2026-07-28', configured: Boolean(env.OWNER_LOGIN_KEY && env.CHANNEL_APP_SIGNING_KEY && env.OAUTH_KV && env.EVENTS && env.THREADS && identifier(env.ALLOWED_CHAT_ID)) });
     if (url.pathname === '/functions' || url.pathname === '/functions/v1') {
       if (request.method !== 'PUT') return new Response(null, { status: 405, headers: { Allow: 'PUT' } });
