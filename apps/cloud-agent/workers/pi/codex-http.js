@@ -4,6 +4,41 @@ const endpoint = value => {
   try { return new URL(value).href === "https://chatgpt.com/backend-api/codex/responses"; } catch { return null; }
 };
 
+// Inspect data properties only: diagnostics must not run payload accessors or toJSON.
+const unobserved = Symbol("unobserved");
+const data = (value, key) => { const field = Object.getOwnPropertyDescriptor(value, key); return field ? Object.hasOwn(field, "value") ? field.value : unobserved : undefined; };
+export function codexPayloadShape(body) {
+  const unavailable = { storeFalse: null, streamTrue: null, inputArray: null, toolSchemaValid: null };
+  try {
+    if (!object(body) || ![Object.prototype, null].includes(Object.getPrototypeOf(body)) || data(body, "toJSON") !== undefined) return unavailable;
+    const store = object(body) ? data(body, "store") : undefined, stream = object(body) ? data(body, "stream") : undefined, input = object(body) ? data(body, "input") : undefined;
+    let tools = null;
+    if (object(body)) {
+      const declared = data(body, "tools");
+      if (declared === undefined) tools = true;
+      else if (Array.isArray(declared)) {
+        const valid = Array.from({ length: data(declared, "length") }, (_, index) => {
+          const tool = data(declared, String(index));
+          if (tool === unobserved) return null;
+          if (!object(tool)) return false;
+          const name = data(tool, "name"), type = data(tool, "type");
+          if (name === unobserved || type === unobserved) return null;
+          if (typeof name !== "string" || !name) return false;
+          if (type === "function") { const parameters = data(tool, "parameters"); return parameters === unobserved ? null : object(parameters); }
+          if (type !== "custom") return null;
+          const format = data(tool, "format");
+          if (format === unobserved) return null;
+          if (!object(format)) return false;
+          const kind = data(format, "type"), syntax = data(format, "syntax"), definition = data(format, "definition");
+          return [kind, syntax, definition].includes(unobserved) ? null : kind === "grammar" && ["lark", "regex"].includes(syntax) && typeof definition === "string";
+        });
+        tools = valid.includes(false) ? false : valid.includes(null) ? null : true;
+      } else if (declared !== unobserved) tools = false;
+    }
+    return { storeFalse: store === unobserved ? null : store === false, streamTrue: stream === unobserved ? null : stream === true, inputArray: input === unobserved ? null : Array.isArray(input), toolSchemaValid: tools };
+  } catch { return unavailable; }
+}
+
 export function codexRequestShape(input, init, modelId) {
   const shape = { attemptId: crypto.randomUUID(), modelId: typeof modelId === "string" && /^[A-Za-z0-9._-]{1,128}$/.test(modelId) ? modelId : null, expectedEndpoint: endpoint(typeof input === "string" || input instanceof URL ? input : input?.url), method: null, headers: { authorization: null, account: null, contentType: null, accept: null }, body: { parsedJson: null, storeFalse: null, streamTrue: null, inputArray: null, toolSchemaValid: null } };
   try {
@@ -15,15 +50,7 @@ export function codexRequestShape(input, init, modelId) {
   if (typeof init?.body === "string") {
     try {
       const body = JSON.parse(init.body);
-      let tools = null;
-      if (object(body)) {
-        if (body.tools === undefined) tools = true;
-        else if (Array.isArray(body.tools)) {
-          const valid = body.tools.map(tool => !object(tool) || typeof tool.name !== "string" || !tool.name ? false : tool.type === "function" ? object(tool.parameters) : tool.type === "custom" ? object(tool.format) && tool.format.type === "grammar" && ["lark", "regex"].includes(tool.format.syntax) && typeof tool.format.definition === "string" : null);
-          tools = valid.includes(false) ? false : valid.includes(null) ? null : true;
-        } else tools = false;
-      }
-      shape.body = { parsedJson: true, storeFalse: object(body) ? body.store === false : false, streamTrue: object(body) ? body.stream === true : false, inputArray: object(body) ? Array.isArray(body.input) : false, toolSchemaValid: tools };
+      shape.body = { parsedJson: true, ...(object(body) ? codexPayloadShape(body) : { storeFalse: false, streamTrue: false, inputArray: false, toolSchemaValid: null }) };
     } catch { shape.body.parsedJson = false; }
   }
   return shape;

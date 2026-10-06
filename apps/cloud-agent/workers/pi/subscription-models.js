@@ -3,7 +3,7 @@ import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-code
 import { lazyStream } from "@earendil-works/pi-ai/api/lazy";
 import { isRetryableAssistantError } from "@earendil-works/pi-ai/utils/retry";
 import { isContextOverflow } from "@earendil-works/pi-ai/utils/overflow";
-import { codexDiagnostic, codexHtmlError, codexRequestShape, codexResponseShape, reportCodexDiagnostic } from "./codex-http.js";
+import { codexDiagnostic, codexHtmlError, codexPayloadShape, codexRequestShape, codexResponseShape, reportCodexDiagnostic } from "./codex-http.js";
 
 export function installSubscriptionModels(models, credentials, authorize = async () => {}, onDiagnostic) {
   const publicProvider = openaiProvider(), codex = openaiCodexProvider();
@@ -16,17 +16,24 @@ export function installSubscriptionModels(models, credentials, authorize = async
     if (provider.id === "openai-codex") for (const method of ["stream", "streamSimple"]) {
       const stream = provider[method];
       provider[method] = (model, context, options) => {
-        let diagnostic, requestShape, responseShape;
-        const source = stream(model, context, { ...options, transport: "sse", fetch: async (...args) => {
+        let diagnostic, requestShape, responseShape, payloadShape;
+        const providerOptions = { ...options, transport: "sse", fetch: async (...args) => {
           requestShape = codexRequestShape(args[0], args[1], model.id);
           const response = await (options?.fetch ?? globalThis.fetch)(...args);
           responseShape = codexResponseShape(response);
           return response;
         }, onResponse: async (info, responseModel) => {
-          diagnostic = { ...codexDiagnostic("inference", info), requestShape, responseShape };
+          diagnostic = { ...codexDiagnostic("inference", info), requestShape, responseShape, payloadShape };
           await reportCodexDiagnostic(onDiagnostic, diagnostic);
           await options?.onResponse?.(info, responseModel);
-        } });
+        } };
+        const callerPayload = providerOptions.onPayload;
+        providerOptions.onPayload = async function (body, payloadModel) {
+          const next = callerPayload == null ? undefined : await Reflect.apply(callerPayload, this, [body, payloadModel]);
+          payloadShape = codexPayloadShape(next === undefined ? body : next);
+          return next;
+        };
+        const source = stream(model, context, providerOptions);
         return lazyStream(model, async () => ({
           async *[Symbol.asyncIterator]() {
             try {

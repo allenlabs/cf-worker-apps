@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { zstdDecompressSync } from "node:zlib";
 import { installSubscriptionModels } from "../../workers/pi/subscription-models.js";
 import { codexImageRequest } from "../../workers/pi/codex-images-auth.js";
 import { isRetryableAssistantError } from "@earendil-works/pi-ai/utils/retry";
@@ -114,12 +115,12 @@ try {
     assert(!JSON.stringify(result).includes("fixture-private-marker"), "raw provider HTML must not reach the native journal");
     assert(!JSON.stringify(streamed).includes("fixture-private-marker"), "streamed events and result must both be safe");
     const finalDiagnostic = diagnostics.at(-1);
-    const { requestShape, responseShape, ...responseDiagnostic } = finalDiagnostic;
+    const { requestShape, responseShape, payloadShape, ...responseDiagnostic } = finalDiagnostic;
     assert.deepEqual(responseDiagnostic, { ...expected, phase: "inference" });
     assert.equal(requestShape.expectedEndpoint, true); assert.equal(requestShape.method, "POST");
     assert.equal(requestShape.modelId, provider.getModels()[0].id);
     assert.deepEqual(requestShape.headers, { authorization: true, account: true, contentType: true, accept: true });
-    assert.deepEqual(responseShape, { redirected: false, expectedFinalEndpoint: null });
+    assert.deepEqual(responseShape, { redirected: false, expectedFinalEndpoint: null });assert.deepEqual(payloadShape, { storeFalse: true, streamTrue: true, inputArray: true, toolSchemaValid: true });
     assert(!JSON.stringify(diagnostics).includes(token)); assert(!JSON.stringify(diagnostics).includes("fixture-account"));
     assert.deepEqual(result.diagnostic, finalDiagnostic);
 
@@ -128,9 +129,9 @@ try {
     assert.equal(prefixed.diagnostic.category, "permission_denied"); assert.equal(prefixed.diagnostic.cause, "unknown"); assert.equal(prefixed.diagnostic.contentType, "json"); assert.equal(prefixed.diagnostic.errorBodyFormat, "html");
     assert(!JSON.stringify(prefixed).includes("fixture-private-marker"));
 
-    let payloadCalls = 0, fetchCalls = 0, stringBody;
-    const redirected = await provider[method]({ ...provider.getModels()[0], baseUrl: "https://chatgpt.com/backend-api/codex/responses?fixture-private-marker" }, { messages: [] }, { apiKey: token, maxRetries: 0, headers: { "x-fixture-private": "fixture-private-marker" }, onPayload(body) { payloadCalls++; return { ...body, store: true, input: "fixture-private-marker", tools: [{ type: "function", name: "fixture_tool", parameters: null }] }; }, fetch: async (url, init) => {
-      fetchCalls++; assert(url.includes("fixture-private-marker")); assert.equal(init.headers.get("x-fixture-private"), "fixture-private-marker"); stringBody = typeof init.body === "string";
+    let payloadCalls = 0, fetchCalls = 0, payloadOverride, finalPayloadJson;
+    const redirected = await provider[method]({ ...provider.getModels()[0], baseUrl: "https://chatgpt.com/backend-api/codex/responses?fixture-private-marker" }, { messages: [] }, { apiKey: token, maxRetries: 0, headers: { "x-fixture-private": "fixture-private-marker" }, async onPayload(body, model) { payloadCalls++; assert.equal(this.transport, "sse", "caller retains the native provider-options receiver"); assert.equal(model.provider, "openai-codex"); await Promise.resolve(); payloadOverride = { ...body, store: true, input: "fixture-private-marker", tools: [{ type: "function", name: "fixture_tool", parameters: null }] }; finalPayloadJson = JSON.stringify(payloadOverride); return payloadOverride; }, fetch: async (url, init) => {
+      fetchCalls++; assert(url.includes("fixture-private-marker")); assert.equal(init.headers.get("x-fixture-private"), "fixture-private-marker"); assert(init.body instanceof Uint8Array, "Native Pi compression remains enabled"); assert.equal(init.headers.get("content-encoding"), "zstd"); assert.equal(zstdDecompressSync(init.body).toString(), finalPayloadJson, "Diagnostic observation leaves the exact caller override and native compressed bytes unchanged"); assert.equal(payloadOverride.store, true); payloadOverride.store = false; payloadOverride.input = []; payloadOverride.tools = [];
       const response = new Response(html, { status: 403, headers: { "content-type": "text/html" } });
       Object.defineProperties(response, { redirected: { value: true }, url: { value: "https://example.invalid/login?fixture-private-marker" } });
       return response;
@@ -139,8 +140,32 @@ try {
     assert.equal(redirected.diagnostic.requestShape.expectedEndpoint, false);
     assert.deepEqual(redirected.diagnostic.responseShape, { redirected: true, expectedFinalEndpoint: false });
     assert.equal(redirected.diagnostic.cause, "unknown"); assert.equal(redirected.diagnostic.contentType, "html");
-    assert.deepEqual(redirected.diagnostic.requestShape.body, stringBody ? { parsedJson: true, storeFalse: false, streamTrue: true, inputArray: false, toolSchemaValid: false } : { parsedJson: null, storeFalse: null, streamTrue: null, inputArray: null, toolSchemaValid: null });
+    assert.deepEqual(redirected.diagnostic.requestShape.body, { parsedJson: null, storeFalse: null, streamTrue: null, inputArray: null, toolSchemaValid: null }, "Wire parsing stays unknown for compressed bytes"); assert.deepEqual(redirected.diagnostic.payloadShape, { storeFalse: false, streamTrue: true, inputArray: false, toolSchemaValid: false }, "Separate immutable structure observes the final caller payload before compression");
     assert(!JSON.stringify(redirected.diagnostic).includes("fixture-private-marker"));
+
+    let mutationCalls = 0, mutatedPayloadJson;
+    const mutated = await provider[method](provider.getModels()[0], { messages: [] }, { apiKey: token, maxRetries: 0, async onPayload(body) {
+      mutationCalls++; assert.equal(this.transport, "sse"); await Promise.resolve(); body.store = true; body.input = "fixture-private-marker"; body.tools = [{ type: "function", name: "fixture_tool", parameters: null }]; mutatedPayloadJson = JSON.stringify(body); return undefined;
+    }, fetch: async (url, init) => { assert.equal(zstdDecompressSync(init.body).toString(), mutatedPayloadJson, "Undefined hook result retains in-place mutation"); return Response.json({}, { status: 401 }); } }).result();
+    assert.equal(mutationCalls, 1); assert.deepEqual(mutated.diagnostic.payloadShape, { storeFalse: false, streamTrue: true, inputArray: false, toolSchemaValid: false });
+
+    let accessorCalls = 0;
+    const accessor = await provider[method](provider.getModels()[0], { messages: [] }, { apiKey: token, maxRetries: 0, onPayload(body) { Object.defineProperty(body, "store", { enumerable: true, configurable: true, get() { accessorCalls++; return false; } }); }, fetch: async (url, init) => { assert.equal(accessorCalls, 1, "Only native serialization reads accessors"); assert.equal(JSON.parse(zstdDecompressSync(init.body).toString()).store, false); return Response.json({}, { status: 401 }); } }).result();
+    assert.deepEqual(accessor.diagnostic.payloadShape, { storeFalse: null, streamTrue: true, inputArray: true, toolSchemaValid: true }); assert.equal(accessorCalls, 1);
+    let toJSONCalls = 0;
+    const customSerialized = await provider[method](provider.getModels()[0], { messages: [] }, { apiKey: token, maxRetries: 0, onPayload() { return { toJSON() { toJSONCalls++; return { store: false, stream: true, input: [], tools: [] }; } }; }, fetch: async (url, init) => { assert.equal(toJSONCalls, 1, "Only native serialization invokes toJSON"); assert.equal(zstdDecompressSync(init.body).toString(), '{"store":false,"stream":true,"input":[],"tools":[]}'); return Response.json({}, { status: 401 }); } }).result();
+    const unknownPayload = { storeFalse: null, streamTrue: null, inputArray: null, toolSchemaValid: null };
+    assert.deepEqual(customSerialized.diagnostic.payloadShape, unknownPayload); assert.equal(toJSONCalls, 1);
+    const unobservable = await provider[method](provider.getModels()[0], { messages: [] }, { apiKey: token, maxRetries: 0, onPayload() { return new Proxy({ stream: true, input: [], tools: [] }, { getOwnPropertyDescriptor(target, name) { if (name === "store") throw Error("fixture-private-marker"); return Reflect.getOwnPropertyDescriptor(target, name); } }); }, fetch: async (url, init) => { assert.equal(zstdDecompressSync(init.body).toString(), '{"stream":true,"input":[],"tools":[]}'); return Response.json({}, { status: 401 }); } }).result();
+    assert.deepEqual(unobservable.diagnostic.payloadShape, unknownPayload, "Observation failure cannot prevent native serialization/fetch"); assert(!JSON.stringify(unobservable.diagnostic).includes("fixture-private-marker"));
+    const nullOverride = await provider[method](provider.getModels()[0], { messages: [] }, { apiKey: token, maxRetries: 0, onPayload() { return null; }, fetch: async (url, init) => { assert.equal(zstdDecompressSync(init.body).toString(), "null", "Null is an explicit override, not an undefined fallback"); return Response.json({}, { status: 401 }); } }).result();
+    assert.deepEqual(nullOverride.diagnostic.payloadShape, unknownPayload);
+    for (const reject of [false, true]) {
+      const beforeFailure = diagnostics.length;
+      const payloadFailure = await provider[method](provider.getModels()[0], { messages: [] }, { apiKey: token, maxRetries: 0, onPayload() { const error = Error("fixture original payload callback failed"); if (reject) return Promise.reject(error); throw error; }, fetch: async () => assert.fail("Failed payload hook cannot fetch") }).result();
+      assert.equal(payloadFailure.errorMessage, "fixture original payload callback failed"); assert.equal(diagnostics.length, beforeFailure, "Caller errors are preserved without fabricating a response diagnostic");
+    }
+    assert(!JSON.stringify(diagnostics).includes("fixture-private-marker")); assert(!JSON.stringify(diagnostics).includes(token)); assert(!JSON.stringify(diagnostics).includes("fixture-account"));
 
     for (const raw of [html, `<html>service unavailable; fixture-private-marker</html>`, `<html>context length exceeded; fixture-private-marker</html>`, `<html>500 billing; fixture-private-marker</html>`]) {
       const normalized = await provider[method](provider.getModels()[0], { messages: [] }, { apiKey: token, maxRetries: 0, fetch: async () => new Response(raw, { status: 503, headers }) }).result();
@@ -163,10 +188,10 @@ try {
     assert.equal(attempts, 2, "caller maxRetries remains effective"); assert.equal(success.stopReason, "stop"); assert.equal(success.usage.totalTokens, 5);
     const retried = diagnostics.slice(beforeRetry);
     assert.deepEqual(retried.map(value => value.status), [503, 200]);
-    assert.notEqual(retried[0].requestShape.attemptId, retried[1].requestShape.attemptId, "transport attempts have distinct IDs");
+    assert.notEqual(retried[0].requestShape.attemptId, retried[1].requestShape.attemptId, "transport attempts have distinct IDs");assert.deepEqual(retried[0].payloadShape,retried[1].payloadShape,"Native retries keep the same pre-compression structure snapshot");
     const alreadyAborted = new AbortController(); alreadyAborted.abort();
     const aborted = await provider[method](provider.getModels()[0], { messages: [] }, { apiKey: token, signal: alreadyAborted.signal, fetch: async () => { assert.fail("aborted request must not fetch"); } }).result();
     assert.equal(aborted.stopReason, "aborted");
   }
-  console.log("Codex diagnostics checks passed: wire/body formats, confirmed challenge vs unknown cause, safe request shape/redirects, preserved Pi caller hooks/retries/SSE; no live calls.");
+  console.log("Codex diagnostics checks passed: wire/body formats, confirmed challenge vs unknown cause, safe wire request shape/redirects and separate immutable pre-compression structure, preserved Pi caller mutation/async override/errors/accessors/toJSON/retries/compressed SSE; no live calls.");
 } finally { globalThis.fetch = originalFetch; }
