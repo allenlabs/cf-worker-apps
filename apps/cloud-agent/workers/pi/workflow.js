@@ -5,6 +5,7 @@ const text = (value, max) => typeof value === "string" && value.length <= max &&
 const id = value => typeof value === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(value);
 const uuid = value => typeof value === "string" && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
 const requireValue = (ok, code = "workflow_input_invalid") => { if (!ok) throw Error(code); };
+export const workflowEditable = field => !field.source || field.source.startsWith("reservation.");
 export const workflowPath = "references/workflow.json";
 export const workflowSources = Object.freeze(["patient.label", "patient.reference", "visit.date", "visit.status", "reservation.at", "reservation.type", "reservation.status", "reservation.procedureText", "reservation.note"]);
 export const workflowHash = async value => [...new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(value)))].map(byte => byte.toString(16).padStart(2, "0")).join("");
@@ -55,7 +56,7 @@ export function workflowRender(definition, input, source = null) {
   requireValue(keys(input, definition.fields.map(field => field.id)) && Object.keys(input).length === definition.fields.length, "workflow_values_invalid");
   const derived = workflowPrefill(definition, source), values = {};
   for (const field of definition.fields) {
-    const value = input[field.id]; requireValue(text(value, field.maxLength) && (!field.required || value.trim()) && (field.type !== "choice" || value === "" && !field.required || field.choices.includes(value)) && (!field.source || field.source.startsWith("reservation.") || value === derived[field.id]), "workflow_values_invalid"); values[field.id] = value;
+    const value = input[field.id]; requireValue(text(value, field.maxLength) && (!field.required || value.trim()) && (field.type !== "choice" || value === "" && !field.required || field.choices.includes(value)) && (workflowEditable(field) || value === derived[field.id]), "workflow_values_invalid"); values[field.id] = value;
   }
   const output = definition.template.replace(/{{([a-z][a-z0-9_]{0,63})}}/g, (_, key) => values[key]);
   requireValue(output.trim() && output.length <= 4000 && encoder.encode(output).length <= 16000, "workflow_output_too_large");

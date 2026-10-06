@@ -3,7 +3,7 @@ import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-code
 import { lazyStream } from "@earendil-works/pi-ai/api/lazy";
 import { isRetryableAssistantError } from "@earendil-works/pi-ai/utils/retry";
 import { isContextOverflow } from "@earendil-works/pi-ai/utils/overflow";
-import { codexDiagnostic, codexHtmlError, reportCodexDiagnostic } from "./codex-http.js";
+import { codexDiagnostic, codexHtmlError, codexRequestShape, codexResponseShape, reportCodexDiagnostic } from "./codex-http.js";
 
 export function installSubscriptionModels(models, credentials, authorize = async () => {}, onDiagnostic) {
   const publicProvider = openaiProvider(), codex = openaiCodexProvider();
@@ -16,9 +16,14 @@ export function installSubscriptionModels(models, credentials, authorize = async
     if (provider.id === "openai-codex") for (const method of ["stream", "streamSimple"]) {
       const stream = provider[method];
       provider[method] = (model, context, options) => {
-        let diagnostic;
-        const source = stream(model, context, { ...options, transport: "sse", onResponse: async (info, responseModel) => {
-          diagnostic = codexDiagnostic("inference", info);
+        let diagnostic, requestShape, responseShape;
+        const source = stream(model, context, { ...options, transport: "sse", fetch: async (...args) => {
+          requestShape = codexRequestShape(args[0], args[1], model.id);
+          const response = await (options?.fetch ?? globalThis.fetch)(...args);
+          responseShape = codexResponseShape(response);
+          return response;
+        }, onResponse: async (info, responseModel) => {
+          diagnostic = { ...codexDiagnostic("inference", info), requestShape, responseShape };
           await reportCodexDiagnostic(onDiagnostic, diagnostic);
           await options?.onResponse?.(info, responseModel);
         } });
@@ -28,8 +33,8 @@ export function installSubscriptionModels(models, credentials, authorize = async
               for await (const event of source) {
                 if (event.type === "error") {
                   if (codexHtmlError(event.error.errorMessage)) {
-                    if (diagnostic?.category !== "upstream_blocked") {
-                      diagnostic = { ...codexDiagnostic("inference", { status: diagnostic?.status, headers: { "content-type": "text/html" } }), ...diagnostic, category: "upstream_blocked", contentType: "html" };
+                    if (diagnostic?.errorBodyFormat !== "html") {
+                      diagnostic = { ...codexDiagnostic("inference", { status: diagnostic?.status }), ...diagnostic, errorBodyFormat: "html" };
                       await reportCodexDiagnostic(onDiagnostic, diagnostic);
                     }
                     const retryable = isRetryableAssistantError(event.error), overflow = isContextOverflow(event.error);
