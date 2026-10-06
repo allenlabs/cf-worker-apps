@@ -27,3 +27,11 @@ For subscription images, set `IMAGE_ENABLED=true`, `IMAGE_PROVIDER=codex`, `IMAG
 Sources: [Codex images](https://learn.chatgpt.com/docs/image-generation), [SIWC inference endpoints](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference). These endpoints use different authorization profiles.
 
 Focused checks: `npm run pi-mcp-check`, `npm run image-check`, `npm run codex-images-check`. The MCP check uses the installed SDK with native Worker service bindings and the typed Gateway/backend helpers; the deployed Gateway must additionally verify its installed legacy server adapter. Image checks use native Durable Object/R2 storage and a synthetic transport. Neither check proves live provider access.
+
+## Verification record — 2026-10-06
+
+- A hosted staff root received an automatic workflow reply. The committed transcript contained `activate_skill(announcement-review)`; the reply preserved unapproved/unpublished status while drafting the requested translation.
+- A signed App command in that same root committed real `search_visit_patients` and `get_visit_context` tool calls through the hosted Gateway. It returned 20 synthetic visit records. The backend bounds the returned list to 20; this is a returned-row count, not a complete lifetime visit count.
+- A separate synthetic printer thread produced a triage/handoff reply that distinguished accepted ownership from verified resolution and preserved unknown deadlines. No people were invited or real equipment modified.
+- Hosted Codex device-code issuance succeeded. User login and a real subscription image remain unverified; native OAuth/JWKS, replay, storage and UI checks use mocked outbound endpoints.
+- Behavioral checks pass. Native coverage collection reports `Profiler is not enabled`; no numeric coverage result is claimed or threshold relaxed.
