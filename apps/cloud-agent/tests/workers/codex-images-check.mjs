@@ -133,7 +133,7 @@ try {
   await assert.rejects(codexImageRequest({ IMAGE_PROVIDER: "api" }, credential, "Fixture prompt"), /provider_disabled/); assert.equal(imageCalls, count);
   await assert.rejects(codexImageRequest({ IMAGE_PROVIDER: "codex" }, { ...credential, kind: "siwc" }, "Fixture prompt"), /image_auth_needed/);
   imageStatus = 403;
-  await assert.rejects(codexImageRequest({ IMAGE_PROVIDER: "codex" }, credential, "Fixture prompt"), /image_auth_needed/);
+  await assert.rejects(codexImageRequest({ IMAGE_PROVIDER: "codex" }, credential, "Fixture prompt"), /image_permission_denied/);
   imageStatus = 200; imageLarge = true;
   await assert.rejects(codexImageRequest({ IMAGE_PROVIDER: "codex" }, credential, "Fixture prompt"), /response_too_large/); imageLarge = false;
 

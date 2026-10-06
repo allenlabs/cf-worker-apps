@@ -31,7 +31,7 @@ The reusable [Visit Gateway](docs/VISIT_GATEWAY.md) provides a Channel ingress h
 
 - Each source root has its own Assistant Durable Object. Comments keep its account and Pi session. D1 persists the canonical Pi journal and transcript.
 - Credentials Durable Objects encrypt OAuth credentials and verified account metadata. An account inventory selects a fixed account or explicit round-robin allocation for new roots.
-- The SSO management page controls accounts, models, thinking levels, sessions and versioned text skills. Staff commands are limited to help, model and thinking, including Korean aliases.
+- The SSO management page controls accounts, models, thinking levels, sessions and versioned text skills. Staff commands are limited to help, model and thinking, including Korean aliases. The signed App panel also offers scoped image generation; ordinary staff requests can ask the chat model to generate an image through the same durable executor. See [staff workflows](docs/STAFF_WORKFLOWS.md) for caller gates, private assets, recovery and provider diagnostics.
 - Native Pi model-token totals are aggregated per account without counting replayed snapshots or cloned history twice. These are this server's measured tokens, not global subscription quota.
 - A dedicated GitHubAuthoring Durable Object keeps each SSO administrator’s repository draft separate. Its private Pi transcript is persisted in D1. GitHub tokens are selected-repository Contents-only, and the model stages files without a publication tool.
 - The [pstack hosted adapter](skills/pstack/README.md) is prepared and locally verified. It has not been installed into the production skill catalog.

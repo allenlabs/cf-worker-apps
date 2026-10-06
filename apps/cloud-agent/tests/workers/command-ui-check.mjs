@@ -5,6 +5,8 @@ import { aiPanel } from "../../../mcp-events/workers/api/command-view.js";
 
 const settings = { model: { id: "fixture-model" }, models: [{ id: "fixture-model", label: "기본" }], thinking: { value: "low" }, thinkingChoices: [{ value: "low", label: "낮음" }] };
 const calls = [], errors = []; let failOnce = false, rejectOnce = null, rejectDirectOnce = null;
+const image = { status: "ready", assetId: "11111111-1111-4111-8111-111111111111", url: "https://cloud.example.invalid/assets/11111111-1111-4111-8111-111111111111", mediaType: "image/png", bytes: 1234, width: 1536, height: 1024 };
+let imageReceipt = { status: "done", image, message: "이미지를 저장했습니다." };
 const console = new VirtualConsole(); console.on("jsdomError", error => errors.push(error));
 const dom = new JSDOM(aiPanel(), { runScripts: "dangerously", virtualConsole: console, beforeParse(window) {
   window.crypto.randomUUID = randomUUID;
@@ -14,11 +16,12 @@ const dom = new JSDOM(aiPanel(), { runScripts: "dangerously", virtualConsole: co
     if (rejectDirectOnce) { const message = rejectDirectOnce; rejectDirectOnce = null; throw Error(message); }
     if (rejectOnce) { const message = rejectOnce; rejectOnce = null; return { error: { message } }; }
     if (failOnce) { failOnce = false; throw Error("fixture_lost_response"); }
+    if (input.params.action === "image") return { result: structuredClone(imageReceipt) };
     return { result: input.params.action === "history" ? { status: "done", history: { complete: true, messages: [{ name: "Fixture manager", createdAt: "2026-01-01", text: "<img src=x onerror=alert(1)>" }] } } : { status: "done", message: input.params.action === "ask" ? "fixture answer" : "fixture help", settings, contextSource: input.params.contextSource } };
   } };
 } });
 const document = dom.window.document, get = id => document.getElementById(id);
-const until = async predicate => { for (let i = 0; i < 100; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 5)); } assert.fail("WAM did not settle"); };
+const until = async predicate => { for (let i = 0; i < 100; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 5)); } assert.fail("WAM did not settle: " + errors.map(error => error.message).join("; ")); };
 await until(() => get("state").textContent === "완료"); assert.equal(errors.length, 0, errors.map(error => error.message).join("\n"));
 assert.match(get("context").textContent, /명령 요청에서 스레드 원글/);
 assert.equal(get("model").value, "fixture-model"); assert.equal(get("thinking").value, "low");
@@ -27,6 +30,22 @@ for (const blank of ["", "   \n\t"]) {
   assert.equal(calls.length, before, "Blank Ask never calls the bridge"); assert.equal(get("state").textContent, "질문을 입력해 주세요."); assert.equal(document.activeElement, get("question")); assert.equal(get("retry").hidden, true);
   document.querySelector('[data-action="help"]').click(); await until(() => get("state").textContent === "완료"); assert.equal(calls.length, before + 1, "Help works after validation");
 }
+const imageButton = document.querySelector('[data-action="image"]'); assert.ok(imageButton, "WAM exposes an explicit image action");
+get("share-context").checked = true; get("share-context").dispatchEvent(new dom.window.Event("change")); get("shared-context").value = "PRIVATE-SHARED-CONTEXT-MARKER";
+for (const blank of ["", "   "] ) {
+  const before = calls.length; get("question").value = blank; imageButton.click(); assert.equal(calls.length, before, "Blank image descriptions never call the bridge"); assert.equal(document.activeElement, get("question")); assert.equal(get("retry").hidden, true);
+}
+get("question").value = "A synthetic teal circle"; failOnce = true; imageButton.click(); await until(() => !get("retry").hidden);
+const unknownImage = calls.at(-1).params; assert.equal(unknownImage.action, "image"); assert.equal(unknownImage.args, "A synthetic teal circle"); assert.ok(!Object.hasOwn(unknownImage, "contextSource")); assert.ok(!Object.hasOwn(unknownImage, "sharedContext"), "Images ignore source history and shared context");
+get("question").value = "A changed image draft"; get("shared-context").value = "Changed shared context"; get("retry").click(); await until(() => get("state").textContent === "완료"); assert.deepEqual(calls.at(-1).params, unknownImage, "Image retries preserve the original UUID and prompt");
+const imageResult = get("image-result"); assert.ok(imageResult); assert.equal(imageResult.hidden, false); assert.match(imageResult.textContent, /1536\s*[×xX]\s*1024/); assert.equal(imageResult.querySelector("img"), null, "SSO assets are separate-tab links, not cross-site img resources");
+const imageLink = imageResult.querySelector("a"); assert.ok(imageLink); assert.equal(imageLink.href, image.url); assert.equal(imageLink.target, "_blank"); assert.match(imageLink.rel, /noopener/); assert.match(imageLink.rel, /noreferrer/);
+for (const url of ["javascript:alert(1)", "http://cloud.example.invalid/assets/" + image.assetId, "https://user:password@cloud.example.invalid/assets/" + image.assetId, image.url + "?secret=x", image.url + "#secret", "https://cloud.example.invalid/other/" + image.assetId]) {
+  imageReceipt = { status: "done", image: { ...image, url } }; imageButton.click(); await until(() => get("state").textContent === "완료"); assert.equal(imageResult.querySelector("a"), null, "Only a clean HTTPS SSO asset path becomes a link"); assert.equal(imageResult.querySelector("img"), null);
+}
+imageReceipt = { status: "failed", error: "codex_image_http_403", image: { status: "failed", code: "codex_image_http_403", diagnostic: { phase: "image", status: 403, category: "upstream_blocked", contentType: "html", challenge: true, requestId: "fixture-request", rayId: "fixture-ray", body: "<img src=x onerror=alert(1)> PRIVATE-DIAGNOSTIC-BODY", authorization: "PRIVATE-DIAGNOSTIC-AUTH" } } };
+imageButton.click(); await until(() => get("state").className === "error"); assert.match(imageResult.textContent, /403/); assert.match(imageResult.textContent, /서비스 접근 차단/); assert.doesNotMatch(imageResult.textContent, /PRIVATE-DIAGNOSTIC|onerror/); assert.equal(imageResult.querySelector("img"), null, "Provider diagnostics are projected text, never HTML");
+imageReceipt = { status: "done", image, message: "이미지를 저장했습니다." }; get("share-context").checked = false; get("share-context").dispatchEvent(new dom.window.Event("change"));
 for (const action of ["history", "model"]) { document.querySelector('[data-action="'+action+'"]').click(); await until(() => get("state").textContent === "완료"); assert.equal(calls.at(-1).params.action, action); }
 get("question").value = "Corrected question"; document.querySelector('[data-action="ask"]').click(); await until(() => get("state").textContent === "완료"); assert.equal(calls.at(-1).params.args, "Corrected question");
 for (const direct of [false, true]) for (const code of ["command_question_required", "command_argument_invalid", "command_operation_invalid", "command_context_invalid"]) {
@@ -47,9 +66,9 @@ for (const uncertainCode of ["command_failed", "command_capability_expired_or_mi
 document.querySelector('[data-action="history"]').click(); await until(() => get("answer").textContent.includes("onerror")); assert.equal(get("answer").querySelector("img"), null, "History is rendered as text, not markup"); assert.match(get("answer").textContent, /조회했습니다\.\n\nFixture manager/);
 dom.window.close();
 const noRoot = new JSDOM(aiPanel(), { runScripts: "dangerously", beforeParse(window) { window.crypto.randomUUID = randomUUID; window.ChannelIOWam = { getWamData: key => ({ appId: "fixture", targetCapability: "fixture", rootAvailable: false })[key], setSize() {}, close() {}, callFunction: async () => ({ result: { status: "done", message: "Start in a thread" } }) }; } });
-await new Promise(resolve => setTimeout(resolve, 10)); assert.equal(noRoot.window.document.getElementById("question").disabled, true); assert.equal(noRoot.window.document.querySelector('[data-action="help"]').disabled, false); assert.equal(noRoot.window.document.querySelector('[data-action="history"]').disabled, true); noRoot.window.close();
+await new Promise(resolve => setTimeout(resolve, 10)); assert.equal(noRoot.window.document.getElementById("question").disabled, true); assert.equal(noRoot.window.document.querySelector('[data-action="help"]').disabled, false); assert.equal(noRoot.window.document.querySelector('[data-action="history"]').disabled, true); assert.equal(noRoot.window.document.querySelector('[data-action="image"]').disabled, true); noRoot.window.close();
 const hostCalls = [];
 const hostOnly = new JSDOM(aiPanel(), { runScripts: "dangerously", beforeParse(window) { window.crypto.randomUUID = randomUUID; window.ChannelIOWam = { getWamData: key => ({ appId: "fixture", targetCapability: "group-capability", rootAvailable: false, rootMessageId: "selected-root" })[key], setSize() {}, close() {}, async callFunction(input) { hostCalls.push(structuredClone(input)); return { result: input.name === "commands.ai.bindThread" ? { targetCapability: "thread-capability", rootAvailable: true, rootSource: "wam-selection" } : { status: "done", message: "fixture help", settings } }; } }; } });
 await until(() => hostOnly.window.document.getElementById("state").textContent === "완료"); assert.deepEqual(hostCalls.map(call => call.name), ["commands.ai.bindThread", "commands.ai.execute"]); assert.deepEqual(hostCalls[0].params, { targetCapability: "group-capability", rootMessageId: "selected-root" }); assert.equal(hostCalls[1].params.targetCapability, "thread-capability"); assert.equal(hostOnly.window.document.getElementById("question").disabled, false); assert.match(hostOnly.window.document.getElementById("context").textContent, /채널톡 화면에서 선택한 원글/); hostOnly.window.close();
 const unavailable = new JSDOM(aiPanel(), { runScripts: "dangerously" }); assert.match(unavailable.window.document.getElementById("context").textContent, /채널톡에서 \/ai/); assert.equal(unavailable.window.document.getElementById("question").disabled, true); unavailable.window.close();
-process.stdout.write("WAM UI checks passed: initialization, root badges, read-only missing root, safe text, retained draft, stable retry, explicit shared context, validation recovery, progress and quick actions.\n");
+process.stdout.write("WAM UI checks passed: initialization, root badges, read-only missing root, safe text, retained draft, stable retry, explicit shared context, validation recovery, progress, quick actions, explicit image isolation, image retry, actual dimensions, safe SSO links and projected diagnostics.\n");

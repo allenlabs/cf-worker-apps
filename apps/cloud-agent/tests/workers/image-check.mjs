@@ -25,11 +25,22 @@ export class ImageFixture extends DurableObject {
    await this.ctx.storage.put('image-job:'+await hash(JSON.stringify(['tenant-a',data.operationId])),{status:'dispatching',assetId:crypto.randomUUID(),tenantId:'tenant-a',promptDigest:await hash('Synthetic fixture')});
    return Response.json({seeded:true});
   }
+  if(data.seedLegacy) {
+   const hash=async value=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value)))].map(b=>b.toString(16).padStart(2,'0')).join('');
+   const assetId=crypto.randomUUID(),bytes=Uint8Array.from(atob(data.seedLegacy),char=>char.charCodeAt(0));
+   const objectKey='images/'+await hash('tenant-a')+'/'+assetId;
+   if(!data.seedMissingObject)await env.IMAGE_ASSETS.put(objectKey,bytes,{httpMetadata:{contentType:'image/png'},customMetadata:{tenantId:'tenant-a',assetId}});
+   await this.ctx.storage.put('image-job:'+await hash(JSON.stringify(['tenant-a',data.operationId])),{status:data.seedStatus??'ready',assetId,tenantId:'tenant-a',promptDigest:await hash('Synthetic fixture'),bytes:bytes.byteLength,mediaType:'image/png'});
+   return Response.json({assetId,objectKey});
+  }
   if(data.r2Failure) env.IMAGE_ASSETS={head:key=>this.env.IMAGE_ASSETS.head(key),put:async()=>{throw Error('PRIVATE-KEY-MARKER')}};
-  installImageTool({registry,env,ledger,resolveCaller:async(api,context)=>data.denied||context?.marker!=='native-context'?null:{tenantId:data.tenantId??'tenant-a',sourceOperationId:data.operationId??'source-a',explicitRequest:data.explicitRequest??'/image synthetic fixture'},generate:data.codexTransport?async({signal})=>{if(data.codexAuthFailure)throw Error('image_auth_needed');return fetch('https://codex-image.fixture.invalid/generate',{signal})}:undefined});
+  const caller={tenantId:data.tenantId??'tenant-a',sourceOperationId:data.operationId??'source-a',explicitRequest:data.explicitRequest??'/image synthetic fixture'};
+  const executeImage=installImageTool({registry,env,ledger,resolveCaller:async(api,context)=>{if(data.callerThrow)throw Error('PRIVATE-KEY-MARKER');return data.denied||context?.marker!=='native-context'?null:caller},generate:data.codexTransport?async({signal})=>{if(data.codexAuthFailure)throw Error('image_auth_needed');if(data.codexFailure){const error=Error(data.codexFailure.code);error.diagnostic=data.codexFailure.diagnostic;throw error;}return fetch('https://codex-image.fixture.invalid/generate',{signal})}:undefined});
   const tool=registry.snapshot().tools().find(row=>row.tool.name==='generate_image')?.tool;
   if(data.inspect) return Response.json(tool?{name:tool.name,replay:tool.replay,executionMode:tool.executionMode,parameters:tool.parameters}:null);
   if(data.asset) return serveImageAsset(new Request('https://image.fixture.invalid/assets/'+data.asset),env,'session' in data?data.session:{tenantId:data.tenantId??'tenant-a'});
+  if(data.direct) return Response.json(typeof executeImage==='function'?await executeImage(data.args??{prompt:'Synthetic fixture'},Object.hasOwn(data,'directCaller')?data.directCaller:caller,{abortSignal:controller.signal}):{missingExecutor:true});
+  if(data.readReceipt) return Response.json(typeof executeImage?.resultFor==='function'?await executeImage.resultFor(Object.hasOwn(data,'directCaller')?data.directCaller:caller):{missingReader:true});
   return Response.json(tool?await tool.execute(data.args??{prompt:'Synthetic fixture'}, {callId:data.callId??'call-a'}, {marker:'native-context',abortSignal:controller.signal}):{missing:true});
  }
 }
@@ -41,15 +52,25 @@ const pngChunk = (kind, data) => {
   let crc=0xffffffff; for(const byte of chunk.subarray(4,-4)){crc^=byte; for(let bit=0;bit<8;bit++)crc=(crc>>>1)^((crc&1)?0xedb88320:0);}
   chunk.writeUInt32BE((crc^0xffffffff)>>>0,chunk.length-4); return chunk;
 };
-const ihdr=Buffer.alloc(13); ihdr.writeUInt32BE(1024); ihdr.writeUInt32BE(1024,4); ihdr[8]=8;
-const png=Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),pngChunk('IHDR',ihdr),pngChunk('IDAT',deflateSync(Buffer.alloc(1025*1024))),pngChunk('IEND',Buffer.alloc(0))]);
+const pngFor=(width,height)=>{
+  const ihdr=Buffer.alloc(13); ihdr.writeUInt32BE(width); ihdr.writeUInt32BE(height,4); ihdr[8]=8;
+  return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),pngChunk('IHDR',ihdr),pngChunk('IDAT',deflateSync(Buffer.alloc((width+1)*height))),pngChunk('IEND',Buffer.alloc(0))]);
+};
+const png=pngFor(1024,1024), rectangularPng=pngFor(1536,1024);
+const webpFor=(width,height,canvas)=>{
+  const frame=Buffer.from(webp);frame.writeUInt16LE(width,26);frame.writeUInt16LE(height,28);
+  if(!canvas)return frame;
+  const extended=Buffer.alloc(18);extended.write('VP8X');extended.writeUInt32LE(10,4);extended.writeUIntLE(canvas[0]-1,12,3);extended.writeUIntLE(canvas[1]-1,15,3);
+  const value=Buffer.concat([frame.subarray(0,12),extended,frame.subarray(12)]);value.writeUInt32LE(value.length-8,4);return value;
+};
 let mode = "normal", calls = 0, codexCalls = 0;
 const outbound = async request => {
   calls++;
   if(request.url==='https://codex-image.fixture.invalid/generate') {
     codexCalls++;
     if(mode==='codex-auth') return new Response(null,{status:401});
-    const image=Buffer.from(png); if(mode==='png-wrong-size')image.writeUInt32BE(512,16);
+    const image=Buffer.from(mode==='png-non-square'?rectangularPng:png); if(mode==='png-zero-size')image.writeUInt32BE(0,16);
+    if(mode==='png-too-wide')image.writeUInt32BE(4097,16);
     if(mode==='png-magic')image[0]=0;
     return Response.json({data:[{b64_json:image.toString('base64')}],secret:'PRIVATE-KEY-MARKER'});
   }
@@ -64,7 +85,8 @@ const outbound = async request => {
   if (mode === "decoded-large") return Response.json({data:[{b64_json:Buffer.alloc(5*1024*1024+1).toString('base64')}]});
   if (mode === "redirect") return new Response(null,{status:302,headers:{location:'https://untrusted.invalid/image'}});
   if (mode === "bad-image") return Response.json({data:[{b64_json:Buffer.from('not webp').toString('base64')}]});
-  return Response.json({ data: [{ b64_json: Buffer.from(webp).toString("base64") }], secret: "PRIVATE-KEY-MARKER" });
+  const image=mode==='webp-non-square'?webpFor(1536,1024,[1536,1024]):mode==='webp-canvas-mismatch'?webpFor(512,1024,[1024,1024]):mode==='webp-too-wide'?webpFor(4097,1024):mode==='webp-zero-size'?webpFor(0,1024):Buffer.from(webp);
+  return Response.json({ data: [{ b64_json: image.toString("base64") }], secret: "PRIVATE-KEY-MARKER" });
 };
 const mf = new Miniflare(convertV4MiniflareOptions({
   name: "image-check", modulesRoot: directory, modules: [{type:"ESModule",path:bundle}], compatibilityDate:"2026-10-04",compatibilityFlags:["nodejs_compat"],
@@ -75,7 +97,7 @@ const invoke = body => mf.dispatchFetch("https://image.fixture.invalid/run",{met
 const run = async body => {
   const result=await (await invoke(body)).json();
   assert.doesNotMatch(JSON.stringify(result),/PRIVATE-KEY-MARKER|b64_json|synthetic-image-api-key/);
-  return result.content?JSON.parse(result.content[0].text):result;
+  return result?.content?JSON.parse(result.content[0].text):result;
 };
 try {
   const registration=await (await invoke({inspect:true})).json();
@@ -116,11 +138,48 @@ try {
   const pngAsset=await invoke({asset:pngResult.assetId}); assert.equal(pngAsset.headers.get('content-type'),'image/png'); assert.deepEqual(Buffer.from(await pngAsset.arrayBuffer()),png);
   const afterPng=calls; assert.deepEqual(await run({operationId:'codex-png',codexTransport:true,env:codexEnv}),pngResult); assert.equal(calls,afterPng);
   assert.equal((await run({operationId:'codex-no-profile',codexTransport:true,codexAuthFailure:true,env:codexEnv})).code,'image_auth_needed'); assert.equal(calls,afterPng);
-  for(const kind of ['codex-auth','png-wrong-size','png-magic']){mode=kind;const failed=await run({operationId:kind,codexTransport:true,env:codexEnv});assert.equal(failed.status,'failed');if(kind==='codex-auth')assert.equal(failed.code,'image_auth_needed');const before=calls;await run({operationId:kind,codexTransport:true,env:codexEnv});assert.equal(calls,before);}
+  mode='png-non-square';const rectangular=await run({operationId:'png-non-square',codexTransport:true,env:codexEnv});assert.equal(rectangular.status,'ready','A valid non-square PNG must survive image validation');assert.equal(rectangular.width,1536);assert.equal(rectangular.height,1024);
+  for(const kind of ['codex-auth','png-zero-size','png-too-wide','png-magic']){mode=kind;const failed=await run({operationId:kind,codexTransport:true,env:codexEnv});assert.equal(failed.status,'failed');if(kind==='codex-auth')assert.equal(failed.code,'image_auth_needed');const before=calls;await run({operationId:kind,codexTransport:true,env:codexEnv});assert.equal(calls,before);}
+  mode='webp-non-square';const rectangularWebp=await run({operationId:'webp-non-square'});assert.equal(rectangularWebp.status,'ready');assert.equal(rectangularWebp.width,1536);assert.equal(rectangularWebp.height,1024);
+  for(const kind of ['webp-canvas-mismatch','webp-zero-size','webp-too-wide']){mode=kind;assert.equal((await run({operationId:kind})).status,'failed',kind+' must be rejected');}
   mode='normal'; const beforeInjectedApi=codexCalls; assert.equal((await run({operationId:'api-injection',codexTransport:true})).mediaType,'image/webp'); assert.equal(codexCalls,beforeInjectedApi,'API mode must ignore an injected Codex transport');
   const beforeAbort=calls; assert.equal((await run({operationId:'abort-after-claim',abortAfterClaim:true})).status,'unknown'); assert.equal(calls,beforeAbort,'Cancellation after durable claim must not dispatch generation');
   assert.equal((await run({operationId:'abort-after-claim'})).status,'unknown'); assert.equal(calls,beforeAbort,'A cancelled durable claim must never replay generation');
-  const bucket=await mf.getR2Bucket('IMAGE_ASSETS'); const stored=await bucket.list(); assert.equal(stored.objects.length,5);
+  const beforeDirect=calls;const direct=await run({direct:true,callerThrow:true,operationId:'direct'});assert.equal(direct.status,'ready','The server executor must not need a Pi caller');assert.equal(calls,beforeDirect+1);
+  assert.deepEqual(await run({operationId:'direct'}),direct);assert.equal(calls,beforeDirect+1,'Pi and direct calls must share the source job');
+  assert.equal((await run({direct:true,directCaller:null,operationId:'denied-direct'})).code,'image_caller_denied');
+  assert.equal((await run({direct:true,operationId:'paid-direct',env:{IMAGE_PAID_APPROVED:'false'}})).code,'image_not_configured');
+  assert.equal((await run({callerThrow:true,operationId:'caller-throws'})).code,'image_caller_denied');assert.equal(calls,beforeDirect+1);
+  const permissionDiagnostic={phase:'image',status:403,category:'permission_denied',contentType:'json',requestId:'fixture-request',rayId:null,challenge:false};
+  const rejected=await run({operationId:'codex-permission',codexTransport:true,env:codexEnv,codexFailure:{code:'image_permission_denied',diagnostic:{...permissionDiagnostic,rawBody:'PRIVATE-KEY-MARKER',authorization:'PRIVATE-KEY-MARKER'}}});
+  assert.equal(rejected.status,'failed');assert.equal(rejected.code,'image_permission_denied');assert.deepEqual(rejected.diagnostic,permissionDiagnostic,'Only bounded provider diagnostics may enter image receipts');
+  assert.deepEqual(await run({operationId:'codex-permission',codexTransport:true,env:codexEnv}),rejected);assert.equal(calls,beforeDirect+1,'Known permission denial must not replay generation');
+  const blockedDiagnostic={...permissionDiagnostic,category:'upstream_blocked',contentType:'html',rayId:'fixture-ray',challenge:true};
+  const blocked=await run({operationId:'codex-blocked',codexTransport:true,env:codexEnv,codexFailure:{code:'image_upstream_blocked',diagnostic:blockedDiagnostic}});assert.equal(blocked.status,'failed');assert.equal(blocked.code,'image_upstream_blocked');assert.deepEqual(blocked.diagnostic,blockedDiagnostic);
+  const unavailableDiagnostic={...permissionDiagnostic,status:503,category:'upstream_error'};
+  const unavailable=await run({operationId:'codex-unavailable',codexTransport:true,env:codexEnv,codexFailure:{code:'codex_image_http_503',diagnostic:unavailableDiagnostic}});assert.equal(unavailable.status,'unknown');assert.equal(unavailable.code,'codex_image_http_503');assert.deepEqual(unavailable.diagnostic,unavailableDiagnostic);
+  const malformed=await run({operationId:'codex-malformed-diagnostic',codexTransport:true,env:codexEnv,codexFailure:{code:'PRIVATE-KEY-MARKER',diagnostic:{...permissionDiagnostic,requestId:'https://credential.invalid/PRIVATE-KEY-MARKER'}}});assert.equal(malformed.code,'image_generation_unknown');assert.equal(malformed.diagnostic,undefined);
+  const beforeReads=calls;assert.deepEqual(await run({readReceipt:true,operationId:'direct'}),direct,'A Pi answer must be able to retrieve its image receipt without dispatch');
+  assert.equal(await run({readReceipt:true,operationId:'never-generated'}),null);assert.equal(calls,beforeReads);
+  assert.equal(await run({readReceipt:true,operationId:'disabled-never-generated',env:{IMAGE_ENABLED:'false',IMAGE_ASSETS:null}}),null,'An ordinary Ask without an image job must not report disabled images');
+  assert.equal((await run({readReceipt:true,directCaller:{tenantId:'tenant-b',sourceOperationId:'direct'}})).code,'image_caller_denied');assert.equal(calls,beforeReads);
+  assert.deepEqual(await run({readReceipt:true,operationId:'restart-intent'}),{status:'unknown',code:'image_generation_unknown'});assert.equal(calls,beforeReads,'A receipt read may not dispatch a claimed generation');
+  const natural=await run({direct:true,operationId:'natural-image',explicitRequest:'홈페이지에 사용할 이미지를 만들어 줘'});assert.equal(natural.status,'ready','A current explicit image creation request may have a purpose prefix');
+  for(const [operationId,explicitRequest] of [['natural-korean-draw','파란 나침반을 그려줘'],['natural-english-draw','draw a blue compass']])assert.equal((await run({direct:true,operationId,explicitRequest})).status,'ready','An explicit draw imperative need not say image');
+  const beforeMentions=calls;
+  for(const explicitRequest of ['이미지 관련 내용을 설명해 줘','직원이 "홈페이지에 사용할 이미지를 만들어 줘"라고 썼어. 내용을 설명해 줘.','이미지를 만들어 주지 말고 설명해 줘','이미지 만들지 말고 홈페이지에 사용할 이미지를 만들어 줘','이전 대화:\n이미지를 만들어줘'])assert.equal((await run({direct:true,operationId:'mention-'+beforeMentions,explicitRequest})).code,'image_explicit_request_required');
+  assert.equal(calls,beforeMentions,'Mentioned or quoted image requests must not dispatch generation');
+  const bucket=await mf.getR2Bucket('IMAGE_ASSETS');
+  for(const state of ['ready','unknown']) {
+    const legacy=await (await invoke({seedLegacy:rectangularPng.toString('base64'),seedStatus:state,operationId:'legacy-'+state})).json();const previous=await bucket.head(legacy.objectKey),beforeRecovery=calls;
+    const restored=await run({readReceipt:true,operationId:'legacy-'+state});assert.equal(restored.status,'ready');assert.equal(restored.assetId,legacy.assetId);assert.equal(restored.width,1536);assert.equal(restored.height,1024);assert.equal(calls,beforeRecovery,'Legacy recovery must read stored bytes without regenerating');
+    const current=await bucket.head(legacy.objectKey);assert.equal(current.etag,previous.etag);assert.equal(current.uploaded.getTime(),previous.uploaded.getTime());assert.equal(current.customMetadata.width,undefined,'Recovery must not overwrite an existing asset');
+  }
+  const invalidLegacy=Buffer.from(rectangularPng);invalidLegacy[0]=0;
+  await invoke({seedLegacy:invalidLegacy.toString('base64'),seedStatus:'unknown',operationId:'legacy-invalid'});const beforeInvalidRecovery=calls;assert.equal((await run({operationId:'legacy-invalid'})).code,'image_response_invalid');assert.equal(calls,beforeInvalidRecovery);
+  await invoke({seedLegacy:rectangularPng.toString('base64'),seedMissingObject:true,operationId:'legacy-missing'});assert.equal((await run({readReceipt:true,operationId:'legacy-missing'})).code,'image_response_invalid','A legacy ready row needs real bytes before it can report dimensions');assert.equal(calls,beforeInvalidRecovery);
+  const stored=await bucket.list();assert.equal(stored.objects.length,14);
+  const rectangularObject=await bucket.get(stored.objects.find(object=>object.key.endsWith('/'+rectangular.assetId)).key);assert.equal(rectangularObject.customMetadata.width,'1536');assert.equal(rectangularObject.customMetadata.height,'1024');
   const rows=await (await invoke({ledger:true})).json(); assert.doesNotMatch(JSON.stringify(rows),/Synthetic fixture|b64_json|synthetic-image-api-key|PRIVATE-KEY-MARKER/);
   console.log('Image registry, PNG/WebP bounds, provider isolation, paid-call dedupe, unknown recovery and native private R2 tenancy checks passed.');
 } finally {await mf.dispose(); await rm(directory,{recursive:true,force:true});}

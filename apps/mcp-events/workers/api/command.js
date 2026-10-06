@@ -8,7 +8,7 @@ const requireValue = (ok, code) => { if (!ok) throw new Error(code); };
 const object = value => value && typeof value === "object" && !Array.isArray(value);
 const actionSchema = { type: "object", properties: { chat: { type: "object", properties: { type: { type: "string" }, id: { type: "string" } }, required: ["type", "id"] }, trigger: { type: "object", additionalProperties: true }, input: { type: "object", additionalProperties: true }, language: { type: "string" } }, additionalProperties: false };
 const bindSchema = { type: "object", properties: { targetCapability: { type: "string" }, rootMessageId: { type: "string", maxLength: 255 } }, required: ["targetCapability", "rootMessageId"], additionalProperties: false };
-const operationSchema = { type: "object", properties: { targetCapability: { type: "string" }, operationId: { type: "string", format: "uuid" }, action: { type: "string", enum: ["help", "model", "thinking", "ask", "history"] }, args: { type: "string", maxLength: 8000 }, contextSource: { type: "string", enum: ["api", "shared"] }, sharedContext: { type: "string", maxLength: 32768 } }, required: ["targetCapability", "operationId", "action", "args"], additionalProperties: false };
+const operationSchema = { type: "object", properties: { targetCapability: { type: "string" }, operationId: { type: "string", format: "uuid" }, action: { type: "string", enum: ["help", "model", "thinking", "ask", "history", "image"] }, args: { type: "string", maxLength: 8000 }, contextSource: { type: "string", enum: ["api", "shared"] }, sharedContext: { type: "string", maxLength: 32768 } }, required: ["targetCapability", "operationId", "action", "args"], additionalProperties: false };
 const visitSchema = { type: "object", properties: { targetCapability: { type: "string" }, action: { type: "string", enum: ["patientSearch", "visitSelect", "draft"] }, query: { type: "string", maxLength: 64 }, patientId: { type: "string", format: "uuid" }, visitId: { type: ["string", "null"], format: "uuid" }, fields: { type: "object", properties: { kind: { type: "string", enum: ["arrival", "treatment"] }, concernArea: { type: "string", maxLength: 200 }, revision: { type: "string", enum: ["unknown", "yes", "no"] }, schedulingExceptions: { type: "string", maxLength: 500 }, externalNameChecked: { type: "string", enum: ["unknown", "yes", "no"] } }, required: ["kind", "concernArea", "revision", "schedulingExceptions", "externalNameChecked"], additionalProperties: false } }, required: ["targetCapability", "action"], additionalProperties: false };
 export const commandFunctions = [
   { name: "extension.command.metadata.getCommands", inputSchema: { type: "object", properties: {}, additionalProperties: false }, outputSchema: { type: "object", properties: { commands: { type: "array", items: { type: "object", additionalProperties: true } } }, required: ["commands"] } },
@@ -45,7 +45,7 @@ export async function commandFunction(input, env) {
   requireValue(object(params), "command_parameters_invalid");
   if (input.method === "extension.command.metadata.getCommands") {
     requireValue(Object.keys(params).length === 0, "command_parameters_invalid");
-    return { commands: [{ name: "ai", scope: "desk", description: "이 스레드의 AI 질문·대화 이력·모델·생각 수준", actionFunctionName: "commands.ai.open", systemVersion: "v1", alfMode: "disable", enabledByDefault: true }] };
+    return { commands: [{ name: "ai", scope: "desk", description: "이 스레드의 AI 질문·이미지·대화 이력·모델·생각 수준", actionFunctionName: "commands.ai.open", systemVersion: "v1", alfMode: "disable", enabledByDefault: true }] };
   }
   if (input.method === "commands.ai.open") {
     requireValue(Object.keys(params).every(name => Object.hasOwn(actionSchema.properties, name)) && ["group", "groupChat"].includes(params.chat?.type) && sourceId(params.chat.id), "command_group_required");
@@ -75,7 +75,7 @@ export async function commandFunction(input, env) {
     }
     return visitOutputSize(visitResult(result, visit));
   }
-  requireValue(Object.keys(params).every(name => Object.hasOwn(operationSchema.properties, name)) && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(params.operationId) && ["help", "model", "thinking", "ask", "history"].includes(params.action) && typeof params.args === "string" && encoder.encode(params.args).length <= 8000 && !params.args.includes("\0"), "command_operation_invalid");
+  requireValue(Object.keys(params).every(name => Object.hasOwn(operationSchema.properties, name)) && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(params.operationId) && ["help", "model", "thinking", "ask", "history", "image"].includes(params.action) && typeof params.args === "string" && encoder.encode(params.args).length <= 8000 && !params.args.includes("\0"), "command_operation_invalid");
   const target = await verify(params.targetCapability, input.context, env);
   if (!target.rootMessageId) {
     requireValue(params.action === "help" && !params.args, "command_thread_required");

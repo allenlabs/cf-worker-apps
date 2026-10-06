@@ -1,3 +1,5 @@
+import { codexDiagnostic, codexHtmlError, reportCodexDiagnostic } from "./codex-http.js";
+
 const ISSUER = "https://auth.openai.com";
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const IMAGE_ENDPOINT = "https://chatgpt.com/backend-api/codex/images/generations";
@@ -216,17 +218,30 @@ export function codexImageDisconnect(owner, all = false) {
   });
 }
 
-export async function codexImageRequest(env, profile, prompt, signal) {
+export async function codexImageRequest(env, profile, prompt, signal, onDiagnostic) {
   check(env.IMAGE_PROVIDER === "codex", "codex_image_provider_disabled");
   check(typeof prompt === "string" && prompt.trim() && encoder.encode(prompt).length <= 16384, "codex_image_prompt_invalid");
   check(profile?.kind === "codex_image_v1" && text(profile.clientId, 255) && text(profile.access) && !profile.access.startsWith("sk-") && text(profile.accountId, 256), "image_auth_needed");
   const { access, accountId } = profile;
   const response = await fetch(IMAGE_ENDPOINT, { method: "POST", redirect: "manual", signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(120000)]) : AbortSignal.timeout(120000), headers: { authorization: `Bearer ${access}`, "ChatGPT-Account-ID": accountId, "content-type": "application/json", accept: "application/json", originator: "cloud-agent", "user-agent": "cloud-agent/1", "x-codex-image-turn-id": crypto.randomUUID() }, body: JSON.stringify({ model: "gpt-image-2", prompt, n: 1, quality: "low", size: "1024x1024", background: "opaque" }) });
-  check(response.ok, [401, 403].includes(response.status) ? "image_auth_needed" : `codex_image_http_${response.status}`);
+  let diagnostic = codexDiagnostic("image", response);
+  await reportCodexDiagnostic(onDiagnostic, diagnostic);
+  if (!response.ok || diagnostic.category === "upstream_blocked") {
+    const bytes = await bounded(response, 128 * 1024);
+    const body = new TextDecoder().decode(bytes);
+    let structured = false;
+    try { const value = JSON.parse(body); structured = value && typeof value === "object" && !Array.isArray(value); } catch { }
+    let revised = diagnostic;
+    if (codexHtmlError(body) && diagnostic.category !== "upstream_blocked") revised = { ...diagnostic, contentType: "html", category: "upstream_blocked" };
+    else if (!structured && ["auth_required", "permission_denied"].includes(diagnostic.category)) revised = { ...diagnostic, category: "invalid_response" };
+    if (revised !== diagnostic) { diagnostic = revised; await reportCodexDiagnostic(onDiagnostic, diagnostic); }
+    const code = diagnostic.category === "upstream_blocked" ? "image_upstream_blocked" : diagnostic.category === "auth_required" ? "image_auth_needed" : diagnostic.category === "permission_denied" ? "image_permission_denied" : `codex_image_http_${response.status}`;
+    throw Object.assign(new Error(code), { diagnostic });
+  }
   const bytes = await bounded(response, MAX_RESPONSE);
   const headers = { "content-type": "application/json" };
   const requestId = response.headers.get("x-codex-imagegen-request-id");
-  if (requestId) headers["x-codex-imagegen-request-id"] = requestId;
+  if (requestId && requestId === diagnostic.requestId) headers["x-codex-imagegen-request-id"] = requestId;
   return new Response(bytes, { status: response.status, headers });
 }
 
