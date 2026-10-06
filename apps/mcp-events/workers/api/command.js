@@ -1,5 +1,6 @@
 import { commandAllowed, sourceId, sourceThreadKey } from "../../../cloud-agent/workers/pi/source-history.js";
 import { aiPanel } from "./command-view.js";
+import { visitInput, visitJson, visitOutputSize, visitResult } from "../../../cloud-agent/workers/visit/contract.js";
 const encoder = new TextEncoder();
 const b64 = bytes => btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
 const unb64 = text => Uint8Array.from(atob(text.replaceAll("-", "+").replaceAll("_", "/")), value => value.charCodeAt(0));
@@ -8,10 +9,12 @@ const object = value => value && typeof value === "object" && !Array.isArray(val
 const actionSchema = { type: "object", properties: { chat: { type: "object", properties: { type: { type: "string" }, id: { type: "string" } }, required: ["type", "id"] }, trigger: { type: "object", additionalProperties: true }, input: { type: "object", additionalProperties: true }, language: { type: "string" } }, additionalProperties: false };
 const bindSchema = { type: "object", properties: { targetCapability: { type: "string" }, rootMessageId: { type: "string", maxLength: 255 } }, required: ["targetCapability", "rootMessageId"], additionalProperties: false };
 const operationSchema = { type: "object", properties: { targetCapability: { type: "string" }, operationId: { type: "string", format: "uuid" }, action: { type: "string", enum: ["help", "model", "thinking", "ask", "history"] }, args: { type: "string", maxLength: 8000 }, contextSource: { type: "string", enum: ["api", "shared"] }, sharedContext: { type: "string", maxLength: 32768 } }, required: ["targetCapability", "operationId", "action", "args"], additionalProperties: false };
+const visitSchema = { type: "object", properties: { targetCapability: { type: "string" }, action: { type: "string", enum: ["patientSearch", "visitSelect", "draft"] }, query: { type: "string", maxLength: 64 }, patientId: { type: "string", format: "uuid" }, visitId: { type: ["string", "null"], format: "uuid" }, fields: { type: "object", properties: { kind: { type: "string", enum: ["arrival", "treatment"] }, concernArea: { type: "string", maxLength: 200 }, revision: { type: "string", enum: ["unknown", "yes", "no"] }, schedulingExceptions: { type: "string", maxLength: 500 }, externalNameChecked: { type: "string", enum: ["unknown", "yes", "no"] } }, required: ["kind", "concernArea", "revision", "schedulingExceptions", "externalNameChecked"], additionalProperties: false } }, required: ["targetCapability", "action"], additionalProperties: false };
 export const commandFunctions = [
   { name: "extension.command.metadata.getCommands", inputSchema: { type: "object", properties: {}, additionalProperties: false }, outputSchema: { type: "object", properties: { commands: { type: "array", items: { type: "object", additionalProperties: true } } }, required: ["commands"] } },
   { name: "commands.ai.open", inputSchema: actionSchema, outputSchema: { type: "object", properties: { type: { type: "string" }, attributes: { type: "object", additionalProperties: true } }, required: ["type"] } },
   { name: "commands.ai.bindThread", inputSchema: bindSchema, outputSchema: { type: "object", additionalProperties: true } },
+  { name: "commands.ai.visit", inputSchema: visitSchema, outputSchema: { type: "object", additionalProperties: true } },
   ...["execute", "status"].map(name => ({ name: `commands.ai.${name}`, inputSchema: operationSchema, outputSchema: { type: "object", additionalProperties: true } }))
 ];
 function caller(context, env) {
@@ -56,6 +59,24 @@ export async function commandFunction(input, env) {
     const target = await verify(params.targetCapability, input.context, env);
     requireValue(target.rootMessageId === undefined || target.rootMessageId === params.rootMessageId, "command_root_retarget_denied");
     return { targetCapability: await capability({ ...target, rootMessageId: params.rootMessageId }, env), rootAvailable: true, rootSource: target.rootMessageId === undefined ? "wam-selection" : "bound" };
+  }
+  if (input.method === "commands.ai.visit") {
+    const { targetCapability, ...value } = params, visit = visitInput(value);
+    const target = await verify(targetCapability, input.context, env);
+    requireValue(target.rootMessageId, "command_thread_required");
+    requireValue(env.VISIT_API && typeof env.VISIT_SERVICE_TOKEN === "string" && env.VISIT_SERVICE_TOKEN.length >= 32, "visit_not_configured");
+    const resolved = { channelId: target.channelId, groupId: target.groupId, rootMessageId: target.rootMessageId, managerId: target.managerId };
+    let response;
+    try { response = await env.VISIT_API.fetch("https://visit.internal/read", { method: "POST", redirect: "manual", signal: AbortSignal.timeout(15000), headers: { "content-type": "application/json", authorization: "Bearer " + env.VISIT_SERVICE_TOKEN }, body: JSON.stringify({ target: resolved, input: visit }) }); }
+    catch { throw Error("visit_backend_unavailable"); }
+    const result = await visitJson(response);
+    if (!response.ok) {
+      const errors = ["visit_input_invalid", "visit_target_invalid", "visit_selection_required", "visit_not_configured", "visit_record_denied", "visit_not_found_for_patient", "visit_backend_unavailable", "visit_response_invalid", "visit_response_too_large"];
+      throw Error(errors.includes(result.error) ? result.error : "visit_backend_unavailable");
+    }
+    if (visit.action !== "draft") return visitResult(result, visit);
+    requireValue(object(result) && ["test", "live"].includes(result.mode) && result.kind === "draft" && object(result.draft) && typeof result.draft.text === "string" && result.draft.text.length <= 4000 && !result.draft.text.includes("\0") && Array.isArray(result.draft.missingFields) && result.draft.missingFields.length <= 4 && new Set(result.draft.missingFields).size === result.draft.missingFields.length && result.draft.missingFields.every(field => ["concernArea", "revision", "schedulingExceptions", "externalNameChecked"].includes(field)) && typeof result.draft.ready === "boolean" && result.draft.ready === (result.draft.missingFields.length === 0) && typeof result.observedAt === "string" && Number.isFinite(Date.parse(result.observedAt)), "visit_response_invalid");
+    return visitOutputSize({ mode: result.mode, kind: "draft", draft: { text: result.draft.text, missingFields: result.draft.missingFields, ready: result.draft.ready }, observedAt: result.observedAt });
   }
   requireValue(Object.keys(params).every(name => Object.hasOwn(operationSchema.properties, name)) && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(params.operationId) && ["help", "model", "thinking", "ask", "history"].includes(params.action) && typeof params.args === "string" && encoder.encode(params.args).length <= 8000 && !params.args.includes("\0"), "command_operation_invalid");
   const target = await verify(params.targetCapability, input.context, env);

@@ -7,15 +7,15 @@
     "node": ">=24"
   },
   "scripts": {
-    "build": "npm run build:pi && npm run build:events",
+    "build": "npm run build:pi && npm run build:events && npm run build:visit",
     "build:pi": "node scripts/build.mjs pi",
     "build:events": "node scripts/build.mjs events",
     "check": "node tests/workers/check.mjs",
     "auth-check": "node tests/workers/auth-check.mjs",
     "admin-check": "node tests/workers/admin-check.mjs",
-    "test": "npm run build && npm run check && npm run auth-check && npm run admin-check && npm run control-check && npm run github-check && npm run storage-check && npm run manager-check && npm run admin-ui-check && npm run command-check && npm run command-ui-check",
-    "test:coverage": "npm run build && npm run check && npm run auth-check && npm run control-check && npm run github-check && npm run storage-check && npm run manager-check && npm run admin-ui-check && npm run command-check && npm run command-ui-check && node tests/workers/admin-check.mjs --coverage",
-    "typecheck": "node --check workers/pi/index.js && node --check workers/pi/admin.js && node --check scripts/build.mjs && node --check tests/workers/check.mjs && node --check tests/workers/auth-check.mjs && node --check tests/workers/admin-check.mjs && node --check tests/workers/control-check.mjs && node --check workers/pi/github.js && node --check workers/pi/github-admin.js && node --check tests/workers/github-check.mjs && node --check workers/pi/github-authoring.js && node --check workers/pi/conversation-store.js && node --check workers/pi/pi-journal.js && node --check workers/pi/manager-directory.js && node --check tests/workers/storage-check.mjs && node --check tests/workers/pi-modules.mjs && node --check workers/pi/admin-view.js && node --check tests/workers/manager-check.mjs && node --check tests/workers/admin-ui-check.mjs && node --check workers/pi/source-history.js && node --check tests/workers/command-check.mjs && node --check ../mcp-events/workers/api/command.js && node --check ../mcp-events/workers/api/command-view.js && node --check tests/workers/command-ui-check.mjs",
+    "test": "npm run build && npm run check && npm run auth-check && npm run admin-check && npm run control-check && npm run github-check && npm run storage-check && npm run manager-check && npm run admin-ui-check && npm run command-check && npm run command-ui-check && npm run visit-check && npm run visit-ui-check",
+    "test:coverage": "npm run build && npm run check && npm run auth-check && npm run control-check && npm run github-check && npm run storage-check && npm run manager-check && npm run admin-ui-check && npm run command-check && npm run command-ui-check && npm run visit-check && npm run visit-ui-check && node tests/workers/admin-check.mjs --coverage",
+    "typecheck": "node --check workers/pi/index.js && node --check workers/pi/admin.js && node --check scripts/build.mjs && node --check tests/workers/check.mjs && node --check tests/workers/auth-check.mjs && node --check tests/workers/admin-check.mjs && node --check tests/workers/control-check.mjs && node --check workers/pi/github.js && node --check workers/pi/github-admin.js && node --check tests/workers/github-check.mjs && node --check workers/pi/github-authoring.js && node --check workers/pi/conversation-store.js && node --check workers/pi/pi-journal.js && node --check workers/pi/manager-directory.js && node --check tests/workers/storage-check.mjs && node --check tests/workers/pi-modules.mjs && node --check workers/pi/admin-view.js && node --check tests/workers/manager-check.mjs && node --check tests/workers/admin-ui-check.mjs && node --check workers/pi/source-history.js && node --check tests/workers/command-check.mjs && node --check ../mcp-events/workers/api/command.js && node --check ../mcp-events/workers/api/command-view.js && node --check tests/workers/command-ui-check.mjs && node --check workers/visit/index.js && node --check workers/visit/contract.js && node --check ../mcp-events/workers/api/visit-view.js && node --check tests/workers/visit-check.mjs && node --check tests/workers/visit-ui-check.mjs",
     "dev": "wrangler dev --config workers/pi/wrangler.jsonc",
     "deploy": "wrangler deploy --config workers/pi/wrangler.jsonc",
     "control-check": "node tests/workers/control-check.mjs",
@@ -24,7 +24,10 @@
     "manager-check": "node tests/workers/manager-check.mjs",
     "admin-ui-check": "node tests/workers/admin-ui-check.mjs",
     "command-check": "node tests/workers/command-check.mjs",
-    "command-ui-check": "node tests/workers/command-ui-check.mjs"
+    "command-ui-check": "node tests/workers/command-ui-check.mjs",
+    "build:visit": "node scripts/build.mjs visit",
+    "visit-check": "node tests/workers/visit-check.mjs",
+    "visit-ui-check": "node tests/workers/visit-ui-check.mjs"
   },
   "dependencies": {
     "agents": "0.26.0",

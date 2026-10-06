@@ -23,6 +23,8 @@ node apps/cloud-agent/skills/pstack/check.mjs --implementation-root apps/cloud-a
 
 Read [the formal Channel Talk Command and API history](docs/CHANNEL_COMMAND.md) for the separate signed `/ai` WAM, explicit context sharing and current private-history limitations.
 
+The separate [visit read/draft workflow](docs/VISIT_WORKFLOW.md) adds explicit patient/visit selection and deterministic handoff drafts in the WAM. Its private service binding and typed business RPC require installation-specific staff/site authorization; this path has no model, clinical transcript or message-send effects.
+
 ## Runtime and administration
 
 - Each source root has its own Assistant Durable Object. Comments keep its account and Pi session. D1 persists the canonical Pi journal and transcript.

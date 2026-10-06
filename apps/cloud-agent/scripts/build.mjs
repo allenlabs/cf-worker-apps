@@ -5,8 +5,8 @@ import { fileURLToPath } from "node:url";
 
 const app = fileURLToPath(new URL("../", import.meta.url));
 const worker = process.argv[2];
-const configs = { pi: "workers/pi/wrangler.jsonc", events: "../mcp-events/workers/api/wrangler.toml" };
-if (!Object.hasOwn(configs, worker)) throw Error("Choose pi or events.");
+const configs = { pi: "workers/pi/wrangler.jsonc", events: "../mcp-events/workers/api/wrangler.toml", visit: "workers/visit/wrangler.jsonc" };
+if (!Object.hasOwn(configs, worker)) throw Error("Choose pi, events or visit.");
 const require = createRequire(import.meta.url);
 const manifest = require.resolve("wrangler/package.json");
 const wrangler = join(dirname(manifest), require(manifest).bin.wrangler);
