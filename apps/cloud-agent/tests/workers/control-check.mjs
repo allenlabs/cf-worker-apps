@@ -42,6 +42,7 @@ export class Assistant extends BaseAssistant {
     const path=new URL(request.url).pathname;
     if(path==='/admit')return Response.json(await this.acceptChannel(await request.json()));
     if(path==='/state'){await this.lifecycle.start();return Response.json({...await this.channelHistory(),modelCalls:this.faux.state.callCount,queue:await this.getQueues(),pending:await this.harness.pending()});}
+    if(path==='/workflow'){const {name}=await request.json();const snapshot=await this.operationSnapshot();return Response.json(await this.ask('Use the requested workflow skill.', 'workflow-'+name, {...snapshot,skillName:name,skillAutomatic:true}));}
     if(path==='/usage'){await this.lifecycle.start();await this.publishUsage();return Response.json(await (await this.harness.pi()).usage(this.piContext));}
     if(path==='/resolve-account'){try{await this.env.Credentials.getByName(this.runtime().accountId).access();return Response.json({accountId:this.runtime().accountId,connected:true});}catch(error){return Response.json({accountId:this.runtime().accountId,error:error.message});}}
     if(path==='/fail-projection'){this.projectionFault.armed=true;return Response.json({armed:true});}
@@ -229,6 +230,19 @@ try {
   await mf.dispose();mf=new Miniflare(options());
   assert.equal((await state(nativeRoot)).selected.accountId,account);assert.equal((await state()).selected.accountId,'owner');assert.equal((await credentialState(account)).identityEncrypted,true);
   assert.deepEqual(tokenFields((await credentialState(account)).status.usage),reported,'Usage totals disappeared after isolate restart');
+  const workflowNames = ["announcement-review", "staff-request-triage", "staff-handoff"];
+  for (const name of workflowNames) {
+    const rawContent = await readFile(resolve(base, `../../skills/workflows/${name}/SKILL.md`), "utf8");
+    const published = await json(await api("/api/skills/publish", { rawContent, resources: [] }));
+    assert.equal(published.catalog.find(row => row.name === name).enabled, false);
+    await json(await api("/api/skills/toggle", { name, enabled: true }));
+    const output = await json(await (await assistant()).fetch("https://review.invalid/workflow", { method: "POST", body: JSON.stringify({ name }) }));
+    assert.equal(output.status, "done");
+    assert.equal(output.text, "MOCK_SKILL_OK");
+    const transcript = JSON.stringify(output.entries);
+    assert.ok(transcript.includes('"name":"activate_skill"') && transcript.includes('"name":"' + name + '"'), "Workflow was not activated through the native skill tool");
+    assert.ok(transcript.includes(rawContent.split("---")[2].trim().split("\n")[0]), "Workflow body was not loaded");
+  }
   console.log(JSON.stringify({ checks: 'PASS', reviewer: 'independent', runtime: 'workerd', bundleSHA256: actual, concurrentAccountCreates: count, concurrentSkillPublications: skills.length, csrfAndCanonicalOrigin: true, legacyBearerMutationDenied: true, ownerGrantPreservedAfterRestart: true, skillStatePreservedAfterRestart: true, scriptAndTraversalDenied: true, staffHelpModelThinkingOnly: true, staffAdvancedWithoutInferenceOrMutation: true, actualRuntimeAdminIdempotencyAndConflict: true, doneAdminReplayRepairsProjectionWithoutMutation: true, ledgerOnlyPendingBusy409: true, interruptedAdminDoesNotRepeat: true, explicitRoundRobinConcurrentRoots: true, duplicateAndPolicyRetryPreserveCursor: true, fixedAdmissionRetryAndImmutablePins: true, disconnectedPinDoesNotResolveOtherAccount: true, encryptedMetadataNullLegacy: true, actualNativeUsageNoDoubleCountOnRetryCloneFork: true, usageAbsoluteMonotonicAccountIsolatedAndPersistent: true, mockChannelReplies: writes.length, realNetworkCalls: 0, oidcSignatureCheckedBy: 'separate writer admin-check and auth-check' }));
 } finally {
   await mf.dispose();
