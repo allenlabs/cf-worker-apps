@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "title": "경과알리기",
+  "source": "none",
+  "fields": [
+    {"id":"subject","label":"업무 또는 안내 대상","type":"text","required":true,"maxLength":100},
+    {"id":"status","label":"직접 확인한 현재 경과","type":"text","required":true,"maxLength":1000},
+    {"id":"next","label":"다음 행동 (미정이면 미정)","type":"text","required":true,"maxLength":500}
+  ],
+  "template": "[경과 안내]\n업무: {{subject}}\n현재 경과: {{status}}\n다음 행동: {{next}}",
+  "confirmations": [{"id":"confirmed","label":"경과와 다음 행동을 직접 확인했으며 현재 스레드에 보내겠습니다."}]
+}

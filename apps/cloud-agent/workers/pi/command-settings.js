@@ -19,3 +19,8 @@ export function startInput(value) {
   }
   return value;
 }
+
+export function selectedSkill(value) {
+  requireValue(value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === 2 && Object.keys(value).every(key => ["name", "revision"].includes(key)) && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.name ?? "") && value.name.length <= 64 && /^[a-f0-9]{64}$/.test(value.revision ?? ""), "command_skill_invalid");
+  return { name: value.name, revision: value.revision };
+}

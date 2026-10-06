@@ -1,0 +1,14 @@
+{
+  "name": "@cloud-agent-examples/dynamic-git-ui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Optional synthetic proof of runtime TSX bundling inside workerd",
+  "scripts": { "test": "node check.mjs" },
+  "engines": { "node": ">=22" },
+  "dependencies": { "@cloudflare/worker-bundler": "0.2.5" },
+  "devDependencies": {
+    "esbuild": "0.27.3",
+    "miniflare": "5.20261001.0-alpha"
+  }
+}

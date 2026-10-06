@@ -42,7 +42,7 @@ export class Assistant extends BaseAssistant {
     const path=new URL(request.url).pathname;
     if(path==='/admit')return Response.json(await this.acceptChannel(await request.json()));
     if(path==='/state'){await this.lifecycle.start();return Response.json({...await this.channelHistory(),modelCalls:this.faux.state.callCount,queue:await this.getQueues(),pending:await this.harness.pending()});}
-    if(path==='/workflow'){const {name}=await request.json();const snapshot=await this.operationSnapshot();return Response.json(await this.ask('Use the requested workflow skill.', 'workflow-'+name, {...snapshot,skillName:name,skillAutomatic:true}));}
+    if(path==='/workflow'){const {name}=await request.json();const snapshot=await this.operationSnapshot();return Response.json(await this.ask('Use the requested workflow skill.', 'workflow-'+name, {...snapshot,skillName:name,skillRevision:(await this.env.Credentials.getByName('owner').skillManifest(snapshot.manifestVersion)).skills.find(skill=>skill.name===name)?.version,skillAutomatic:true}));}
     if(path==='/usage'){await this.lifecycle.start();await this.publishUsage();return Response.json(await (await this.harness.pi()).usage(this.piContext));}
     if(path==='/resolve-account'){try{await this.env.Credentials.getByName(this.runtime().accountId).access();return Response.json({accountId:this.runtime().accountId,connected:true});}catch(error){return Response.json({accountId:this.runtime().accountId,error:error.message});}}
     if(path==='/fail-projection'){this.projectionFault.armed=true;return Response.json({armed:true});}
@@ -154,7 +154,7 @@ try {
   assert.equal((await api('/api/accounts/disconnect', { id: 'owner', confirmed: false })).status, 400);
   let root=await admit('review-root','/ai 도움말');
   assert.equal(root.modelCalls,0);assert.equal(root.selected.sessionId,'1');
-  assert.ok(root.receipts.at(-1).answer.includes('/ai 모델'));assert.ok(!root.receipts.at(-1).answer.includes('/ai new'));
+  assert.ok(root.receipts.at(-1).answer.includes('/ai 창'));assert.ok(root.receipts.at(-1).answer.includes('직원 기본값'));assert.ok(!root.receipts.at(-1).answer.includes('/ai new'));
   for(const [index,text] of ['/ai new','/ai resume 1','/ai compact','/ai skill:parallel-0 apply','/ai settings','/ai skills','/ai logout'].entries()){
     root=await admit('review-blocked-'+index,text);assert.equal(root.modelCalls,0);assert.equal(root.selected.sessionId,'1');assert.equal(root.sessions.length,1);assert.ok(root.receipts.at(-1).answer.includes(origin));
   }

@@ -1,6 +1,6 @@
 # Start a team-chat thread with initial settings
 
-The main team-chat composer can run `/ai` before any source thread exists. The panel shows **workflow → model → thinking level → 새 업무 시작**. Root-dependent forms, questions and history remain hidden until an actual native root is known. Existing thread composer commands keep their current behavior.
+The main team-chat composer can run `/ai` before any source thread exists. The panel shows **workflow → model → thinking level → 새 업무 시작**. Root-dependent forms, questions and history remain hidden until an actual native root is known. Existing thread composer commands keep their root settings. Employee model/thinking defaults and optional skill autocomplete are described in [Staff shortcuts](STAFF_SHORTCUTS.md).
 
 Choosing an item does not start AI or read patient data. Clicking **새 업무 시작** creates one bot-authored native root in the configured reply group, binds a new signed capability to its returned message ID and continues the selected workflow in the same panel. The bot root itself does not trigger inference. A workflow without source data needs no inference account. Visit-backed forms still require an explicit patient and visit after creation, through the existing authorized adapter.
 

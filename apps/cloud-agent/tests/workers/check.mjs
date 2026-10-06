@@ -64,7 +64,7 @@ export class Assistant extends BaseAssistant {
       this.channelSql.exec("INSERT INTO admin_controls (operationId,request,state,updatedAt) VALUES (?,?,'running',?)",input.operationId,JSON.stringify([input.action,input.args]),Date.now());
       return Response.json({created:created.id});
     }
-    if (new URL(request.url).pathname === '/test/native-skill') {const snapshot=await this.operationSnapshot();return Response.json(await this.ask('Use the approved fixture skill and its guide.', 'native-skill-check', {...snapshot,skillName:'fixture-skill',skillAutomatic:true}));}
+    if (new URL(request.url).pathname === '/test/native-skill') {const snapshot=await this.operationSnapshot();return Response.json(await this.ask('Use the approved fixture skill and its guide.', 'native-skill-check', {...snapshot,skillName:'fixture-skill',skillRevision:(await this.env.Credentials.getByName('owner').skillManifest(snapshot.manifestVersion)).skills.find(skill=>skill.name==='fixture-skill')?.version,skillAutomatic:true}));}
     if (new URL(request.url).pathname === '/test/long-context') {
       const conversation=await this.conversation(this.runtime().sessionId);
       for(const content of ['LONG_CONTEXT '.repeat(4000),'MORE_CONTEXT '.repeat(4000),'RECENT_CONTEXT']) await (await conversation.submit({type:'write',entry:{kind:'pi.user',model:[{role:'user',content,timestamp:Date.now()}]}},this.piContext)).wait(this.piContext);

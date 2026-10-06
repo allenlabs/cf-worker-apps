@@ -1,3 +1,4 @@
+import { staffSettings, staffPatchKeys, patchStaffTransaction } from "./staff-settings.js";
 import { commandAllowed, sourceId, sourceThreadKey } from "./source-history.js";
 import { configuredModels, thinkingChoices, startInput } from "./command-settings.js";
 import { workflowFromSkill, workflowHash } from "./workflow.js";
@@ -13,7 +14,7 @@ function targetFor(owner, target) {
   return target;
 }
 const groupKey = target => workflowHash(JSON.stringify([target.channelId, target.groupId])).then(hash => "command-start-group:" + hash);
-async function workflows(owner) {
+export async function workflows(owner) {
   const rows = await owner.skillCatalog(), result = [];
   for (const row of rows.filter(row => row.enabled)) {
     const definition = workflowFromSkill(await owner.publishedSkill(row.name, row.revision));
@@ -23,7 +24,8 @@ async function workflows(owner) {
 }
 export async function startOptions(owner, target) {
   targetFor(owner, target);
-  return { kind: "start-options", workflows: await workflows(owner), settings: { models: configuredModels(owner.env).map(({ id, label }) => ({ id, label })), model: { id: owner.env.OPENAI_MODEL }, thinkingChoices, thinking: { value: "low" } } };
+  const preferred = await staffSettings(owner, target);
+  return { kind: "start-options", workflows: await workflows(owner), settings: { models: configuredModels(owner.env).map(({ id, label }) => ({ id, label })), model: { id: preferred.modelId }, thinkingChoices, thinking: { value: preferred.thinkingLevel } } };
 }
 async function receipt(owner, target, operationId) {
   targetFor(owner, target); requireValue(uuid(operationId), "command_start_input_invalid");
@@ -33,12 +35,14 @@ async function receipt(owner, target, operationId) {
 }
 async function finish(owner, row) {
   if (row.state !== "created") return row;
-  const threadKey = await sourceThreadKey({ ...row.target, rootMessageId: row.rootMessageId }), barrier = await groupKey(row.target);
+  const threadKey = await sourceThreadKey({ ...row.target, rootMessageId: row.rootMessageId }), barrier = await groupKey(row.target), patch = { modelId: row.intent.modelId, thinkingLevel: row.intent.thinkingLevel };
+  const preferenceKeys = await staffPatchKeys(owner, row.target, "start-" + row.operationId, patch);
   return owner.ctx.storage.transaction(async transaction => {
     const current = await transaction.get("command-start:" + row.operationId);
     if (current.state !== "created") return current;
     const old = await transaction.get("threadStart:" + threadKey), index = await transaction.get("threadIndex") || [];
     requireValue(!index.some(item => item.threadKey === threadKey) && (!old || old.operationId === row.operationId), "command_start_root_active");
+    if (!current.recovery) await patchStaffTransaction(transaction, preferenceKeys, patch);
     const next = { ...current, state: "ready" };
     await transaction.put("threadStart:" + threadKey, { operationId: row.operationId, target: { channelId: row.target.channelId, groupId: row.target.groupId, rootMessageId: row.rootMessageId }, intent: row.intent });
     await transaction.put("command-start:" + row.operationId, next);

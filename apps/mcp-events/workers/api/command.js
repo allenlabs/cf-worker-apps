@@ -1,4 +1,4 @@
-import { startInput } from "../../../cloud-agent/workers/pi/command-settings.js";
+import { startInput, selectedSkill } from "../../../cloud-agent/workers/pi/command-settings.js";
 import { workflowHash, workflowInput, workflowPrefill, workflowRender, workflowSource } from "../../../cloud-agent/workers/pi/workflow.js";
 import { commandAllowed, sourceId, sourceThreadKey } from "../../../cloud-agent/workers/pi/source-history.js";
 import { aiPanel } from "./command-view.js";
@@ -9,14 +9,16 @@ const unb64 = text => Uint8Array.from(atob(text.replaceAll("-", "+").replaceAll(
 const requireValue = (ok, code) => { if (!ok) throw new Error(code); };
 const object = value => value && typeof value === "object" && !Array.isArray(value);
 const actionSchema = { type: "object", properties: { chat: { type: "object", properties: { type: { type: "string" }, id: { type: "string" } }, required: ["type", "id"] }, trigger: { type: "object", additionalProperties: true }, input: { type: "object", additionalProperties: true }, language: { type: "string" } }, additionalProperties: false };
+const suggestSchema = { type: "object", properties: { chat: actionSchema.properties.chat, input: { type: "array", maxItems: 2, items: { type: "object", properties: { name: { type: "string", enum: ["mode", "workflow"] }, value: { type: "string", maxLength: 100 }, focused: { type: "boolean" } }, required: ["name", "value", "focused"], additionalProperties: false } }, language: { type: "string" } }, required: ["chat", "input"], additionalProperties: false };
 const bindSchema = { type: "object", properties: { targetCapability: { type: "string" }, rootMessageId: { type: "string", maxLength: 255 } }, required: ["targetCapability", "rootMessageId"], additionalProperties: false };
 const startSchema = { type: "object", properties: { targetCapability: { type: "string" }, action: { type: "string", enum: ["options", "create", "status"] }, operationId: { type: "string", format: "uuid" }, confirmed: { type: "boolean" }, intent: { type: "object", additionalProperties: false, properties: { modelId: { type: "string", maxLength: 128 }, thinkingLevel: { type: "string" }, workflow: { type: "object", additionalProperties: false, properties: { name: { type: "string" }, revision: { type: "string" } }, required: ["name", "revision"] } }, required: ["modelId", "thinkingLevel"] } }, required: ["targetCapability", "action"], additionalProperties: false };
-const operationSchema = { type: "object", properties: { targetCapability: { type: "string" }, operationId: { type: "string", format: "uuid" }, action: { type: "string", enum: ["help", "model", "thinking", "ask", "history", "image"] }, args: { type: "string", maxLength: 8000 }, contextSource: { type: "string", enum: ["api", "shared"] }, sharedContext: { type: "string", maxLength: 32768 } }, required: ["targetCapability", "operationId", "action", "args"], additionalProperties: false };
+const operationSchema = { type: "object", properties: { targetCapability: { type: "string" }, operationId: { type: "string", format: "uuid" }, action: { type: "string", enum: ["help", "model", "thinking", "ask", "history", "image"] }, args: { type: "string", maxLength: 8000 }, contextSource: { type: "string", enum: ["api", "shared"] }, sharedContext: { type: "string", maxLength: 32768 }, skill: { type: "object", properties: { name: { type: "string", maxLength: 64 }, revision: { type: "string" } }, required: ["name", "revision"], additionalProperties: false } }, required: ["targetCapability", "operationId", "action", "args"], additionalProperties: false };
 const visitSchema = { type: "object", properties: { targetCapability: { type: "string" }, action: { type: "string", enum: ["patientSearch", "visitSelect", "draft"] }, query: { type: "string", maxLength: 64 }, patientId: { type: "string", format: "uuid" }, visitId: { type: ["string", "null"], format: "uuid" }, fields: { type: "object", properties: { kind: { type: "string", enum: ["arrival", "treatment"] }, concernArea: { type: "string", maxLength: 200 }, revision: { type: "string", enum: ["unknown", "yes", "no"] }, schedulingExceptions: { type: "string", maxLength: 500 }, externalNameChecked: { type: "string", enum: ["unknown", "yes", "no"] } }, required: ["kind", "concernArea", "revision", "schedulingExceptions", "externalNameChecked"], additionalProperties: false } }, required: ["targetCapability", "action"], additionalProperties: false };
 const workflowSchema = { type: "object", properties: { targetCapability: { type: "string" }, action: { type: "string", enum: ["catalog", "prefill", "prepare", "send", "status"] }, name: { type: "string" }, revision: { type: "string" }, selection: { type: "object", additionalProperties: false, properties: { patientId: { type: "string", format: "uuid" }, visitId: { type: "string", format: "uuid" } }, required: ["patientId", "visitId"] }, values: { type: "object", additionalProperties: { type: "string", maxLength: 1000 }, maxProperties: 20 }, operationId: { type: "string", format: "uuid" }, draftToken: { type: "string", maxLength: 4096 }, confirmed: { type: "boolean" }, confirmations: { type: "array", items: { type: "string" }, maxItems: 10 } }, required: ["targetCapability", "action"], additionalProperties: false };
 export const commandFunctions = [
   { name: "extension.command.metadata.getCommands", inputSchema: { type: "object", properties: {}, additionalProperties: false }, outputSchema: { type: "object", properties: { commands: { type: "array", items: { type: "object", additionalProperties: true } } }, required: ["commands"] } },
   { name: "commands.ai.open", inputSchema: actionSchema, outputSchema: { type: "object", properties: { type: { type: "string" }, attributes: { type: "object", additionalProperties: true } }, required: ["type"] } },
+  { name: "commands.ai.suggest", inputSchema: suggestSchema, outputSchema: { type: "object", properties: { choices: { type: "array", maxItems: 10, items: { type: "object", properties: { name: { type: "string" }, value: { type: "string" } }, required: ["name", "value"], additionalProperties: false } } }, required: ["choices"], additionalProperties: false } },
   { name: "commands.ai.start", inputSchema: startSchema, outputSchema: { type: "object", additionalProperties: true } },
   { name: "commands.ai.bindThread", inputSchema: bindSchema, outputSchema: { type: "object", additionalProperties: true } },
   { name: "commands.ai.workflow", inputSchema: workflowSchema, outputSchema: { type: "object", additionalProperties: true } },
@@ -104,14 +106,26 @@ export async function commandFunction(input, env) {
   requireValue(object(params), "command_parameters_invalid");
   if (input.method === "extension.command.metadata.getCommands") {
     requireValue(Object.keys(params).length === 0, "command_parameters_invalid");
-    return { commands: [{ name: "ai", scope: "desk", description: "이 스레드의 AI 질문·이미지·대화 이력·모델·생각 수준", actionFunctionName: "commands.ai.open", systemVersion: "v1", alfMode: "disable", enabledByDefault: true }] };
+    return { commands: [{ name: "ai", scope: "desk", description: "이 스레드의 AI 질문·이미지·대화 이력·모델·생각 수준", actionFunctionName: "commands.ai.open", autoCompleteFunctionName: "commands.ai.suggest", paramDefinitions: [{ name: "mode", type: "string", required: false, description: "단축어로 업무 양식 열기", choices: [{ name: "단축어", value: "shortcut" }] }, { name: "workflow", type: "string", required: false, description: "업무 단축어 선택", autoComplete: true }], systemVersion: "v1", alfMode: "disable", enabledByDefault: true }] };
+  }
+  if (input.method === "commands.ai.suggest") {
+    requireValue(Object.keys(params).every(name => Object.hasOwn(suggestSchema.properties, name)) && ["group", "groupChat"].includes(params.chat?.type) && sourceId(params.chat.id) && Array.isArray(params.input) && params.input.length <= 2 && params.input.every(row => object(row) && Object.keys(row).length === 3 && Object.keys(row).every(key => ["name", "value", "focused"].includes(key)) && ["mode", "workflow"].includes(row.name) && typeof row.value === "string" && row.value.length <= 100 && !/[\x00-\x1f]/.test(row.value) && typeof row.focused === "boolean") && new Set(params.input.map(row => row.name)).size === params.input.length && params.input.filter(row => row.focused).length <= 1, "command_shortcut_invalid");
+    const target = commandAllowed({ channelId: input.context.channel?.id, groupId: params.chat.id, managerId: caller(input.context, env) }, env), focused = params.input.find(row => row.focused);
+    if (!focused) return { choices: [] };
+    if (focused.name === "mode") return { choices: "단축어 shortcut".includes(focused.value.trim()) ? [{ name: "단축어", value: "shortcut" }] : [] };
+    requireValue(env.PI_CREDENTIALS, "command_start_not_configured");
+    return env.PI_CREDENTIALS.get(env.PI_CREDENTIALS.idFromName("owner")).suggestShortcuts(target, focused.value);
   }
   if (input.method === "commands.ai.open") {
     requireValue(Object.keys(params).every(name => Object.hasOwn(actionSchema.properties, name)) && ["group", "groupChat"].includes(params.chat?.type) && sourceId(params.chat.id), "command_group_required");
     const rootMessageId = params.trigger?.attributes?.rootMessageId;
     requireValue(rootMessageId === undefined || sourceId(rootMessageId), "command_root_invalid");
     const target = commandAllowed({ version: 1, channelId: input.context.channel?.id, groupId: params.chat.id, ...(rootMessageId === undefined ? {} : { rootMessageId }), managerId: caller(input.context, env), expiresAt: Date.now() + 1200000, nonce: crypto.randomUUID() }, env);
-    return { type: "wam", attributes: { appId: env.CHANNEL_APP_ID, name: "ai", wamArgs: { targetCapability: await capability(target, env), rootAvailable: rootMessageId !== undefined } } };
+    const typed = params.input ?? {};
+    requireValue(object(typed) && Object.keys(typed).every(key => ["mode", "workflow"].includes(key)) && Object.values(typed).every(value => typeof value === "string" && value.length <= 100 && !/[\x00-\x1f]/.test(value)) && (!typed.mode || ["shortcut", "단축어"].includes(typed.mode)), "command_shortcut_invalid");
+    let selectedWorkflow;
+    if (typed.workflow?.trim()) { requireValue(env.PI_CREDENTIALS, "command_start_not_configured"); selectedWorkflow = await env.PI_CREDENTIALS.get(env.PI_CREDENTIALS.idFromName("owner")).resolveShortcut(target, typed.workflow.trim()); }
+    return { type: "wam", attributes: { appId: env.CHANNEL_APP_ID, name: "ai", wamArgs: { targetCapability: await capability(target, env), rootAvailable: rootMessageId !== undefined, ...(selectedWorkflow ? { selectedWorkflow } : {}) } } };
   }
   if (input.method === "commands.ai.start") {
     const { targetCapability, ...raw } = params, value = startInput(raw), target = await verify(targetCapability, input.context, env);
@@ -140,6 +154,7 @@ export async function commandFunction(input, env) {
     return readVisit({ channelId: target.channelId, groupId: target.groupId, rootMessageId: target.rootMessageId, managerId: target.managerId }, visit, env);
   }
   requireValue(Object.keys(params).every(name => Object.hasOwn(operationSchema.properties, name)) && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(params.operationId) && ["help", "model", "thinking", "ask", "history", "image"].includes(params.action) && typeof params.args === "string" && encoder.encode(params.args).length <= 8000 && !params.args.includes("\0"), "command_operation_invalid");
+  if (params.skill !== undefined) { selectedSkill(params.skill); requireValue(params.action === "ask", "command_skill_invalid"); }
   const target = await verify(params.targetCapability, input.context, env);
   if (!target.rootMessageId) {
     requireValue(params.action === "help" && !params.args, "command_thread_required");
@@ -147,6 +162,6 @@ export async function commandFunction(input, env) {
   }
   requireValue(env.PI_ASSISTANT, "command_assistant_unavailable");
   const threadKey = await sourceThreadKey(target), assistant = env.PI_ASSISTANT.get(env.PI_ASSISTANT.idFromName(threadKey));
-  const operation = { target: { channelId: target.channelId, groupId: target.groupId, rootMessageId: target.rootMessageId, managerId: target.managerId }, operationId: params.operationId, action: params.action, args: params.args, ...(params.contextSource === undefined ? {} : { contextSource: params.contextSource }), ...(params.sharedContext === undefined ? {} : { sharedContext: params.sharedContext }) };
+  const operation = { target: { channelId: target.channelId, groupId: target.groupId, rootMessageId: target.rootMessageId, managerId: target.managerId }, operationId: params.operationId, action: params.action, args: params.args, ...(params.skill ? { skill: params.skill } : {}), ...(params.contextSource === undefined ? {} : { contextSource: params.contextSource }), ...(params.sharedContext === undefined ? {} : { sharedContext: params.sharedContext }) };
   return input.method === "commands.ai.status" ? assistant.commandStatus(operation) : assistant.executeCommand(operation);
 }

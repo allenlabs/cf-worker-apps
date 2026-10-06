@@ -1,3 +1,4 @@
+import { permittedSettings, staffKey } from "./staff-settings.js";
 import { workflowFromSkill } from "./workflow.js";
 import { threadStartPreferences, startReceipts, recoverStart } from "./command-start.js";
 import { serveImageAsset } from "./image-tool.js";
@@ -6,7 +7,7 @@ import { parse as parseYaml } from "yaml";
 import { GitHubBroker, GitHubError, validateCommit, githubSources, githubRegister, githubAuthorize, githubContext } from "./github.js";
 import { adminPage } from "./admin-view.js";
 import { pinTenant, tenantId, objectKey, storedHistory, listConversations } from "./conversation-store.js";
-import { commandAllowed } from "./source-history.js";
+import { commandAllowed, commandGroups } from "./source-history.js";
 
 const encoder = new TextEncoder();
 const b64 = bytes => btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
@@ -294,6 +295,7 @@ export class ManagementCredentials extends DurableObject {
     await threadStartPreferences(this, { channelId: identity.channelId, groupId: identity.groupId, rootMessageId: identity.rootMessageId });
     const existing = (await this.ctx.storage.get("threadIndex") || []).find(row => row.threadKey === identity.threadKey);
     const selection = !existing && identity.accountId === undefined ? await this.accountSelection() : null;
+    const preferenceKey = nativeId(identity.managerId) && commandGroups(this.env).includes(identity.groupId) ? await staffKey(this, { channelId: identity.channelId, groupId: identity.groupId, managerId: identity.managerId }) : null;
     // ponytail: account health across DOs is a snapshot; later disconnects fail on the pinned account instead of switching it.
     const candidates = selection ? (await this.accounts()).filter(row => row.connected && row.inferenceReady).map(row => row.id) : [];
     return this.ctx.storage.transaction(async transaction => {
@@ -314,6 +316,7 @@ export class ManagementCredentials extends DurableObject {
           }
           requireValue(candidates.includes(selected), "account_not_connected", 409);
         }
+        if (identity.accountId === undefined && preferenceKey && !await transaction.get("threadStart:" + identity.threadKey)) await transaction.put("threadStart:" + identity.threadKey, { operationId: "staff-default:" + identity.threadKey, target: { channelId: identity.channelId, groupId: identity.groupId, rootMessageId: identity.rootMessageId }, intent: permittedSettings(this.env, preferenceKey ? await transaction.get(preferenceKey) : null) });
         const at = new Date().toISOString(); rows.push({ channelId: identity.channelId, groupId: identity.groupId, rootMessageId: identity.rootMessageId, threadKey: identity.threadKey, accountId: selected, firstObservedAt: at, lastObservedAt: at });
       }
       await transaction.put("threadIndex", rows);
