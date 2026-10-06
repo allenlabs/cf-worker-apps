@@ -1,0 +1,200 @@
+const ISSUER = "https://auth.openai.com";
+const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
+const IMAGE_ENDPOINT = "https://chatgpt.com/backend-api/codex/images/generations";
+const PENDING = "codexImagePending", PROFILE = "codexImageProfile";
+const MAX_RESPONSE = 24 * 1024 * 1024;
+const encoder = new TextEncoder();
+const active = new WeakMap();
+const check = (value, code) => { if (!value) throw new Error(code); };
+const text = (value, max = 32768) => typeof value === "string" && value.length > 0 && encoder.encode(value).length <= max && !/[\x00-\x1f\x7f]/.test(value);
+const read = async (owner, key) => owner.open(await owner.ctx.storage.get(key));
+const write = async (owner, key, value) => owner.ctx.storage.put(key, await owner.seal(value));
+
+function exclusive(owner, kind, action) {
+  const running = active.get(owner);
+  if (running) return running.kind === "access" && kind === "access" ? running.promise : Promise.reject(new Error("codex_image_auth_busy"));
+  const promise = Promise.resolve().then(action).finally(() => { if (active.get(owner)?.promise === promise) active.delete(owner); });
+  active.set(owner, { kind, promise });
+  return promise;
+}
+
+async function bounded(response, maximum) {
+  check(!response.headers.has("content-length") || Number(response.headers.get("content-length")) <= maximum, "codex_image_response_too_large");
+  const reader = response.body?.getReader();
+  check(reader, "codex_image_response_invalid");
+  const chunks = [];
+  let length = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.length;
+      check(length <= maximum, "codex_image_response_too_large");
+      chunks.push(value);
+    }
+  } catch (error) { await reader.cancel().catch(() => {}); throw error; }
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+  return bytes;
+}
+
+async function request(url, body, form = false) {
+  let response;
+  try {
+    response = await fetch(url, { method: "POST", redirect: "manual", signal: AbortSignal.timeout(30000), headers: { "content-type": form ? "application/x-www-form-urlencoded" : "application/json", accept: "application/json" }, body: form ? new URLSearchParams(body) : JSON.stringify(body) });
+  } catch { throw new Error("codex_image_oauth_network_error"); }
+  return response;
+}
+
+async function json(response) {
+  const bytes = await bounded(response, 128 * 1024);
+  let value;
+  try { value = JSON.parse(new TextDecoder().decode(bytes)); } catch { throw new Error("codex_image_oauth_response_invalid"); }
+  check(value && typeof value === "object" && !Array.isArray(value), "codex_image_oauth_response_invalid");
+  return value;
+}
+
+function tokenFields(token, previous) {
+  check(text(token.access_token) && !token.access_token.startsWith("sk-"), "codex_image_access_token_invalid");
+  check(token.token_type === undefined || token.token_type?.toLowerCase() === "bearer", "codex_image_token_type_invalid");
+  const refresh = token.refresh_token ?? previous?.refresh;
+  check(text(refresh), "codex_image_refresh_token_missing");
+  check(token.expires_in === undefined || (Number.isFinite(token.expires_in) && token.expires_in > 0), "codex_image_token_lifetime_invalid");
+  let expiresAt = Date.now() + token.expires_in * 1000;
+  if (token.expires_in === undefined) {
+    try { expiresAt = JSON.parse(atob(token.access_token.split(".")[1].replaceAll("-", "+").replaceAll("_", "/"))).exp * 1000; } catch { expiresAt = NaN; }
+  }
+  check(Number.isFinite(expiresAt) && expiresAt > Date.now() && expiresAt <= Date.now() + 365 * 86400000, "codex_image_token_lifetime_invalid");
+  return { access: token.access_token, refresh, expiresAt };
+}
+
+async function identity(owner, verifyIdentity, idToken, clientId, pinned) {
+  check(text(idToken), "codex_image_id_token_missing");
+  const verified = await verifyIdentity(idToken, clientId, await owner.expectedEmailHash());
+  check(verified && text(verified.subjectHash, 256) && text(verified.accountHash, 256) && text(verified.metadata?.accountId, 256) && text(verified.metadata?.email, 320), "codex_image_identity_invalid");
+  check(text(verified.metadata.planType, 64) && verified.metadata.planType.toLowerCase() !== "free", "codex_image_subscription_required");
+  check(!pinned || (pinned.subjectHash === verified.subjectHash && pinned.accountHash === verified.accountHash && pinned.metadata.accountId === verified.metadata.accountId), "codex_image_identity_mismatch");
+  return verified;
+}
+
+async function checkRegistration(owner, profile) {
+  const pinned = await owner.ctx.storage.get("registration");
+  check((!pinned?.subjectHash || pinned.subjectHash === profile.subjectHash) && (!pinned?.accountHash || pinned.accountHash === profile.accountHash), "codex_image_identity_mismatch");
+}
+
+export function codexImageStart(owner) {
+  return exclusive(owner, "start", async () => {
+    const expectedEmailHash = await owner.expectedEmailHash();
+    const previous = await read(owner, PROFILE);
+    const clientId = previous?.clientId ?? owner.env.CODEX_IMAGE_CLIENT_ID ?? CLIENT_ID;
+    check(text(clientId, 255) && /^[A-Za-z0-9._:-]+$/.test(clientId), "codex_image_client_invalid");
+    const response = await request(`${ISSUER}/api/accounts/deviceauth/usercode`, { client_id: clientId });
+    check(response.ok, `codex_image_oauth_http_${response.status}`);
+    const result = await json(response);
+    const userCode = result.user_code ?? result.usercode;
+    const interval = Number(result.interval);
+    check(text(result.device_auth_id, 4096) && text(userCode, 128) && Number.isSafeInteger(interval) && interval >= 1 && interval <= 300, "codex_image_device_response_invalid");
+    const pending = { type: "codex_image_v1", attemptId: crypto.randomUUID(), phase: "pending", clientId, expectedEmailHash, deviceAuthId: result.device_auth_id, userCode, interval, expiresAt: Date.now() + 900000, nextAt: Date.now() + interval * 1000 };
+    await write(owner, PENDING, pending);
+    return { verificationUrl: `${ISSUER}/codex/device`, userCode, expiresAt: new Date(pending.expiresAt).toISOString(), nextCheckAt: new Date(pending.nextAt).toISOString() };
+  });
+}
+
+export function codexImageCheck(owner, verifyIdentity) {
+  return exclusive(owner, "check", async () => {
+    const pending = await read(owner, PENDING);
+    check(pending?.type === "codex_image_v1", "codex_image_login_required");
+    if (pending.attemptId && (await read(owner, PROFILE))?.attemptId === pending.attemptId) { await owner.ctx.storage.delete(PENDING); return codexImageStatus(owner); }
+    check(pending.phase === "pending", "codex_image_attempt_failed_restart_login");
+    if (pending.expiresAt <= Date.now()) { await owner.ctx.storage.delete(PENDING); throw new Error("codex_image_attempt_expired"); }
+    check(pending.expectedEmailHash === await owner.expectedEmailHash(), "codex_image_identity_policy_changed");
+    if (pending.nextAt > Date.now()) return { pending: true, nextCheckAt: new Date(pending.nextAt).toISOString() };
+    // Persist before polling too: a lost successful poll must not replay a consumed code.
+    await write(owner, PENDING, { ...pending, phase: "checking" });
+    try {
+      const response = await request(`${ISSUER}/api/accounts/deviceauth/token`, { device_auth_id: pending.deviceAuthId, user_code: pending.userCode });
+      if ([403, 404].includes(response.status)) {
+        pending.nextAt = Date.now() + pending.interval * 1000;
+        await write(owner, PENDING, pending);
+        return { pending: true, nextCheckAt: new Date(pending.nextAt).toISOString() };
+      }
+      check(response.ok, `codex_image_oauth_http_${response.status}`);
+      const result = await json(response);
+      check(text(result.authorization_code, 8192) && text(result.code_verifier, 512) && text(result.code_challenge, 512), "codex_image_device_response_invalid");
+      const challenge = btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(result.code_verifier))))).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+      check(challenge === result.code_challenge, "codex_image_pkce_mismatch");
+      await write(owner, PENDING, { ...pending, phase: "exchanging" });
+      const exchange = await request(`${ISSUER}/oauth/token`, { grant_type: "authorization_code", client_id: pending.clientId, code: result.authorization_code, redirect_uri: `${ISSUER}/deviceauth/callback`, code_verifier: result.code_verifier }, true);
+      check(exchange.ok, `codex_image_oauth_http_${exchange.status}`);
+      const token = await json(exchange);
+      const credential = tokenFields(token);
+      const verified = await identity(owner, verifyIdentity, token.id_token, pending.clientId, await read(owner, PROFILE));
+      await write(owner, PROFILE, { type: "codex_image_v1", attemptId: pending.attemptId, clientId: pending.clientId, expectedEmailHash: pending.expectedEmailHash, ...credential, ...verified });
+      await owner.ctx.storage.delete(PENDING);
+      return codexImageStatus(owner);
+    } catch (error) {
+      await write(owner, PENDING, { type: pending.type, attemptId: pending.attemptId, phase: "failed", expiresAt: pending.expiresAt });
+      throw error;
+    }
+  });
+}
+
+export async function codexImageStatus(owner) {
+  const profile = await read(owner, PROFILE), pending = await read(owner, PENDING);
+  return { provider: "codex", connected: profile?.type === "codex_image_v1", identity: profile?.metadata ?? null, expiresAt: profile ? new Date(profile.expiresAt).toISOString() : null, loginPending: pending?.phase === "pending" && pending.expiresAt > Date.now(), loginFailed: !!pending && pending.phase !== "pending", nextCheckAt: pending?.phase === "pending" ? new Date(pending.nextAt).toISOString() : null };
+}
+
+export function codexImageAccess(owner, verifyIdentity) {
+  return exclusive(owner, "access", async () => {
+    const profile = await read(owner, PROFILE);
+    check(profile?.type === "codex_image_v1", "codex_image_login_required");
+    check(profile.expectedEmailHash === await owner.expectedEmailHash(), "codex_image_identity_policy_changed");
+    await checkRegistration(owner, profile);
+    if (profile.expiresAt - Date.now() > 60000) return { kind: "codex_image_v1", clientId: profile.clientId, access: profile.access, accountId: profile.metadata.accountId };
+    check(!profile.refreshFailed, "codex_image_refresh_failed_restart_login");
+    // A refresh token may rotate; a crashed exchange requires a new login instead of replay.
+    await write(owner, PROFILE, { ...profile, refreshFailed: true });
+    const response = await request(`${ISSUER}/oauth/token`, { grant_type: "refresh_token", client_id: profile.clientId, refresh_token: profile.refresh });
+    check(response.ok, `codex_image_oauth_http_${response.status}`);
+    const token = await json(response);
+    const credential = tokenFields(token, profile);
+    const verified = token.id_token === undefined ? profile : await identity(owner, verifyIdentity, token.id_token, profile.clientId, profile);
+    const renewed = { ...profile, ...credential, subjectHash: verified.subjectHash, accountHash: verified.accountHash, metadata: verified.metadata, refreshFailed: false };
+    await checkRegistration(owner, renewed);
+    await write(owner, PROFILE, renewed);
+    return { kind: "codex_image_v1", clientId: renewed.clientId, access: renewed.access, accountId: renewed.metadata.accountId };
+  });
+}
+
+export function codexImageDisconnect(owner) {
+  return exclusive(owner, "disconnect", async () => {
+    await owner.ctx.storage.delete([PENDING, PROFILE]);
+    return codexImageStatus(owner);
+  });
+}
+
+export async function codexImageRequest(env, profile, prompt, signal) {
+  check(env.IMAGE_PROVIDER === "codex", "codex_image_provider_disabled");
+  check(typeof prompt === "string" && prompt.trim() && encoder.encode(prompt).length <= 16384, "codex_image_prompt_invalid");
+  check(profile?.kind === "codex_image_v1" && text(profile.clientId, 255) && text(profile.access) && !profile.access.startsWith("sk-") && text(profile.accountId, 256), "image_auth_needed");
+  const { access, accountId } = profile;
+  const response = await fetch(IMAGE_ENDPOINT, { method: "POST", redirect: "manual", signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(120000)]) : AbortSignal.timeout(120000), headers: { authorization: `Bearer ${access}`, "ChatGPT-Account-ID": accountId, "content-type": "application/json", accept: "application/json", originator: "cloud-agent", "user-agent": "cloud-agent/1", "x-codex-image-turn-id": crypto.randomUUID() }, body: JSON.stringify({ model: "gpt-image-2", prompt, n: 1, quality: "low", size: "1024x1024", background: "opaque" }) });
+  check(response.ok, [401, 403].includes(response.status) ? "image_auth_needed" : `codex_image_http_${response.status}`);
+  const bytes = await bounded(response, MAX_RESPONSE);
+  const headers = { "content-type": "application/json" };
+  const requestId = response.headers.get("x-codex-imagegen-request-id");
+  if (requestId) headers["x-codex-imagegen-request-id"] = requestId;
+  return new Response(bytes, { status: response.status, headers });
+}
+
+export async function codexImageGenerate(env, owner, verifyIdentity, prompt, signal) {
+  check(env.IMAGE_PROVIDER === "codex", "codex_image_provider_disabled");
+  let profile;
+  try { profile = await codexImageAccess(owner, verifyIdentity); }
+  catch (error) {
+    if (["codex_image_login_required", "codex_image_refresh_failed_restart_login", "codex_image_oauth_http_401", "codex_image_oauth_http_403"].includes(error.message)) throw new Error("image_auth_needed");
+    throw error;
+  }
+  return codexImageRequest(env, profile, prompt, signal);
+}

@@ -1,3 +1,4 @@
+import { serveImageAsset } from "./image-tool.js";
 import { DurableObject } from "cloudflare:workers";
 import { parse as parseYaml } from "yaml";
 import { GitHubBroker, GitHubError, validateCommit, githubSources, githubRegister, githubAuthorize, githubContext } from "./github.js";
@@ -358,6 +359,17 @@ export class ManagementCredentials extends DurableObject {
       });
       await this.audit(actor, action, "new_roots"); return { ...selection, appliesTo: "new_roots_only" };
     }
+    if (action.startsWith("image.")) {
+      exactKeys(input, action === "image.disconnect" ? ["id", "confirmed"] : ["id"]);
+      requireValue(accountId(input.id) && (await this.accountInventory()).some(row => row.id === input.id), "account_not_found", 404);
+      const credentials = input.id === "owner" ? this : this.env.Credentials.getByName(input.id);
+      let result;
+      if (action === "image.start") result = await credentials.startCodexImages();
+      else if (action === "image.check") result = await credentials.checkCodexImages();
+      else if (action === "image.disconnect") { requireValue(input.confirmed === true, "disconnect_confirmation_required"); result = await credentials.disconnectCodexImages(); }
+      else throw new AdminError("action_not_found", 404);
+      await this.audit(actor, action, input.id); return result;
+    }
     if (action.startsWith("account.")) {
       const fields = action === "account.start" ? ["id", "planUsageConfirmed"] : action === "account.complete" ? ["id", "callbackUrl"] : action === "account.disconnect" ? ["id", "confirmed"] : ["id"];
       exactKeys(input, fields); requireValue(accountId(input.id) && (await this.accountInventory()).some(row => row.id === input.id), "account_not_found", 404);
@@ -418,6 +430,7 @@ export async function adminRoute(request, env) {
     if (request.method === "GET" && ["/", "/login"].includes(path)) return page(env, !!session);
     const diagnostic = env.DIAGNOSTIC_READS_ENABLED === "true" && request.method === "GET" && ["/status", "/channel/status", "/channel/history", "/history"].includes(path) && env.PROBE_KEY_SHA256 && request.headers.get("authorization")?.startsWith("Bearer ") && await hash(request.headers.get("authorization").slice(7)) === env.PROBE_KEY_SHA256;
     requireValue(session || diagnostic, "sso_login_required", 401);
+    if (path.startsWith("/assets/")) { requireValue(session, "sso_login_required", 401); return serveImageAsset(request, env, { tenantId: tenantId(env) }); }
     if (request.method === "GET") {
       if (path.startsWith("/api/github/")) {
         requireValue(session, "sso_login_required", 401);
@@ -467,7 +480,7 @@ export async function adminRoute(request, env) {
       const account = (await owner.accounts()).find(row => row.id === selected); requireValue(account, "account_not_found", 404); requireValue(account.connected && account.directUsageGranted, "account_not_connected", 409);
       return response(await env.Assistant.getByName(selected === "owner" ? "manual-test" : `manual-${selected}`).manualAsk(prompt, input.operationId, selected));
     }
-    const actions = { ...Object.fromEntries(["source", "disable", "stage", "preview", "publish", "ask"].map(action => [`/api/github/${action}`, `github.${action}`])), "/api/logout": "logout", "/api/accounts/create": "account.create", "/api/accounts/start": "account.start", "/api/accounts/complete": "account.complete", "/api/accounts/disconnect": "account.disconnect", "/api/accounts/default": "account.default", "/api/accounts/selection": "account.selection", "/api/accounts/refresh": "account.refresh", "/api/skills/validate": "skill.validate", "/api/skills/publish": "skill.publish", "/api/skills/toggle": "skill.toggle" };
+    const actions = { "/api/images/start": "image.start", "/api/images/check": "image.check", "/api/images/disconnect": "image.disconnect", ...Object.fromEntries(["source", "disable", "stage", "preview", "publish", "ask"].map(action => [`/api/github/${action}`, `github.${action}`])), "/api/logout": "logout", "/api/accounts/create": "account.create", "/api/accounts/start": "account.start", "/api/accounts/complete": "account.complete", "/api/accounts/disconnect": "account.disconnect", "/api/accounts/default": "account.default", "/api/accounts/selection": "account.selection", "/api/accounts/refresh": "account.refresh", "/api/skills/validate": "skill.validate", "/api/skills/publish": "skill.publish", "/api/skills/toggle": "skill.toggle" };
     requireValue(actions[path], "route_not_found", 404);
     const result = await owner.adminMutation(actions[path], input, sessionToken, session.csrf);
     if (result.adminError) throw new AdminError(result.adminError, result.status);
