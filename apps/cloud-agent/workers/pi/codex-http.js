@@ -65,6 +65,7 @@ export function codexDiagnostic(phase, { status, headers }) {
   const type = values.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
   const contentType = type === "application/json" || type?.endsWith("+json") ? "json" : type === "text/html" || type === "application/xhtml+xml" ? "html" : type === "text/event-stream" ? "sse" : type ? "other" : "missing";
   const challenge = values.get("cf-mitigated")?.toLowerCase() === "challenge";
+  const errorType = values.get("cf-error-type");
   status = Number.isSafeInteger(status) && status >= 100 && status <= 599 ? status : null;
   const category = challenge ? "upstream_blocked" : status === 403 ? "permission_denied" : status >= 200 && status < 300 ? contentType === "html" ? "invalid_response" : "success" : contentType === "json" && status === 401 ? "auth_required" : status === 429 ? "rate_limited" : "upstream_error";
   return {
@@ -72,7 +73,9 @@ export function codexDiagnostic(phase, { status, headers }) {
     category, cause: challenge ? "challenge" : category === "success" ? null : "unknown",
     contentType, errorBodyFormat: null,
     requestId: id(values.get("x-codex-imagegen-request-id")) ?? id(values.get("x-request-id")),
-    rayId: id(values.get("cf-ray")), challenge
+    rayId: id(values.get("cf-ray")), challenge,
+    cfErrorType: errorType === null ? null : ["1000", "1016", "1101", "1102", "521", "522", "523", "524", "525", "526", "1020", "1009", "1015"].includes(errorType) ? errorType : "other",
+    cfErrorOriginPresent: values.has("cf-error-origin"), htmlMarkers: null, htmlTruncated: null
   };
 }
 
@@ -81,3 +84,31 @@ export async function reportCodexDiagnostic(callback, value) {
 }
 
 export const codexHtmlError = value => typeof value === "string" && /^\s*[^\r\n<]{0,96}<(?:!doctype|html|head|body)\b/i.test(value);
+
+export function codexHtmlMarkers(value) {
+  if (!codexHtmlError(value)) return { htmlMarkers: null, htmlTruncated: null };
+  // ponytail: inspect only the first 64 KiB and literal template text, not a full HTML parser; unknown templates stay unclassified.
+  const bytes = new TextEncoder().encode(value.slice(0, 65536));
+  const htmlTruncated = value.length > 65536 || bytes.length > 65536;
+  const html = new TextDecoder().decode(bytes.subarray(0, 65536)).replace(/<!--[\s\S]*?(?:-->|$)|<(script|style)\b[^>]*>[\s\S]*?(?:<\/\1\s*>|$)/gi, "");
+  const found = new Set();
+  const tags = /<([a-z][a-z0-9]*)\b((?:[^>"']|"[^"]*"|'[^']*')*)>/gi;
+  for (const tag of html.matchAll(tags)) {
+    if (tag[1].toLowerCase() === "title") {
+      const title = html.slice(tag.index + tag[0].length, tag.index + tag[0].length + 256).match(/^([^<]*)<\/title\s*>/i)?.[1].replace(/\s+/g, " ").trim();
+      if (title === "Attention Required! | Cloudflare") found.add("cf_attention_required");
+      if (title === "Just a moment...") found.add("cf_just_a_moment");
+    }
+    for (const attr of tag[2].matchAll(/(?:^|\s)([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g)) {
+      if (!["id", "class"].includes(attr[1].toLowerCase())) continue;
+      const names = (attr[2] ?? attr[3] ?? attr[4] ?? "").split(/\s+/);
+      if (names.includes("cf-error-details")) found.add("cf_error_details");
+      if (!names.includes("cf-error-code")) continue;
+      found.add("cf_error_code");
+      const code = html.slice(tag.index + tag[0].length, tag.index + tag[0].length + 128).match(new RegExp("^\\s*(1020|1009|1015)\\s*</" + tag[1] + "\\s*>", "i"))?.[1];
+      if (code) found.add("cf_code_" + code);
+    }
+  }
+  if (html.replace(tags, " ").includes("Sorry, you have been blocked")) found.add("cf_blocked_phrase");
+  return { htmlMarkers: [...found], htmlTruncated };
+}

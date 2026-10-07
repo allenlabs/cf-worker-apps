@@ -11,10 +11,23 @@ const profile = { kind: "codex_image_v1", clientId: "fixture-client", access: to
 const originalFetch = globalThis.fetch;
 const html = "<html><body>Unable to load site; fixture-private-marker</body></html>";
 const headers = { "content-type": "text/html", "x-request-id": "fixture-request", "cf-ray": "abcdef123-TEST", "cf-mitigated": "challenge", "set-cookie": "fixture-private-marker", "authorization": "Bearer fixture-private-marker" };
-const expected = { phase: "image", status: 403, category: "upstream_blocked", cause: "challenge", contentType: "html", errorBodyFormat: "html", requestId: "fixture-request", rayId: "abcdef123-TEST", challenge: true };
+const expected = { phase: "image", status: 403, category: "upstream_blocked", cause: "challenge", contentType: "html", errorBodyFormat: "html", requestId: "fixture-request", rayId: "abcdef123-TEST", challenge: true, cfErrorType: null, cfErrorOriginPresent: false, htmlMarkers: null, htmlTruncated: null };
 const received = [];
 let imageCalls = 0;
 try {
+  for (const code of ["1000", "1016", "1101", "1102", "521", "522", "523", "524", "525", "526", "1020", "1009", "1015"]) {
+    const value = codexDiagnostic("inference", { status: 403, headers: { "content-type": "text/html", "cf-error-type": code, "cf-error-origin": "fixture-private-marker" } });
+    assert.equal(value.cfErrorType, code, "Known error headers retain only the allowlisted code");
+    assert.equal(value.cfErrorOriginPresent, true); assert.equal(value.htmlMarkers, null);
+    assert.equal(value.cause, "unknown"); assert.equal(value.category, "permission_denied");
+    assert(!JSON.stringify(value).includes("fixture-private-marker"));
+  }
+  for (const type of ["", "unknown", "9999", "fixture-private-marker", "x".repeat(1000)]) {
+    const value = codexDiagnostic("inference", { status: 403, headers: { "cf-error-type": type } });
+    assert.equal(value.cfErrorType, "other"); assert.equal(value.cfErrorOriginPresent, false);
+  }
+  const absent = codexDiagnostic("inference", { status: 403 });
+  assert.equal(absent.cfErrorType, null); assert.equal(absent.cfErrorOriginPresent, false);
   globalThis.fetch = async () => { imageCalls++; return new Response(html, { status: 403, headers }); };
   await assert.rejects(codexImageRequest({ IMAGE_PROVIDER: "codex" }, profile, "Fixture prompt", undefined, value => received.push(value)), error => {
     assert.equal(error.message, "image_upstream_blocked", "HTML denial must not require reauthentication");
@@ -116,7 +129,7 @@ try {
     assert(!JSON.stringify(streamed).includes("fixture-private-marker"), "streamed events and result must both be safe");
     const finalDiagnostic = diagnostics.at(-1);
     const { requestShape, responseShape, payloadShape, ...responseDiagnostic } = finalDiagnostic;
-    assert.deepEqual(responseDiagnostic, { ...expected, phase: "inference" });
+    assert.deepEqual(responseDiagnostic, { ...expected, phase: "inference", htmlMarkers: [], htmlTruncated: false });
     assert.equal(requestShape.expectedEndpoint, true); assert.equal(requestShape.method, "POST");
     assert.equal(requestShape.modelId, provider.getModels()[0].id);
     assert.deepEqual(requestShape.headers, { authorization: true, account: true, contentType: true, accept: true });
@@ -125,9 +138,36 @@ try {
     assert.deepEqual(result.diagnostic, finalDiagnostic);
 
     const prefixed = await provider[method](provider.getModels()[0], { messages: [] }, { apiKey: token, maxRetries: 0, fetch: async () => Response.json({ error: { message: `Provider (403): ${html}` } }, { status: 403 }) }).result();
-    assert.equal(prefixed.errorMessage, "codex_upstream_blocked");
+    assert.equal(prefixed.errorMessage, "codex_upstream_blocked"); assert.deepEqual(prefixed.diagnostic.htmlMarkers, []);
     assert.equal(prefixed.diagnostic.category, "permission_denied"); assert.equal(prefixed.diagnostic.cause, "unknown"); assert.equal(prefixed.diagnostic.contentType, "json"); assert.equal(prefixed.diagnostic.errorBodyFormat, "html");
     assert(!JSON.stringify(prefixed).includes("fixture-private-marker"));
+
+    const markerCases = [
+      ['<html><title> Attention Required! | Cloudflare </title><div id="cf-error-details"><span class="cf-error-code">1020</span>Sorry, you have been blocked fixture-private-marker</div></html>', ["cf_attention_required", "cf_error_details", "cf_error_code", "cf_code_1020", "cf_blocked_phrase"], false],
+      ['<html><title> Just a   moment... </title></html>', ["cf_just_a_moment"], false],
+      ...["1009", "1015"].map(code => ['<html><span class="other cf-error-code">'+code+'</span></html>', ["cf_error_code", "cf_code_"+code], false]),
+      [`<html><!-- <span class="cf-error-code">1020</span> --><script>"Sorry, you have been blocked"</script><p data-note='class="cf-error-code"'>1020 cf-error-details</p></html>`, [], false],
+      ['<html><div data-note="<title>Just a moment...</title>"></div></html>', [], false],
+      ['<html><div data-note="<title>Attention Required! | Cloudflare</title>"></div></html>', [], false],
+      ['<html><span class="cf-error-code">9999</span><title>Unknown fixture-private-marker</title></html>', ["cf_error_code"], false],
+      ['<html>' + 'x'.repeat(65536) + '<span class="cf-error-code">1020</span></html>', [], true],
+      ['<html>' + '가'.repeat(23000) + '<title>Just a moment...</title></html>', [], true]
+    ];
+    for (const [raw, markers, truncated] of markerCases) {
+      let reads = 0;
+      const observed = await provider[method](provider.getModels()[0], { messages: [] }, { apiKey: token, maxRetries: 0, fetch: async () => {
+        const response = new Response(raw, { status: 403, headers: { "content-type": "text/html", "cf-error-type": "1020", "cf-error-origin": "fixture-private-marker" } });
+        const text = response.text.bind(response); response.text = () => { reads++; return text(); };
+        response.clone = () => assert.fail("Diagnostics cannot clone the native response"); return response;
+      } }).result();
+      assert.equal(reads, 1, "Only native Pi consumes the final response body");
+      assert.deepEqual(observed.diagnostic.htmlMarkers, markers); assert.equal(observed.diagnostic.htmlTruncated, truncated);
+      assert.equal(observed.diagnostic.cfErrorType, "1020"); assert.equal(observed.diagnostic.cfErrorOriginPresent, true);
+      assert.equal(observed.diagnostic.cause, "unknown"); assert.equal(observed.diagnostic.category, "permission_denied");
+      assert.equal(observed.errorMessage, "codex_upstream_blocked"); assert(!JSON.stringify(observed).includes("fixture-private-marker"));
+    }
+    const plainMarker = await provider[method](provider.getModels()[0], { messages: [] }, { apiKey: token, maxRetries: 0, fetch: async () => Response.json({ error: { message: "Sorry, you have been blocked" } }, { status: 403 }) }).result();
+    assert.equal(plainMarker.diagnostic.htmlMarkers, null, "Non-HTML errors do not match template markers");
 
     let payloadCalls = 0, fetchCalls = 0, payloadOverride, finalPayloadJson;
     const redirected = await provider[method]({ ...provider.getModels()[0], baseUrl: "https://chatgpt.com/backend-api/codex/responses?fixture-private-marker" }, { messages: [] }, { apiKey: token, maxRetries: 0, headers: { "x-fixture-private": "fixture-private-marker" }, async onPayload(body, model) { payloadCalls++; assert.equal(this.transport, "sse", "caller retains the native provider-options receiver"); assert.equal(model.provider, "openai-codex"); await Promise.resolve(); payloadOverride = { ...body, store: true, input: "fixture-private-marker", tools: [{ type: "function", name: "fixture_tool", parameters: null }] }; finalPayloadJson = JSON.stringify(payloadOverride); return payloadOverride; }, fetch: async (url, init) => {
@@ -188,10 +228,11 @@ try {
     assert.equal(attempts, 2, "caller maxRetries remains effective"); assert.equal(success.stopReason, "stop"); assert.equal(success.usage.totalTokens, 5);
     const retried = diagnostics.slice(beforeRetry);
     assert.deepEqual(retried.map(value => value.status), [503, 200]);
+    assert.deepEqual(retried.at(-1).htmlMarkers, null, "A successful retry retains no stale final-HTML marker");
     assert.notEqual(retried[0].requestShape.attemptId, retried[1].requestShape.attemptId, "transport attempts have distinct IDs");assert.deepEqual(retried[0].payloadShape,retried[1].payloadShape,"Native retries keep the same pre-compression structure snapshot");
     const alreadyAborted = new AbortController(); alreadyAborted.abort();
     const aborted = await provider[method](provider.getModels()[0], { messages: [] }, { apiKey: token, signal: alreadyAborted.signal, fetch: async () => { assert.fail("aborted request must not fetch"); } }).result();
     assert.equal(aborted.stopReason, "aborted");
   }
-  console.log("Codex diagnostics checks passed: wire/body formats, confirmed challenge vs unknown cause, safe wire request shape/redirects and separate immutable pre-compression structure, preserved Pi caller mutation/async override/errors/accessors/toJSON/retries/compressed SSE; no live calls.");
+  console.log("Codex diagnostics checks passed: allowlisted CF headers and bounded final-HTML markers, wire/body formats, confirmed challenge vs unknown cause, safe wire request shape/redirects and separate immutable pre-compression structure, preserved Pi caller mutation/async override/errors/accessors/toJSON/retries/compressed SSE; no live calls.");
 } finally { globalThis.fetch = originalFetch; }

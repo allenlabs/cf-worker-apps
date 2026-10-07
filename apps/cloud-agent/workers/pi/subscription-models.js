@@ -3,7 +3,7 @@ import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-code
 import { lazyStream } from "@earendil-works/pi-ai/api/lazy";
 import { isRetryableAssistantError } from "@earendil-works/pi-ai/utils/retry";
 import { isContextOverflow } from "@earendil-works/pi-ai/utils/overflow";
-import { codexDiagnostic, codexHtmlError, codexPayloadShape, codexRequestShape, codexResponseShape, reportCodexDiagnostic } from "./codex-http.js";
+import { codexDiagnostic, codexHtmlError, codexHtmlMarkers, codexPayloadShape, codexRequestShape, codexResponseShape, reportCodexDiagnostic } from "./codex-http.js";
 
 export function installSubscriptionModels(models, credentials, authorize = async () => {}, onDiagnostic) {
   const publicProvider = openaiProvider(), codex = openaiCodexProvider();
@@ -41,7 +41,7 @@ export function installSubscriptionModels(models, credentials, authorize = async
                 if (event.type === "error") {
                   if (codexHtmlError(event.error.errorMessage)) {
                     if (diagnostic?.errorBodyFormat !== "html") {
-                      diagnostic = { ...codexDiagnostic("inference", { status: diagnostic?.status }), ...diagnostic, errorBodyFormat: "html" };
+                      diagnostic = { ...codexDiagnostic("inference", { status: diagnostic?.status }), ...diagnostic, errorBodyFormat: "html", ...codexHtmlMarkers(event.error.errorMessage) };
                       await reportCodexDiagnostic(onDiagnostic, diagnostic);
                     }
                     const retryable = isRetryableAssistantError(event.error), overflow = isContextOverflow(event.error);
