@@ -95,7 +95,7 @@ const run = async input => {
 };
 const read = async (args = {}, target = { channelId: channel, groupId: group, rootMessageId: "source-root", managerId: manager }) => (await (await mf.getWorker("cloud")).fetch("https://internal.invalid/test/read", { method: "POST", body: JSON.stringify({ target, args }) })).json();
 try {
-  const hostRoute = await (await mf.getWorker("events")).fetch(origin + "/wam/ai/"); assert.match(await hostRoute.text(), /AI 스레드 도우미/, "Channel Talk appends a trailing slash to the WAM name");
+  const hostRoute = await (await mf.getWorker("events")).fetch(origin + "/wam/ai/"); assert.match(await hostRoute.text(), /<title>메시지 작성<\/title>/, "Channel Talk appends a trailing slash to the WAM name");
   const discovery = await call(envelope("extension.core.function.getFunctions")); assert.ok(discovery.result.functions.some(row => row.name === "hooks.teamChatMessageCreated")); assert.ok(discovery.result.functions.some(row => row.name === "commands.ai.execute"));
   assert.ok((await call({ ...envelope("extension.core.function.getFunctions"), systemVersion: undefined })).result);
   assert.equal((await call({ ...envelope("commands.ai.open", { chat: { type: "group", id: group } }), systemVersion: "v2" })).status, 400);

@@ -4,6 +4,10 @@ The main team-chat composer can run `/ai` before any source thread exists. Staff
 
 Model and thinking choices remain available before sending. Changing either clears the review and confirmations while preserving edited message text. Changing the workflow, patient, visit or base fields resets the message. A complete valid prefill fills the editor automatically. Editing the message does not change the selected database record. The signed review binds those settings, the workflow revision, source, values, exact text, confirmation set and original launch capability including its nonce. Optional AI authoring, general questions and history become available after a real root exists. When no workflow is selected, **새 업무 시작** retains the simple AI-only native root path. A direct start request selecting a workflow without reviewed form content is rejected.
 
+The WAM requests a 760 × 620 window. It places source selection beside the editable message and stacks them below 600 px. Review, confirmation and send stay in a separate footer, so scrolling the form cannot cover them. A selected patient and visit remain visible in a compact source summary; additional source facts, optional form fields and AI tools use native disclosures. Missing required fields appear before the empty editor. Staff can press Enter to search after entering at least two characters, and then explicitly select the patient and visit. IME composition does not trigger a search.
+
+The primary action follows the existing review state. It starts as **보낼 내용 검토**, becomes send after review, and becomes **보낸 요청 결과 확인** while delivery is unresolved. Editing the message clears confirmation and returns to review. Model/thinking and help remain available through the header's **설정 · 도움말** menu. Rootless forms hide thread-only shared context. The layout includes visible keyboard focus and a system dark-color preference.
+
 ## Ownership and bindings
 
 | Action | Owner | Effect |

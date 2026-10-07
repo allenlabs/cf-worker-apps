@@ -10,7 +10,7 @@ let imageReceipt = { status: "done", image, message: "이미지를 저장했습�
 const console = new VirtualConsole(); console.on("jsdomError", error => errors.push(error));
 const dom = new JSDOM(aiPanel(), { runScripts: "dangerously", virtualConsole: console, beforeParse(window) {
   window.crypto.randomUUID = randomUUID;
-  window.ChannelIOWam = { getWamData: key => ({ appId: "fixture-app", targetCapability: "fixture-capability", rootAvailable: true, rootMessageId: "fixture-root" })[key], setSize: value => assert.equal(value.height, 620), close() {}, async callFunction(input) {
+  window.ChannelIOWam = { getWamData: key => ({ appId: "fixture-app", targetCapability: "fixture-capability", rootAvailable: true, rootMessageId: "fixture-root" })[key], setSize: value => { assert.equal(value.width,760,"Host receives the wider composer"); assert.equal(value.height,620); }, close() {}, async callFunction(input) {
     if (input.name === "commands.ai.workflow") return { result: { kind: "catalog", workflows: [] } };
     calls.push(structuredClone(input));
     if (input.params.action !== "help") assert.equal(window.document.getElementById("state").textContent, "요청을 처리하고 있습니다.", "Progress appears before the bridge call");
@@ -28,7 +28,7 @@ assert.match(get("context").textContent, /현재 대화에서 업무를 이어�
 assert.equal(get("model").value, "fixture-model"); assert.equal(get("thinking").value, "low");
 for (const blank of ["", "   \n\t"]) {
   const before = calls.length; get("question").value = blank; document.querySelector('[data-action="ask"]').click();
-  assert.equal(calls.length, before, "Blank Ask never calls the bridge"); assert.equal(get("state").textContent, "질문을 입력해 주세요."); assert.equal(document.activeElement, get("question")); assert.equal(get("retry").hidden, true);
+  assert.equal(calls.length, before, "Blank Ask never calls the bridge"); assert.equal(get("state").textContent, "질문을 입력해 주세요."); assert.equal(get("state").hidden,false,"Validation remains visible after a quiet initialization"); assert.equal(document.activeElement, get("question")); assert.equal(get("retry").hidden, true);
   document.querySelector('[data-action="help"]').click(); await until(() => get("state").textContent === "완료"); assert.equal(calls.length, before + 1, "Help works after validation");
 }
 const imageButton = document.querySelector('[data-action="image"]'); assert.ok(imageButton, "WAM exposes an explicit image action");
