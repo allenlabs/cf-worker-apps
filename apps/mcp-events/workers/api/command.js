@@ -116,7 +116,7 @@ export async function commandFunction(input, env) {
   requireValue(object(params), "command_parameters_invalid");
   if (input.method === "extension.command.metadata.getCommands") {
     requireValue(Object.keys(params).length === 0, "command_parameters_invalid");
-    return { commands: [{ name: "ai", scope: "desk", description: "이 스레드의 AI 질문·이미지·대화 이력·모델·생각 수준", actionFunctionName: "commands.ai.open", autoCompleteFunctionName: "commands.ai.suggest", paramDefinitions: [{ name: "mode", type: "string", required: false, description: "단축어로 업무 양식 열기", choices: [{ name: "단축어", value: "shortcut" }] }, { name: "workflow", type: "string", required: false, description: "업무 단축어 선택", autoComplete: true }], systemVersion: "v1", alfMode: "disable", enabledByDefault: true }] };
+    return { commands: [{ name: "ai", scope: "desk", description: "업무 양식과 메시지 작성 창 열기", actionFunctionName: "commands.ai.open", paramDefinitions: [], systemVersion: "v1", alfMode: "disable", enabledByDefault: true }] };
   }
   if (input.method === "commands.ai.suggest") {
     requireValue(Object.keys(params).every(name => Object.hasOwn(suggestSchema.properties, name)) && ["group", "groupChat"].includes(params.chat?.type) && sourceId(params.chat.id) && Array.isArray(params.input) && params.input.length <= 2 && params.input.every(row => object(row) && Object.keys(row).length === 3 && Object.keys(row).every(key => ["name", "value", "focused"].includes(key)) && ["mode", "workflow"].includes(row.name) && typeof row.value === "string" && row.value.length <= 100 && !/[\x00-\x1f]/.test(row.value) && typeof row.focused === "boolean") && new Set(params.input.map(row => row.name)).size === params.input.length && params.input.filter(row => row.focused).length <= 1, "command_shortcut_invalid");

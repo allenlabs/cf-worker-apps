@@ -1,4 +1,5 @@
 import { piTextModules } from "./pi-modules.mjs";
+import { commandFunction } from "../../../mcp-events/workers/api/command.js";
 import { fileURLToPath } from "node:url";
 process.chdir(fileURLToPath(new URL("../..", import.meta.url)));
 import assert from "node:assert/strict";
@@ -101,7 +102,17 @@ try {
   assert.equal((await call({ ...envelope("commands.ai.open", { chat: { type: "group", id: group } }), systemVersion: "v2" })).status, 400);
   assert.equal((await call({ ...envelope("commands.ai.open", { chat: { type: "group", id: group } }), systemVersion: undefined }, true, "/functions/v1")).status, 400);
   assert.equal((await call({ ...envelope("hooks.teamChatMessageCreated"), systemVersion: undefined })).status, 400);
-  assert.equal((await call(envelope("extension.command.metadata.getCommands"))).result.commands[0].name, "ai");
+  const command = (await call(envelope("extension.command.metadata.getCommands"))).result.commands[0];
+  assert.equal(command.name, "ai"); assert.equal(command.actionFunctionName, "commands.ai.open");
+  assert.deepEqual(command.paramDefinitions, [], "Bare /ai must not expose an options form");
+  assert.equal(Object.hasOwn(command, "autoCompleteFunctionName"), false, "Workflow selection belongs inside the WAM");
+  const openingEnv = { ALLOWED_CHANNEL_ID: channel, ALLOWED_CHAT_ID: group, COMMAND_GROUP_IDS: JSON.stringify([group]), CHANNEL_APP_ID: app, CHANNEL_APP_SIGNING_KEY: "ab".repeat(32), get PI_CREDENTIALS() { assert.fail("Opening /ai must not read the workflow catalog"); }, get PI_ASSISTANT() { assert.fail("Opening /ai must not initialize an Assistant"); } };
+  for (const root of [undefined, "root-A"]) for (const input of [undefined, {}]) {
+    const opened = await commandFunction(envelope("commands.ai.open", { chat: { type: "group", id: group }, ...(root === undefined ? {} : { trigger: { attributes: { rootMessageId: root } } }), ...(input === undefined ? {} : { input }) }), openingEnv);
+    assert.equal(opened.type, "wam"); assert.equal(opened.attributes.name, "ai");
+    assert.equal(opened.attributes.wamArgs.rootAvailable, root !== undefined);
+    assert.equal(Object.hasOwn(opened.attributes.wamArgs, "selectedWorkflow"), false);
+  }
   assert.equal((await call(envelope("commands.ai.open", {}), false)).status, 401);
   assert.ok((await open("root", group, { channel: { id: "other-channel" } })).error);
   assert.ok((await open("root", group, { caller: { type: "user", id: manager } })).error);
