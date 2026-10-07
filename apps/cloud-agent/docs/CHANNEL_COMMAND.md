@@ -6,7 +6,36 @@ The **업무 양식** panel uses [versioned workflow skills](WORKFLOW_SKILLS.md)
 
 ## Installation
 
-Keep the existing App Function endpoint on the Events origin plus `/functions`. Register `command` with `systemVersion:v1` through the documented app-token `registerExtension` lifecycle; do not replace the existing Hook extension. Configure the app WAM endpoint to the Events origin plus `/wam`, so WAM name `ai` loads `/wam/ai` or `/wam/ai/`. After changing command metadata, refresh `command:v1` registration so AppStore rediscovers the current parameter list. Registration, metadata discovery, installed activation and a real keyboard invocation are separate verification steps. [Official Command guide](https://developers.channel.io/en/articles/Command-b3d200dc), [WAM bridge](https://github.com/channel-io/app-sdk/blob/main/ts/packages/wam/src/types/wam.ts).
+Keep the existing App Function endpoint on the Events origin plus `/functions`. Register `command` with `systemVersion:v1` through the documented app-token `registerExtension` lifecycle; do not replace the existing Hook extension. Configure the app WAM endpoint to the Events origin plus `/wam`, so WAM name `ai` loads `/wam/ai` or `/wam/ai/`. After changing command metadata, refresh `command:v1` registration so AppStore rediscovers the current parameter list. Registration, metadata discovery, installed activation and a real keyboard invocation are separate verification steps. Successful registration does not prove that an installed command snapshot has changed. [Official Command guide](https://developers.channel.io/en/articles/Command-b3d200dc), [WAM bridge](https://github.com/channel-io/app-sdk/blob/main/ts/packages/wam/src/types/wam.ts).
+
+## Updates without reinstalling
+
+Keep `/ai`, its empty parameter list, `commands.ai.open`, the Function origin and the WAM origin stable. Put new workflow choices and controls inside the existing WAM. Both WAM routes return `Cache-Control: no-store`; reopening the panel fetches the current Worker HTML. Already open panels keep their loaded code until reopened. `systemVersion:v1` is the platform contract, not the application release number.
+
+From the private deployment checkout, push reviewed source and deploy the Worker that owns the change:
+
+```sh
+# Writing-panel HTML, styles, controls and existing Command handlers.
+npm run -w @cf-worker-apps/cloud-agent deploy:events
+# AI behavior and existing Assistant actions.
+npm run -w @cf-worker-apps/cloud-agent deploy:pi
+# Visit adapter, when this installation uses the bundled adapter.
+npm run -w @cf-worker-apps/cloud-agent deploy:visit
+```
+
+`deploy` continues to mean Pi only. All three aliases forward extra arguments, so append `-- --dry-run` to check a deployment without publishing. Deploy only the configured components that changed. A deployment that uses an external Gateway should deploy that Gateway separately instead of the example Visit worker. These commands use Wrangler and do not alter Channel app permissions or register extensions. Git push by itself does not deploy Workers.
+
+Ordinary UI and implementation changes within the installed contracts need no command re-registration or reinstall. Workflow skill data uses the existing administrator publish/enable flow; a Git push does not automatically activate a skill revision. New published Functions, slash parameters, origins or permissions are a separate app-contract release. Verify discovery and installation, and obtain any newly required permission consent.
+
+### Stale installed command definitions
+
+Do not repeatedly reinstall when the installed description or options disagree with signed `getCommands` output. In one verified deployment, `registerExtension`, command activation toggles and a same-permission reinstall all left the old command snapshot in place. Explicit command-list synchronization using the official historical SDK's `registerCommands(appId, commands, accessToken)` updated it. This establishes an operational recovery for that deployment, not a guarantee for all current installations.
+
+The [official SDK 0.4.2](https://www.npmjs.com/package/@channel.io/app-sdk-server/v/0.4.2) exposes that native method, while the current guide uses `registerExtension`. If this specific mismatch is reproduced, an operator can explicitly synchronize the reviewed complete command list with an app-scoped token. The historical `CommandDTO` has no `systemVersion` field and successful registration may return no `result`. Preserve every intended command and the existing Hook; never replace the list with a partial guessed definition. Keep credentials out of logs and verify the installed list and actual invocation afterward. This legacy operation is not an automatic deploy fallback.
+
+Keyboard selection belongs to the Channel client. In the verified client, the first Ctrl+Enter on an unselected `/ai` suggestion selected the command, and the next Ctrl+Enter executed it. The selected command opened the WAM with no native Options form. The Worker cannot redefine the host's initial autocomplete shortcut.
+
+## Authorization configuration
 
 Both workers require the same private deployment policy:
 
