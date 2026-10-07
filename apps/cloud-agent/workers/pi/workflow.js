@@ -5,9 +5,9 @@ const text = (value, max) => typeof value === "string" && value.length <= max &&
 const id = value => typeof value === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(value);
 const uuid = value => typeof value === "string" && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
 const requireValue = (ok, code = "workflow_input_invalid") => { if (!ok) throw Error(code); };
-export const workflowEditable = field => !field.source || field.source.startsWith("reservation.");
+export const workflowEditable = field => !field.source || field.source.startsWith("reservation.") || field.source === "intake.concernText";
 export const workflowPath = "references/workflow.json";
-export const workflowSources = Object.freeze(["patient.label", "patient.reference", "visit.date", "visit.status", "reservation.at", "reservation.type", "reservation.status", "reservation.procedureText", "reservation.note"]);
+export const workflowSources = Object.freeze(["patient.label", "patient.reference", "visit.date", "visit.status", "reservation.at", "reservation.type", "reservation.status", "reservation.procedureText", "reservation.note", "reservation.pod", "intake.concernText"]);
 export const workflowHash = async value => [...new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(value)))].map(byte => byte.toString(16).padStart(2, "0")).join("");
 export function workflowDefinition(value) {
   requireValue(keys(value, ["schemaVersion", "title", "source", "fields", "template", "confirmations"]) && value.schemaVersion === 1 && text(value.title, 200) && value.title.trim() && ["none", "visit-context"].includes(value.source) && Array.isArray(value.fields) && value.fields.length <= 20 && Array.isArray(value.confirmations) && value.confirmations.length <= 10 && text(value.template, 4000) && value.template.trim() && encoder.encode(JSON.stringify(value)).length <= 32768 && !/(?:https?:\/\/|javascript:|<\/?script\b)/i.test(JSON.stringify(value)), "workflow_definition_invalid");
@@ -47,7 +47,7 @@ export function workflowSource(context) {
   requireValue(visit && context.patient, "visit_selection_required");
   const reservation = visit.reservationId === null ? null : context.reservations.find(row => row.id === visit.reservationId);
   requireValue(visit.reservationId === null || reservation, "visit_response_invalid");
-  return { patient: { id: context.patient.id, label: context.patient.label, reference: context.patient.reference }, visit: { id: visit.id, date: visit.date, status: visit.status, reservationId: visit.reservationId }, reservation: reservation ? { id: reservation.id, at: reservation.at, type: reservation.type, status: reservation.status, procedureText: reservation.procedureText ?? null, note: reservation.note ?? null } : null };
+  return { patient: { id: context.patient.id, label: context.patient.label, reference: context.patient.reference }, visit: { id: visit.id, date: visit.date, status: visit.status, reservationId: visit.reservationId }, reservation: reservation ? { id: reservation.id, at: reservation.at, type: reservation.type, status: reservation.status, procedureText: reservation.procedureText ?? null, note: reservation.note ?? null, pod: reservation.pod ?? null } : null, intake: { concernText: context.intake?.concernText ?? null } };
 }
 export function workflowPrefill(definition, source = null) {
   return Object.fromEntries(definition.fields.map(field => { const [section, key] = field.source?.split(".") ?? []; const candidate = field.source ? source?.[section]?.[key] ?? "" : ""; return [field.id, typeof candidate === "string" && candidate.length <= field.maxLength && (field.type !== "choice" || field.choices.includes(candidate)) ? candidate : ""]; }));

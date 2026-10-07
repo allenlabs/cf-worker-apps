@@ -26,9 +26,21 @@ Definitions have only these keys. IDs use lower-case letters, digits and undersc
 
 - `patient.label` or `patient.reference`.
 - `visit.date` or `visit.status` for the selected visit.
-- `reservation.at`, `reservation.type`, `reservation.status`, `reservation.procedureText` or `reservation.note` for that visit's linked reservation.
+- `reservation.at`, `reservation.type`, `reservation.status`, `reservation.procedureText`, `reservation.note` or `reservation.pod` for that visit's linked reservation.
+- `intake.concernText` for the explicitly selected patient and visit.
 
-Patient and selected-visit fields are read-only. Reservation fields are editable candidates. There is no fallback to the first/latest reservation. No link means blank values. `procedureText` and `note` are optional, nullable projected text, capped at 1,000 characters by the common contract. They are discarded on every unrelated or unselected reservation. An installation can impose a smaller ceiling. A procedure menu is not a clinical fact and cannot establish revision status. Put that decision in an explicit staff field/check.
+Patient and selected-visit fields are read-only. Reservation fields and `intake.concernText` are editable candidates. There is no fallback to the first/latest reservation. No link means blank reservation values. `procedureText` and `note` are optional, nullable projected text capped at 1,000 characters; `pod` is optional, nullable text capped at 40 characters. They are discarded on every unrelated or unselected reservation. Optional `intake:{concernText:string|null}` is projected only after the selected patient and visit validate, with a 1,000-character concern ceiling. The backend must authorize and associate the intake with that selection before returning it; the common contract cannot verify undisclosed database ownership. Other intake properties are discarded. Older backends can omit either new candidate and its field stays blank. An installation can impose a smaller ceiling. POD is supplied text, never calculated from a date. A procedure menu is not a clinical fact and cannot establish revision status. Put that decision in an explicit staff field/check.
+
+For example, a synthetic visit-backed form can declare:
+
+```json
+[
+  {"id":"concern","label":"Intake concern","type":"text","required":false,"maxLength":500,"source":"intake.concernText"},
+  {"id":"pod","label":"POD","type":"text","required":false,"maxLength":40,"source":"reservation.pod"}
+]
+```
+
+Selecting a patient and visit fills available candidates automatically; no AI description or model call is required. Staff edit multiline text in place, then review and confirm the exact message. AI assistance remains available in a folded optional section for visit forms. When no thread is bound yet, the separate start button creates the thread and opens the selected visit form without a description or model call. Changing between visit-backed forms keeps a valid selected patient/visit pair, clears all old edits, checks and preview, and rereads authorization and candidates before filling the new form. Changing to a manual form or refreshing the catalog clears that selection.
 
 Each backend read must enforce current staff/site/dataset authorization. The generic administrator and Channel group policy do not grant clinical access. The supplied examples do not enable production data. Current multi-customer support means tenant-isolated installations with a fixed deployment `TENANT_ID` and tenant-pinned owner Credentials/Assistant objects. There is no browser tenant switch or shared-host cross-tenant catalog.
 
@@ -41,7 +53,7 @@ Each backend read must enforce current staff/site/dataset authorization. The gen
 3. `prepare` adds the exact declared values. It rereads the selected source, validates the values and renders the template. It returns a new operation UUID, exact text, a ten-minute draft token and expiry.
 4. `send` requires that UUID, token, exact values/selection, `confirmed:true`, and all declared confirmation IDs. `status` accepts the same UUID/token and never sends.
 
-The HMAC token is authenticated, not encrypted. It contains only the operation ID, skill name/revision, expiry and hashes binding the manager/root/tenant actor scope, selection, final values, exact text, source projection and confirmation IDs. It contains no patient IDs, labels, source text or field contents. Do not put it in URLs or logs. The actual source hash excludes observation time so a fresh read timestamp alone does not invalidate a review. It includes the selected patient, visit and reservation IDs and their relationship, patient identity, visit status/date and linked reservation facts. IDs are internal hash inputs, not available field source paths. Source changes, field edits, selected patient/visit changes and confirmation changes require a fresh review. A new token cannot be reused under another operation UUID.
+The HMAC token is authenticated, not encrypted. It contains only the operation ID, skill name/revision, expiry and hashes binding the manager/root/tenant actor scope, selection, final values, exact text, source projection and confirmation IDs. It contains no patient IDs, labels, source text or field contents. Do not put it in URLs or logs. The actual source hash excludes observation time so a fresh read timestamp alone does not invalidate a review. It includes the selected patient, visit and reservation IDs and their relationship, patient identity, visit status/date, linked reservation facts and projected intake concern. IDs are internal hash inputs, not available field source paths. Source changes, field edits, selected patient/visit changes and confirmation changes require a fresh review. A new token cannot be reused under another operation UUID.
 
 Before the first send, the route rechecks current enabled skill state and rereads authorization/source facts. It compares the reconstructed message and hashes with the review token. The Assistant also checks tenant pin, exact actor/root, current skill revision and configured `VISIT_MCP_GROUP_ID` plus reply policy. It sends the server-rendered template using the owner Channel credential, the pinned source root and `broadcast:false`. Definitions cannot change the destination. The internal RPC is available only through trusted service bindings; it is not registered as a Pi tool or public HTTP endpoint.
 

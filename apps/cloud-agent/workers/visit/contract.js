@@ -90,8 +90,8 @@ export function visitResult(value, input) {
   const selectedPatient = patient(value.patient);
   const selectedReservationId = value.visits.find(row => object(row) && row.id === input.visitId)?.reservationId ?? null;
   const reservations = value.reservations.map(row => {
-    backendValue(object(row) && uuid(row.id) && (row.at === null || date(row.at)) && nullableText(row.type, 80) && nullableText(row.status, 80) && (row.id !== selectedReservationId || (row.procedureText === undefined || nullableText(row.procedureText, 1000)) && (row.note === undefined || nullableText(row.note, 1000))));
-    return { id: row.id, at: row.at, type: row.type, status: row.status, ...(row.id !== selectedReservationId || row.procedureText === undefined ? {} : { procedureText: row.procedureText }), ...(row.id !== selectedReservationId || row.note === undefined ? {} : { note: row.note }) };
+    backendValue(object(row) && uuid(row.id) && (row.at === null || date(row.at)) && nullableText(row.type, 80) && nullableText(row.status, 80) && (row.id !== selectedReservationId || (row.procedureText === undefined || nullableText(row.procedureText, 1000)) && (row.note === undefined || nullableText(row.note, 1000)) && (row.pod === undefined || nullableText(row.pod, 40))));
+    return { id: row.id, at: row.at, type: row.type, status: row.status, ...(row.id !== selectedReservationId || row.procedureText === undefined ? {} : { procedureText: row.procedureText }), ...(row.id !== selectedReservationId || row.note === undefined ? {} : { note: row.note }), ...(row.id !== selectedReservationId || row.pod === undefined ? {} : { pod: row.pod }) };
   });
   const reservationIds = new Set(reservations.map(row => row.id)); unique(reservations);
   const visits = value.visits.map(row => {
@@ -99,7 +99,9 @@ export function visitResult(value, input) {
     return { id: row.id, date: row.date, reservationId: row.reservationId, status: row.status };
   });
   unique(visits); backendValue(input.visitId === null || visits.some(row => row.id === input.visitId));
-  return { mode: value.mode, kind: "context", patient: selectedPatient, reservations, visits, selectedVisitId: value.selectedVisitId, observedAt: value.observedAt };
+  const intake = input.visitId === null || value.intake === undefined ? undefined : value.intake;
+  backendValue(intake === undefined || object(intake) && nullableText(intake.concernText, 1000));
+  return { mode: value.mode, kind: "context", patient: selectedPatient, reservations, visits, selectedVisitId: value.selectedVisitId, ...(intake === undefined ? {} : { intake: { concernText: intake.concernText } }), observedAt: value.observedAt };
 }
 
 export function visitDraft(context, fields) {

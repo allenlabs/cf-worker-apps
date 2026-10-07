@@ -18,6 +18,11 @@ const mixedActor: { kind: "mcp"; identity: typeof identity; target: typeof targe
 readGatewayVisit(env, mixedActor, { action: "patientSearch", query: "Synthetic" });
 
 const workflow = { schemaVersion: 1, title: "Fixture manual form", source: "none", fields: [{ id: "notice", label: "Notice", type: "text", required: true, maxLength: 100 }], template: "{{notice}}", confirmations: [] } satisfies import("../../workers/pi/workflow.js").WorkflowDefinition;
-const visitWorkflow = { ...workflow, source: "visit-context", fields: [{ ...workflow.fields[0], source: "reservation.procedureText" }] } satisfies import("../../workers/pi/workflow.js").WorkflowDefinition;
+const visitWorkflow = { ...workflow, source: "visit-context", fields: [{ ...workflow.fields[0], source: "reservation.procedureText" }, { ...workflow.fields[0], id: "concern", source: "intake.concernText" }, { ...workflow.fields[0], id: "pod", maxLength: 40, source: "reservation.pod" }] } satisfies import("../../workers/pi/workflow.js").WorkflowDefinition;
 const workflowSend = { action: "send", name: "fixture-form", revision: "0".repeat(64), values: { notice: "Fixture" }, operationId: "fixture-operation", draftToken: "fixture-token", confirmed: true, confirmations: [] } satisfies import("../../workers/pi/workflow.js").WorkflowInput;
 void [visitWorkflow, workflowSend];
+
+declare const context: import("../../workers/visit/contract.js").VisitContextResult;
+const concern: string | null | undefined = context.intake?.concernText;
+const pod: string | null | undefined = context.reservations[0]?.pod;
+void [concern, pod];

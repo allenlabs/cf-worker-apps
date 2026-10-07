@@ -23,9 +23,10 @@ export type VisitContextResult = {
   mode: VisitMode;
   kind: "context";
   patient: PatientCandidate;
-  reservations: { id: string; at: string | null; type: string | null; status: string | null; procedureText?: string | null; note?: string | null }[];
+  reservations: { id: string; at: string | null; type: string | null; status: string | null; procedureText?: string | null; note?: string | null; pod?: string | null }[];
   visits: { id: string; date: string | null; reservationId: string | null; status: string | null }[];
   selectedVisitId: string | null;
+  intake?: { concernText: string | null };
   observedAt: string;
 };
 export type VisitDraftResult = {

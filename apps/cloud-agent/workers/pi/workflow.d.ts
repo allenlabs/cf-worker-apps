@@ -1,10 +1,10 @@
 import type { VisitContextResult } from "../visit/contract.js";
-export type WorkflowSourcePath = "patient.label" | "patient.reference" | "visit.date" | "visit.status" | "reservation.at" | "reservation.type" | "reservation.status" | "reservation.procedureText" | "reservation.note";
+export type WorkflowSourcePath = "patient.label" | "patient.reference" | "visit.date" | "visit.status" | "reservation.at" | "reservation.type" | "reservation.status" | "reservation.procedureText" | "reservation.note" | "reservation.pod" | "intake.concernText";
 type Field = { id: string; label: string; required: boolean; maxLength: number } & ({ type: "text"; choices?: never } | { type: "choice"; choices: string[] });
 export type WorkflowField = Field & { source?: WorkflowSourcePath };
 type Definition = { schemaVersion: 1; title: string; template: string; confirmations: { id: string; label: string }[] };
 export type WorkflowDefinition = Definition & ({ source: "none"; fields: (Field & { source?: never })[] } | { source: "visit-context"; fields: WorkflowField[] });
-export type WorkflowSource = { patient: { id: string; label: string; reference: string | null }; visit: { id: string; date: string | null; status: string | null; reservationId: string | null }; reservation: { id: string; at: string | null; type: string | null; status: string | null; procedureText: string | null; note: string | null } | null };
+export type WorkflowSource = { patient: { id: string; label: string; reference: string | null }; visit: { id: string; date: string | null; status: string | null; reservationId: string | null }; reservation: { id: string; at: string | null; type: string | null; status: string | null; procedureText: string | null; note: string | null; pod: string | null } | null; intake: { concernText: string | null } };
 type Selection = { patientId: string; visitId: string };
 type Pinned = { name: string; revision: string; selection?: Selection };
 export type WorkflowInput = { action: "catalog" } | (Pinned & { action: "prefill" }) | (Pinned & { action: "prepare"; values: Record<string, string> }) | (Pinned & { action: "send"; values: Record<string, string>; operationId: string; draftToken: string; confirmed: true; confirmations: string[] }) | { action: "status"; operationId: string; draftToken: string };
