@@ -18,7 +18,7 @@ import { installVisitMcpTools } from "./visit-mcp.js";
 import { installImageTool } from "./image-tool.js";
 import { deliverChannelImage, readImageTransfer } from "./channel-image.js";
 import { codexImageStart, codexImageCheck, codexImageAccess, codexImageStatus, codexImageDisconnect, codexImageRequest } from "./codex-images-auth.js";
-import { workflowFromSkill, workflowHash, workflowRender } from "./workflow.js";
+import { workflowFromSkill, workflowHash, workflowRender, workflowFinalText } from "./workflow.js";
 import { visitJson, visitTarget } from "../visit/contract.js";
 import { commandAllowed, commandGroups, sourceThreadKey, readSourceThread } from "./source-history.js";
 import { configuredModels, thinkingChoices, selectedSkill } from "./command-settings.js";
@@ -702,28 +702,32 @@ export class Assistant extends Agent {
     return { definition, scope: await workflowHash(JSON.stringify([tenantId(this.env), this.ctx.id.toString(), target])) };
   }
 
-  async workflowStatus(target, operationId, requestDigest) {
+  async workflowStatus(target, operationId, requestDigest, finalTextHash) {
     await this.workflowTarget(target);
     requireCondition(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(operationId ?? "") && /^[a-f0-9]{64}$/.test(requestDigest ?? ""), "workflow_input_invalid");
     const row = await this.ctx.storage.get(`workflow-delivery:${operationId}`);
     requireCondition(!row || row.requestDigest === requestDigest, "workflow_operation_conflict");
+    requireCondition(!row || finalTextHash === undefined || (row.finalTextHash ?? null) === finalTextHash, "workflow_draft_changed");
     return row ? { operationId, status: row.state === "sending" ? "uncertain" : row.state, ...(row.replyId ? { replyId: row.replyId } : {}) } : null;
   }
 
   async workflowSend(input) {
-    requireCondition(input && typeof input === "object" && !Array.isArray(input) && Object.keys(input).every(key => ["target", "operationId", "requestDigest", "name", "revision", "values", "source", "textHash", "confirmed"].includes(key)) && input.confirmed === true, "workflow_input_invalid");
-    const previous = await this.workflowStatus(input.target, input.operationId, input.requestDigest);
+    requireCondition(input && typeof input === "object" && !Array.isArray(input) && Object.keys(input).every(key => ["target", "operationId", "requestDigest", "name", "revision", "values", "source", "finalText", "textHash", "confirmed"].includes(key)) && input.confirmed === true, "workflow_input_invalid");
+    const finalTextHash = input.finalText === undefined ? null : await workflowHash(workflowFinalText(input.finalText));
+    requireCondition(finalTextHash === null || finalTextHash === input.textHash, "workflow_draft_changed");
+    const previous = await this.workflowStatus(input.target, input.operationId, input.requestDigest, finalTextHash);
     if (previous) return previous;
     requireCondition(input.target.groupId === this.env.VISIT_MCP_GROUP_ID && this.env.CHANNEL_REPLY_ENABLED === "true", "workflow_delivery_denied");
     const { definition } = await this.workflowDefinition(input.target, input.name, input.revision);
     requireCondition(definition.source === "none" ? input.source === null : input.source && typeof input.source === "object", "workflow_input_invalid");
-    const rendered = workflowRender(definition, input.values, input.source);
+    const rendered = workflowRender(definition, input.values, input.source, input.finalText);
     requireCondition(await workflowHash(rendered.text) === input.textHash, "workflow_draft_changed");
     const claim = await this.ctx.storage.transaction(async transaction => {
       const row = await transaction.get(`workflow-delivery:${input.operationId}`);
       requireCondition(!row || row.requestDigest === input.requestDigest, "workflow_operation_conflict");
+      requireCondition(!row || (row.finalTextHash ?? null) === finalTextHash, "workflow_draft_changed");
       if (row) return false;
-      await transaction.put(`workflow-delivery:${input.operationId}`, { requestDigest: input.requestDigest, state: "sending" }); return true;
+      await transaction.put(`workflow-delivery:${input.operationId}`, { requestDigest: input.requestDigest, ...(finalTextHash === null ? {} : { finalTextHash }), state: "sending" }); return true;
     });
     if (!claim) return this.workflowStatus(input.target, input.operationId, input.requestDigest);
     let result;
@@ -733,7 +737,7 @@ export class Assistant extends Agent {
       const envelope = await visitJson(response, 262144);
       result = !response.ok || envelope.error ? { state: [400, 401, 403, 404, 422].includes(response.status) ? "failed" : "uncertain" } : nativeId(envelope.result?.message?.id) ? { state: "sent", replyId: envelope.result.message.id } : { state: "uncertain" };
     } catch { result = { state: "uncertain" }; }
-    await this.ctx.storage.put(`workflow-delivery:${input.operationId}`, { requestDigest: input.requestDigest, ...result });
+    await this.ctx.storage.put(`workflow-delivery:${input.operationId}`, { requestDigest: input.requestDigest, ...(finalTextHash === null ? {} : { finalTextHash }), ...result });
     return this.workflowStatus(input.target, input.operationId, input.requestDigest);
   }
 

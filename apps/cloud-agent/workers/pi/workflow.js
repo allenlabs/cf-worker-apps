@@ -39,7 +39,8 @@ export function workflowInput(value) {
   requireValue(typeof value.name === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.name) && value.name.length <= 64 && typeof value.revision === "string" && /^[a-f0-9]{64}$/.test(value.revision));
   requireValue(value.selection === undefined || keys(value.selection, ["patientId", "visitId"]) && uuid(value.selection.patientId) && uuid(value.selection.visitId));
   if (value.action === "prefill") { requireValue(keys(value, common)); return { ...value }; }
-  requireValue(keys(value, value.action === "send" ? [...common, "intent", "values", "operationId", "draftToken", "confirmed", "confirmations"] : [...common, "intent", "values"]) && object(value.values) && Object.keys(value.values).length <= 20 && Object.entries(value.values).every(([key, val]) => id(key) && text(val, 1000)) && encoder.encode(JSON.stringify(value.values)).length <= 16384);
+  requireValue(keys(value, value.action === "send" ? [...common, "intent", "finalText", "values", "operationId", "draftToken", "confirmed", "confirmations"] : [...common, "intent", "finalText", "values"]) && object(value.values) && Object.keys(value.values).length <= 20 && Object.entries(value.values).every(([key, val]) => id(key) && text(val, 1000)) && encoder.encode(JSON.stringify(value.values)).length <= 16384);
+  if (value.finalText !== undefined) workflowFinalText(value.finalText);
   if (value.intent !== undefined) { startIntent(value.intent); requireValue(value.intent.workflow === undefined); }
   if (value.action === "send") requireValue(uuid(value.operationId) && text(value.draftToken, 4096) && value.confirmed === true && Array.isArray(value.confirmations) && value.confirmations.length <= 10 && value.confirmations.every(id), "workflow_confirmation_required");
   return { ...value };
@@ -54,13 +55,17 @@ export function workflowSource(context) {
 export function workflowPrefill(definition, source = null) {
   return Object.fromEntries(definition.fields.map(field => { const [section, key] = field.source?.split(".") ?? []; const candidate = field.source ? source?.[section]?.[key] ?? "" : ""; return [field.id, typeof candidate === "string" && candidate.length <= field.maxLength && (field.type !== "choice" || field.choices.includes(candidate)) ? candidate : ""]; }));
 }
-export function workflowRender(definition, input, source = null) {
+export function workflowFinalText(value) {
+  requireValue(text(value, 4000) && !/[\x7f-\x9f]/.test(value) && value.trim() && encoder.encode(value).length <= 16000, "workflow_final_text_invalid");
+  return value;
+}
+export function workflowRender(definition, input, source = null, finalText) {
   requireValue(keys(input, definition.fields.map(field => field.id)) && Object.keys(input).length === definition.fields.length, "workflow_values_invalid");
   const derived = workflowPrefill(definition, source), values = {};
   for (const field of definition.fields) {
     const value = input[field.id]; requireValue(text(value, field.maxLength) && (!field.required || value.trim()) && (field.type !== "choice" || value === "" && !field.required || field.choices.includes(value)) && (workflowEditable(field) || value === derived[field.id]), "workflow_values_invalid"); values[field.id] = value;
   }
-  const output = definition.template.replace(/{{([a-z][a-z0-9_]{0,63})}}/g, (_, key) => values[key]);
+  const output = finalText === undefined ? definition.template.replace(/{{([a-z][a-z0-9_]{0,63})}}/g, (_, key) => values[key]) : workflowFinalText(finalText);
   requireValue(output.trim() && output.length <= 4000 && encoder.encode(output).length <= 16000, "workflow_output_too_large");
   return { values, text: output };
 }

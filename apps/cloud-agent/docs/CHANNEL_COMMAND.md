@@ -2,7 +2,7 @@
 
 The desk Command `/ai` opens a WAM panel for Help, Model, Thinking, Ask and History. This is a registered Channel Talk App extension, independent of the automatic public App Hook. Ordinary questions and settings return in the initiating manager's WAM panel. Explicit reviewed workflow sends publish their exact text as a new root or existing-thread reply; AI-only start can create a native root. The quick actions **대화 요약**, **할 일 정리** and **답변 초안** reuse Ask with the selected API or explicitly shared context. They display results only in the panel; missing task owners and deadlines are marked 미정 rather than invented.
 
-The **업무 양식** panel uses [versioned workflow skills](WORKFLOW_SKILLS.md), shared explicit patient/visit selection where requested, editable source candidates, exact-text review and a separate durable delivery receipt. Its authorized read binding bypasses Pi/general transcripts and requires current business staff/site permission. Read [the visit contract](VISIT_WORKFLOW.md). The old fixed draft action is [legacy compatibility only](DEPRECATED.md); it does not use the durable AI operation lifecycle below.
+The **업무 양식** panel uses [versioned workflow skills](WORKFLOW_SKILLS.md), shared explicit patient/visit selection where requested, editable source candidates, a full-message editor, exact-text review and a separate durable delivery receipt. Its authorized read binding bypasses Pi/general transcripts and requires current business staff/site permission. Read [the visit contract](VISIT_WORKFLOW.md). The old fixed draft action is [legacy compatibility only](DEPRECATED.md); it does not use the durable AI operation lifecycle below.
 
 ## Installation
 

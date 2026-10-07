@@ -8,7 +8,7 @@ export type WorkflowSource = { patient: { id: string; label: string; reference: 
 type Selection = { patientId: string; visitId: string };
 type StartSettings = { modelId: string; thinkingLevel: string };
 type Pinned = { name: string; revision: string; selection?: Selection };
-export type WorkflowInput = { action: "catalog" } | (Pinned & { action: "prefill" }) | (Pinned & { action: "prepare"; intent?: StartSettings; values: Record<string, string> }) | (Pinned & { action: "send"; intent?: StartSettings; values: Record<string, string>; operationId: string; draftToken: string; confirmed: true; confirmations: string[] }) | { action: "status"; operationId: string; draftToken: string };
+export type WorkflowInput = { action: "catalog" } | (Pinned & { action: "prefill" }) | (Pinned & { action: "prepare"; intent?: StartSettings; finalText?: string; values: Record<string, string> }) | (Pinned & { action: "send"; intent?: StartSettings; finalText?: string; values: Record<string, string>; operationId: string; draftToken: string; confirmed: true; confirmations: string[] }) | { action: "status"; operationId: string; draftToken: string };
 export const workflowPath: "references/workflow.json";
 export const workflowSources: readonly WorkflowSourcePath[];
 export function workflowHash(value: string): Promise<string>;
@@ -17,4 +17,5 @@ export function workflowFromSkill(value: unknown): WorkflowDefinition | null;
 export function workflowInput(value: unknown): WorkflowInput;
 export function workflowSource(context: VisitContextResult): WorkflowSource;
 export function workflowPrefill(definition: WorkflowDefinition, source?: WorkflowSource | null): Record<string, string>;
-export function workflowRender(definition: WorkflowDefinition, values: unknown, source?: WorkflowSource | null): { values: Record<string, string>; text: string };
+export function workflowFinalText(value: unknown): string;
+export function workflowRender(definition: WorkflowDefinition, values: unknown, source?: WorkflowSource | null, finalText?: string): { values: Record<string, string>; text: string };

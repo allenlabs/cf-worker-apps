@@ -1,7 +1,7 @@
 import { staffSettings, staffPatchKeys, patchStaffTransaction } from "./staff-settings.js";
 import { commandAllowed, sourceId, sourceThreadKey } from "./source-history.js";
 import { configuredModels, thinkingChoices, startInput } from "./command-settings.js";
-import { workflowFromSkill, workflowHash, workflowRender } from "./workflow.js";
+import { workflowFromSkill, workflowHash, workflowRender, workflowFinalText } from "./workflow.js";
 import { tenantId } from "./conversation-store.js";
 import { visitJson } from "../visit/contract.js";
 const requireValue = (ok, code) => { if (!ok) throw Error(code); };
@@ -71,8 +71,9 @@ export async function startStatus(owner, target, operationId) {
 export async function createThread(owner, input) {
   const { target, operationId, intent } = input; startInput({ action: "create", operationId, intent, confirmed: input.confirmed }); targetFor(owner, target);
   const reviewed = input.reviewedWorkflow;
-  requireValue(intent.workflow ? keys(reviewed, ["reviewDigest", "textHash", "values", "source"]) && /^[a-f0-9]{64}$/.test(reviewed.reviewDigest ?? "") && /^[a-f0-9]{64}$/.test(reviewed.textHash ?? "") : reviewed === undefined, "workflow_confirmation_required");
-  const requestDigest = await workflowHash(JSON.stringify([tenantId(owner.env), target, intent, ...(reviewed ? [reviewed.reviewDigest, reviewed.textHash] : [])]));
+  requireValue(intent.workflow ? keys(reviewed, ["reviewDigest", "textHash", "values", "source", "finalText"]) && /^[a-f0-9]{64}$/.test(reviewed.reviewDigest ?? "") && /^[a-f0-9]{64}$/.test(reviewed.textHash ?? "") : reviewed === undefined, "workflow_confirmation_required");
+  if (reviewed?.finalText !== undefined) requireValue(await workflowHash(workflowFinalText(reviewed.finalText)) === reviewed.textHash, "workflow_draft_changed");
+  const requestDigest = await workflowHash(JSON.stringify([tenantId(owner.env), target, intent, ...(reviewed ? [reviewed.reviewDigest, reviewed.textHash, ...(reviewed.finalText === undefined ? [] : [await workflowHash(reviewed.finalText)])] : [])]));
   const previous = await receipt(owner, target, operationId);
   if (previous) { requireValue(previous.requestDigest === requestDigest, "command_start_operation_conflict"); return project(await finish(owner, previous)); }
   requireValue(owner.env.CHANNEL_REPLY_ENABLED === "true" && target.groupId === owner.env.ALLOWED_CHAT_ID, "command_start_delivery_denied");
@@ -82,7 +83,7 @@ export async function createThread(owner, input) {
     requireValue(target.groupId === owner.env.VISIT_MCP_GROUP_ID, "workflow_delivery_denied");
     const { definition } = await rootWorkflowDefinition(owner, target, intent.workflow.name, intent.workflow.revision);
     requireValue(definition.source === "none" ? reviewed.source === null : object(reviewed.source), "workflow_input_invalid");
-    plainText = workflowRender(definition, reviewed.values, reviewed.source).text;
+    plainText = workflowRender(definition, reviewed.values, reviewed.source, reviewed.finalText).text;
     requireValue(await workflowHash(plainText) === reviewed.textHash, "workflow_draft_changed");
   }
   const nonceKey = "command-start-nonce:" + await workflowHash(JSON.stringify([tenantId(owner.env), target.nonce])), barrier = await groupKey(target), key = "command-start:" + operationId;
