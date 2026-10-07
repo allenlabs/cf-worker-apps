@@ -97,6 +97,25 @@ try {
   const request = new Request("https://chatgpt.com/backend-api/codex/responses", { method: "POST", body: "fixture-private-marker" });
   assert.equal(codexRequestShape(request, undefined, "fixture-model").body.parsedJson, null);
   assert.equal(request.bodyUsed, false, "request-body observation must not consume caller input");
+  assert.deepEqual(codexRequestShape(request, undefined, "fixture-model").wire, { encoding: "identity", kind: null, byteLength: null });
+  const wireShape = (body, encoding) => codexRequestShape("https://chatgpt.com/backend-api/codex/responses", { body, headers: encoding === undefined ? {} : { "content-encoding": encoding } }, "fixture-model").wire;
+  assert.deepEqual(wireShape("직원🙂"), { encoding: "identity", kind: "string", byteLength: 10 });
+  for (const [encoding, expectedEncoding] of [["identity", "identity"], [" ZSTD ", "zstd"], ["gzip", "other"], ["zstd, fixture-private-marker", "other"]]) assert.equal(wireShape("fixture-private-marker", encoding).encoding, expectedEncoding);
+  const wireBytes = new Uint8Array([1, 2, 3, 4, 5]);
+  for (const body of [wireBytes.buffer, wireBytes.subarray(1, 4), new DataView(wireBytes.buffer, 2, 2)]) {
+    const expectedLength = body.byteLength;
+    assert.deepEqual(wireShape(body, "zstd"), { encoding: "zstd", kind: "bytes", byteLength: expectedLength });
+  }
+  Object.defineProperty(wireBytes, "byteLength", { get() { assert.fail("wire observation cannot invoke view accessors"); } });
+  assert.deepEqual(wireShape(wireBytes, "zstd"), { encoding: "zstd", kind: "bytes", byteLength: 5 });
+  const wireStream = new ReadableStream();
+  wireStream.getReader = () => assert.fail("wire observation cannot read streams");
+  assert.deepEqual(wireShape(wireStream), { encoding: "identity", kind: "stream", byteLength: null });
+  assert.equal(wireStream.locked, false);
+  Object.defineProperty(request, "body", { get() { assert.fail("wire observation cannot access Request.body"); } });
+  assert.deepEqual(codexRequestShape(request, undefined, "fixture-model").wire, { encoding: "identity", kind: null, byteLength: null });
+  assert.deepEqual(wireShape(new Blob(["fixture-private-marker"])), { encoding: "identity", kind: "other", byteLength: null });
+  assert(!JSON.stringify(wireShape("fixture-private-marker", "fixture-private-marker")).includes("fixture-private-marker"));
   const invalid = codexRequestShape("https://chatgpt.com/backend-api/codex/responses?fixture-private-marker", { method: "fixture-private-marker", body: "not JSON" }, "fixture-model");
   assert.equal(invalid.expectedEndpoint, false); assert.equal(invalid.method, "other");
   assert.equal(invalid.body.parsedJson, false); assert.equal(invalid.body.toolSchemaValid, null);
@@ -104,7 +123,7 @@ try {
   for (const [tools, valid] of [[[], true], [[{ type: "function", name: "fixture_tool", parameters: null }], false], [[{ type: "custom", name: "fixture_tool", format: { type: "grammar", syntax: "lark", definition: "fixture-private-marker" } }], true], [[{ type: "unknown", name: "fixture_tool" }], null]]) assert.equal(codexRequestShape("https://chatgpt.com/backend-api/codex/responses", { body: JSON.stringify({ tools }) }, "fixture-model").body.toolSchemaValid, valid);
 
   for (const method of ["stream", "streamSimple"]) {
-    let provider, authorized = 0, fetched = 0, originalCallback = 0;
+    let provider, authorized = 0, fetched = 0, originalCallback = 0, nativeWire;
     const diagnostics = [];
     installSubscriptionModels({ setProvider(value) { if (value.id === "openai-codex") provider = value; } }, async () => ({ async codexAccess() { return { access: token }; } }), async () => { authorized++; }, value => { diagnostics.push(value); throw new Error("fixture observer failure"); });
     assert.equal((await provider.auth.apiKey.resolve()).auth.apiKey, token); assert.equal(authorized, 1);
@@ -115,6 +134,8 @@ try {
       fetch: async (url, init) => {
         fetched++; assert.equal(url, "https://chatgpt.com/backend-api/codex/responses");
         assert.equal(init.headers.get("accept"), "text/event-stream"); assert.equal(init.signal.aborted, false);
+        nativeWire = { encoding: init.headers.get("content-encoding"), kind: "bytes", byteLength: init.body.byteLength };
+        assert.equal(nativeWire.encoding, "zstd"); assert(init.body instanceof Uint8Array);
         return new Response(html, { status: 403, headers });
       },
       onResponse(responseInfo, model) { originalCallback++; assert.equal(responseInfo.status, 403); assert.equal(model.provider, "openai-codex"); }
@@ -133,6 +154,7 @@ try {
     assert.equal(requestShape.expectedEndpoint, true); assert.equal(requestShape.method, "POST");
     assert.equal(requestShape.modelId, provider.getModels()[0].id);
     assert.deepEqual(requestShape.headers, { authorization: true, account: true, contentType: true, accept: true });
+    assert.deepEqual(requestShape.wire, nativeWire, "diagnostics observe the exact native compressed wire length and encoding");
     assert.deepEqual(responseShape, { redirected: false, expectedFinalEndpoint: null });assert.deepEqual(payloadShape, { storeFalse: true, streamTrue: true, inputArray: true, toolSchemaValid: true });
     assert(!JSON.stringify(diagnostics).includes(token)); assert(!JSON.stringify(diagnostics).includes("fixture-account"));
     assert.deepEqual(result.diagnostic, finalDiagnostic);

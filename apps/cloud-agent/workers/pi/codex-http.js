@@ -40,12 +40,19 @@ export function codexPayloadShape(body) {
 }
 
 export function codexRequestShape(input, init, modelId) {
-  const shape = { attemptId: crypto.randomUUID(), modelId: typeof modelId === "string" && /^[A-Za-z0-9._-]{1,128}$/.test(modelId) ? modelId : null, expectedEndpoint: endpoint(typeof input === "string" || input instanceof URL ? input : input?.url), method: null, headers: { authorization: null, account: null, contentType: null, accept: null }, body: { parsedJson: null, storeFalse: null, streamTrue: null, inputArray: null, toolSchemaValid: null } };
+  const shape = { attemptId: crypto.randomUUID(), modelId: typeof modelId === "string" && /^[A-Za-z0-9._-]{1,128}$/.test(modelId) ? modelId : null, expectedEndpoint: endpoint(typeof input === "string" || input instanceof URL ? input : input?.url), method: null, headers: { authorization: null, account: null, contentType: null, accept: null }, body: { parsedJson: null, storeFalse: null, streamTrue: null, inputArray: null, toolSchemaValid: null }, wire: { encoding: null, kind: null, byteLength: null } };
   try {
     const method = String(init?.method ?? input?.method ?? "GET").toUpperCase();
     shape.method = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "CONNECT", "TRACE"].includes(method) ? method : "other";
     const headers = new Headers(init?.headers ?? input?.headers);
     shape.headers = { authorization: headers.has("authorization"), account: headers.has("chatgpt-account-id"), contentType: headers.has("content-type"), accept: headers.has("accept") };
+    const encoding = headers.get("content-encoding")?.trim().toLowerCase();
+    shape.wire.encoding = encoding === undefined || encoding === "identity" ? "identity" : encoding === "zstd" ? "zstd" : "other";
+  } catch { }
+  try {
+    const body = init == null ? undefined : data(init, "body");
+    shape.wire.kind = typeof body === "string" ? "string" : body instanceof ArrayBuffer || ArrayBuffer.isView(body) ? "bytes" : body instanceof ReadableStream ? "stream" : body == null || body === unobserved ? null : "other";
+    shape.wire.byteLength = typeof body === "string" ? new TextEncoder().encode(body).byteLength : body instanceof ArrayBuffer ? Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, "byteLength").get.call(body) : ArrayBuffer.isView(body) ? Object.getOwnPropertyDescriptor(body instanceof DataView ? DataView.prototype : Object.getPrototypeOf(Uint8Array.prototype), "byteLength").get.call(body) : null;
   } catch { }
   if (typeof init?.body === "string") {
     try {
