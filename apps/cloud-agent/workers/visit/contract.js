@@ -105,7 +105,7 @@ export function visitResult(value, input) {
     return { id: row.id, date: row.date, reservationId: row.reservationId, status: row.status };
   });
   unique(visits); backendValue(input.visitId === null || visits.some(row => row.id === input.visitId));
-  const intake = input.visitId === null || value.intake === undefined ? undefined : value.intake;
+  const intake = value.intake;
   backendValue(intake === undefined || object(intake) && nullableText(intake.concernText, 1000));
   return { mode: value.mode, kind: "context", patient: selectedPatient, reservations, visits, selectedVisitId: value.selectedVisitId, ...(intake === undefined ? {} : { intake: { concernText: intake.concernText } }), observedAt: value.observedAt };
 }

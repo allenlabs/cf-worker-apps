@@ -27,7 +27,7 @@ The [staff defaults and skill shortcuts](docs/STAFF_SHORTCUTS.md) persist employ
 
 The [new thread setup](docs/NEW_THREAD_SETUP.md) lets staff complete a workflow, edit and review the whole outgoing message, choose model/thinking settings, and send that exact body as the first native team-chat message. Forms work without an inference account; account selection and first-use preferences happen only at actual AI admission.
 
-The [customer workflow skill forms](docs/WORKFLOW_SKILLS.md) load versioned form definitions from normal skill resources. They support explicit patient/visit selection, editable reservation candidates, manual forms, reviewed exact-text delivery and durable reply receipts. The authorized [visit read contract](docs/VISIT_WORKFLOW.md) remains separate from general Ask/Pi context. Its legacy fixed draft API is retained only for active clients; see [deprecated interfaces](docs/DEPRECATED.md).
+The [customer workflow skill forms](docs/WORKFLOW_SKILLS.md) load versioned form definitions from normal skill resources. They support explicit patient selection with optional schedules, patient intake and editable linked reservation candidates, manual forms, reviewed exact-text delivery and durable reply receipts. The authorized [visit read contract](docs/VISIT_WORKFLOW.md) remains separate from general Ask/Pi context. Its legacy fixed draft API is retained only for active clients; see [deprecated interfaces](docs/DEPRECATED.md).
 
 The reusable [Visit Gateway](docs/VISIT_GATEWAY.md) provides a Channel ingress helper and separate authenticated MCP reads. It keeps ingress/backend credentials and Channel/MCP identities separate while sharing the existing projected visit contract.
 

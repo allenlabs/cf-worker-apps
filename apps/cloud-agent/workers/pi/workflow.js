@@ -37,7 +37,8 @@ export function workflowInput(value) {
   if (value.action === "status") { requireValue(keys(value, ["action", "operationId", "draftToken"]) && uuid(value.operationId) && text(value.draftToken, 4096)); return { ...value }; }
   const common = ["action", "name", "revision", "selection"];
   requireValue(typeof value.name === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.name) && value.name.length <= 64 && typeof value.revision === "string" && /^[a-f0-9]{64}$/.test(value.revision));
-  requireValue(value.selection === undefined || keys(value.selection, ["patientId", "visitId"]) && uuid(value.selection.patientId) && uuid(value.selection.visitId));
+  requireValue(value.selection === undefined || keys(value.selection, ["patientId", "visitId"]) && uuid(value.selection.patientId) && (value.selection.visitId === undefined || value.selection.visitId === null || uuid(value.selection.visitId)));
+  if (value.selection !== undefined) value = { ...value, selection: { patientId: value.selection.patientId, visitId: value.selection.visitId ?? null } };
   if (value.action === "prefill") { requireValue(keys(value, common)); return { ...value }; }
   requireValue(keys(value, value.action === "send" ? [...common, "intent", "finalText", "values", "operationId", "draftToken", "confirmed", "confirmations"] : [...common, "intent", "finalText", "values"]) && object(value.values) && Object.keys(value.values).length <= 20 && Object.entries(value.values).every(([key, val]) => id(key) && text(val, 1000)) && encoder.encode(JSON.stringify(value.values)).length <= 16384);
   if (value.finalText !== undefined) workflowFinalText(value.finalText);
@@ -47,10 +48,10 @@ export function workflowInput(value) {
 }
 export function workflowSource(context) {
   const visit = context?.visits?.find(row => row.id === context.selectedVisitId);
-  requireValue(visit && context.patient, "visit_selection_required");
-  const reservation = visit.reservationId === null ? null : context.reservations.find(row => row.id === visit.reservationId);
-  requireValue(visit.reservationId === null || reservation, "visit_response_invalid");
-  return { patient: { id: context.patient.id, label: context.patient.label, reference: context.patient.reference }, visit: { id: visit.id, date: visit.date, status: visit.status, reservationId: visit.reservationId }, reservation: reservation ? { id: reservation.id, at: reservation.at, type: reservation.type, status: reservation.status, procedureText: reservation.procedureText ?? null, note: reservation.note ?? null, pod: reservation.pod ?? null } : null, intake: { concernText: context.intake?.concernText ?? null } };
+  requireValue(context?.patient && (context.selectedVisitId === null || visit), "visit_selection_required");
+  const reservation = !visit || visit.reservationId === null ? null : context.reservations.find(row => row.id === visit.reservationId);
+  requireValue(!visit || visit.reservationId === null || reservation, "visit_response_invalid");
+  return { patient: { id: context.patient.id, label: context.patient.label, reference: context.patient.reference }, visit: visit ? { id: visit.id, date: visit.date, status: visit.status, reservationId: visit.reservationId } : null, reservation: reservation ? { id: reservation.id, at: reservation.at, type: reservation.type, status: reservation.status, procedureText: reservation.procedureText ?? null, note: reservation.note ?? null, pod: reservation.pod ?? null } : null, intake: { concernText: context.intake?.concernText ?? null } };
 }
 export function workflowPrefill(definition, source = null) {
   return Object.fromEntries(definition.fields.map(field => { const [section, key] = field.source?.split(".") ?? []; const candidate = field.source ? source?.[section]?.[key] ?? "" : ""; return [field.id, typeof candidate === "string" && candidate.length <= field.maxLength && (field.type !== "choice" || field.choices.includes(candidate)) ? candidate : ""]; }));

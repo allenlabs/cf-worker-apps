@@ -24,7 +24,7 @@ const outbound = async request => {
   if (mode === "oversize") return new Response("x".repeat(65537));
   if (mode === "malformed") return new Response("not JSON");
   if (value.p_input.action === "patientSearch") return Response.json({ mode: "test", kind: "patients", patients: mode === "too-many" ? Array.from({ length: 21 }, (_, i) => ({ id: "10000000-0000-0000-0000-" + String(i + 1).padStart(12, "0"), label: "Synthetic " + i, reference: null })) : [{ id: patientId, label: "Synthetic <img src=x>", reference: "TEST-001", profile: "PRIVATE_PROFILE" }], notes: "PRIVATE_NOTES" });
-  const result = { mode: "test", kind: "context", patient: { id: patientId, label: "Synthetic <img src=x>", reference: null }, reservations: [{ id: reservationId, at: null, type: null, status: null }], visits: [{ id: visitId, date: "2026-01-01", reservationId, status: null }], selectedVisitId: value.p_input.visitId, observedAt: `2026-01-01T00:00:${String(observation++).padStart(2, "0")}Z` };
+  const result = { mode: "test", kind: "context", patient: { id: patientId, label: "Synthetic <img src=x>", reference: null }, reservations: [{ id: reservationId, at: null, type: null, status: null }], visits: [{ id: visitId, date: "2026-01-01", reservationId, status: null }], selectedVisitId: value.p_input.visitId, intake: {concernText:"Synthetic patient concern",hidden:"FORBIDDEN_INTAKE"}, observedAt: `2026-01-01T00:00:${String(observation++).padStart(2, "0")}Z` };
   if (mode === "cross-patient") result.patient.id = otherId;
   if (mode === "cross-link") result.visits[0].reservationId = otherId;
   return Response.json(result);
@@ -76,7 +76,7 @@ try {
   const treatment = (await command({ action: "draft", patientId, visitId, fields: { ...fields, kind: "treatment", revision: "unknown" } })).result; assert.equal(treatment.draft.ready, false); assert.match(treatment.draft.text, /\[치료실 안내 초안\]/);
   const mcp = input => readGateway(input, ingress, "/fixture/mcp");
   assert.equal((await mcp(search)).kind, "patients"); assert.deepEqual(requests.at(-1).p_actor, { tenantId: "fixture-tenant", source: "mcp", ...identity });
-  assert.equal((await mcp({ action: "visitSelect", patientId })).selectedVisitId, null); assert.equal((await mcp({ action: "visitSelect", patientId, visitId })).selectedVisitId, visitId);
+  const patientOnly = await mcp({ action: "visitSelect", patientId }); assert.equal(patientOnly.selectedVisitId, null); assert.deepEqual(patientOnly.intake, {concernText:"Synthetic patient concern"}); assert.ok(!JSON.stringify(patientOnly).includes("FORBIDDEN_INTAKE")); assert.equal((await mcp({ action: "visitSelect", patientId, visitId })).selectedVisitId, visitId);
   let count = requests.length; assert.equal((await mcp({ action: "draft", patientId, visitId, fields })).error, "visit_input_invalid"); assert.equal((await mcp({ ...search, identity: { subjectId: "spoofed", siteId } })).error, "visit_input_invalid"); assert.equal(requests.length, count);
   for (const actor of [{ kind: "mcp", identity, target }, { kind: "mcp", target }, { kind: "channel", identity, target }, { kind: "mcp", identity: { ...identity, siteId: "bad/site" } }, { kind: "unknown", target }]) assert.ok((await readGateway({ actor, input: search }, ingress, "/fixture/actor")).error);
   count = requests.length; assert.equal((await mcp({ ...search, query: "x".repeat(65) })).error, "visit_input_invalid"); assert.equal(requests.length, count);

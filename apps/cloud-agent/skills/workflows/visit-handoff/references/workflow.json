@@ -5,7 +5,7 @@
   "fields": [
     {"id":"person","label":"환자 표시 이름","type":"text","required":true,"maxLength":200,"source":"patient.label"},
     {"id":"reference","label":"식별 참고 번호","type":"text","required":false,"maxLength":120,"source":"patient.reference"},
-    {"id":"date","label":"선택한 방문 날짜","type":"text","required":true,"maxLength":80,"source":"visit.date"},
+    {"id":"date","label":"추가한 일정 날짜","type":"text","required":false,"maxLength":80,"source":"visit.date"},
     {"id":"procedure","label":"연결된 예약의 시술 후보","type":"text","required":false,"maxLength":1000,"source":"reservation.procedureText"},
     {"id":"note","label":"연결된 예약의 참고 내용","type":"text","required":false,"maxLength":1000,"source":"reservation.note"},
     {"id":"area","label":"직접 확인한 상담 부위","type":"text","required":true,"maxLength":200},
@@ -14,8 +14,8 @@
   ],
   "template": "[상담 도착 안내]\n대상: {{person}} · {{reference}}\n방문: {{date}}\n예약의 시술 후보: {{procedure}}\n예약 참고: {{note}}\n확인한 상담 부위: {{area}}\n재수술 여부: {{revision}}\n일정 예외: {{exceptions}}",
   "confirmations": [
-    {"id":"identity","label":"선택한 환자와 방문이 맞는지 직접 확인했습니다."},
-    {"id":"facts","label":"예약 후보와 상담 내용을 직접 확인했습니다."},
+    {"id":"identity","label":"선택한 환자가 맞는지 직접 확인했습니다."},
+    {"id":"facts","label":"상담 내용과 추가한 일정 정보가 있다면 직접 확인했습니다."},
     {"id":"destination","label":"이 업무 내용을 현재 스레드에 보내도 되는지 확인했습니다."}
   ]
 }
