@@ -1,4 +1,4 @@
-import { visitDraft, visitErrors, visitIdentity, visitInput, visitJson, visitOutputSize, visitResult, visitTarget } from "./contract.js";
+import { visitDraft, visitErrors, visitIdentity, visitInput, visitJson, visitOutputSize, visitResult, visitReadTarget } from "./contract.js";
 
 export default {
   async fetch(request, env) {
@@ -10,7 +10,7 @@ export default {
       if (!value || typeof value !== "object" || Array.isArray(value)) throw Error("visit_input_invalid");
       const mcp = Object.hasOwn(value, "identity");
       if (Object.keys(value).some(key => !(mcp ? ["identity", "input"] : ["target", "input"]).includes(key))) throw Error("visit_input_invalid");
-      const actor = mcp ? { source: "mcp", ...visitIdentity(value.identity) } : visitTarget(value.target), input = visitInput(value.input);
+      const actor = mcp ? { source: "mcp", ...visitIdentity(value.identity) } : visitReadTarget(value.target), input = visitInput(value.input);
       if (mcp && input.action === "draft") throw Error("visit_input_invalid");
       if (typeof env.TENANT_ID !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(env.TENANT_ID) || typeof env.SUPABASE_URL !== "string" || typeof env.SUPABASE_API_KEY !== "string" || env.SUPABASE_API_KEY.length < 16) throw Error("visit_not_configured");
       const origin = new URL(env.SUPABASE_URL);

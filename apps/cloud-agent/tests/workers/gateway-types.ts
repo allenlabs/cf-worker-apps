@@ -1,6 +1,6 @@
 import { readGatewayVisit } from "../../workers/visit/gateway.js";
 import type { VisitGatewayEnvironment } from "../../workers/visit/gateway.js";
-import { visitIdentity, visitTarget } from "../../workers/visit/contract.js";
+import { visitIdentity, visitTarget, visitReadTarget } from "../../workers/visit/contract.js";
 
 declare const env: VisitGatewayEnvironment;
 const identity = visitIdentity({ subjectId: "fixture-subject", siteId: "fixture-site" });
@@ -26,3 +26,9 @@ declare const context: import("../../workers/visit/contract.js").VisitContextRes
 const concern: string | null | undefined = context.intake?.concernText;
 const pod: string | null | undefined = context.reservations[0]?.pod;
 void [concern, pod];
+
+const groupTarget = visitReadTarget({ channelId: "fixture-channel", groupId: "fixture-group", managerId: "fixture-manager" });
+readGatewayVisit(env, { kind: "channel", target: groupTarget }, { action: "patientSearch", query: "Synthetic" });
+// @ts-expect-error A group read target cannot stand in for a real thread identity.
+const threadTarget: import("../../workers/visit/contract.js").VisitTarget = groupTarget;
+void threadTarget;

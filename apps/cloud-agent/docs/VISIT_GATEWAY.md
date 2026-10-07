@@ -59,3 +59,5 @@ npm run -w @cf-worker-apps/cloud-agent gateway-typecheck
 ```
 
 The native workerd check executes the actual signed Events → Gateway → backend binding chain and mocks only the fixed Supabase RPC. It checks distinct keys, identity spoof/mixed-shape rejection, fixed tenant/source, read-only MCP, revocation, patient/visit links, result projection/bounds and unchanged drafts without a Pi/D1 binding. The test's fixture MCP endpoint supplies a fixed generated server identity; it does not implement production authentication. The TypeScript check verifies the declared actor/action boundary. These checks do not prove a host's live SSO policy or an installation RPC's actual permission mapping.
+
+Channel read targets permit an omitted `rootMessageId` while retaining required Channel, group and manager identity. Supplied roots are validated. This supports form preparation before a native thread exists; the fixed tenant and current business authorization remain unchanged. Pi/Channel MCP targets still require a real root. Installations must adopt the same read contract in the Gateway and fixed business RPC.

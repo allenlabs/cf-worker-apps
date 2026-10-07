@@ -14,8 +14,8 @@ export function startInput(value) {
   requireValue(keys(value, value?.action === "create" ? ["action", "operationId", "intent", "confirmed"] : value?.action === "status" ? ["action", "operationId"] : ["action"]) && ["options", "create", "status"].includes(value.action), "command_start_input_invalid");
   if (value.action !== "options") requireValue(uuid(value.operationId), "command_start_input_invalid");
   if (value.action === "create") {
-    requireValue(value.confirmed === true && keys(value.intent, ["modelId", "thinkingLevel", "workflow"]) && typeof value.intent.modelId === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(value.intent.modelId) && thinkingChoices.some(row => row.value === value.intent.thinkingLevel), "command_start_input_invalid");
-    requireValue(value.intent.workflow === undefined || keys(value.intent.workflow, ["name", "revision"]) && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.intent.workflow.name ?? "") && value.intent.workflow.name.length <= 64 && /^[a-f0-9]{64}$/.test(value.intent.workflow.revision ?? ""), "command_start_input_invalid");
+    requireValue(value.confirmed === true, "command_start_input_invalid");
+    startIntent(value.intent);
   }
   return value;
 }
@@ -23,4 +23,10 @@ export function startInput(value) {
 export function selectedSkill(value) {
   requireValue(value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === 2 && Object.keys(value).every(key => ["name", "revision"].includes(key)) && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.name ?? "") && value.name.length <= 64 && /^[a-f0-9]{64}$/.test(value.revision ?? ""), "command_skill_invalid");
   return { name: value.name, revision: value.revision };
+}
+
+export function startIntent(intent) {
+  requireValue(keys(intent, ["modelId", "thinkingLevel", "workflow"]) && typeof intent.modelId === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(intent.modelId) && thinkingChoices.some(row => row.value === intent.thinkingLevel), "command_start_input_invalid");
+  requireValue(intent.workflow === undefined || keys(intent.workflow, ["name", "revision"]) && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(intent.workflow.name ?? "") && intent.workflow.name.length <= 64 && /^[a-f0-9]{64}$/.test(intent.workflow.revision ?? ""), "command_start_input_invalid");
+  return intent;
 }

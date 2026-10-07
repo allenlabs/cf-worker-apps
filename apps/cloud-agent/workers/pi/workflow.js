@@ -1,3 +1,4 @@
+import { startIntent } from "./command-settings.js";
 const encoder = new TextEncoder();
 const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const keys = (value, allowed) => object(value) && Object.keys(value).every(key => allowed.includes(key));
@@ -38,7 +39,8 @@ export function workflowInput(value) {
   requireValue(typeof value.name === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.name) && value.name.length <= 64 && typeof value.revision === "string" && /^[a-f0-9]{64}$/.test(value.revision));
   requireValue(value.selection === undefined || keys(value.selection, ["patientId", "visitId"]) && uuid(value.selection.patientId) && uuid(value.selection.visitId));
   if (value.action === "prefill") { requireValue(keys(value, common)); return { ...value }; }
-  requireValue(keys(value, value.action === "send" ? [...common, "values", "operationId", "draftToken", "confirmed", "confirmations"] : [...common, "values"]) && object(value.values) && Object.keys(value.values).length <= 20 && Object.entries(value.values).every(([key, val]) => id(key) && text(val, 1000)) && encoder.encode(JSON.stringify(value.values)).length <= 16384);
+  requireValue(keys(value, value.action === "send" ? [...common, "intent", "values", "operationId", "draftToken", "confirmed", "confirmations"] : [...common, "intent", "values"]) && object(value.values) && Object.keys(value.values).length <= 20 && Object.entries(value.values).every(([key, val]) => id(key) && text(val, 1000)) && encoder.encode(JSON.stringify(value.values)).length <= 16384);
+  if (value.intent !== undefined) { startIntent(value.intent); requireValue(value.intent.workflow === undefined); }
   if (value.action === "send") requireValue(uuid(value.operationId) && text(value.draftToken, 4096) && value.confirmed === true && Array.isArray(value.confirmations) && value.confirmations.length <= 10 && value.confirmations.every(id), "workflow_confirmation_required");
   return { ...value };
 }

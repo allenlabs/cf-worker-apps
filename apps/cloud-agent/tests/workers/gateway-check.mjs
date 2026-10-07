@@ -16,7 +16,7 @@ const outbound = async request => {
   assert.equal(request.method, "POST"); assert.equal(request.url, "https://fixture.supabase.invalid/rest/v1/rpc/cloud_agent_visit_read"); assert.equal(request.headers.get("apikey"), "sb_secret_fixture-rpc-credential"); assert.equal(request.headers.get("authorization"), null);
   const value = await request.json(); requests.push(value);
   if (value.p_actor.source === "mcp") assert.deepEqual(value.p_actor, { tenantId: "fixture-tenant", source: "mcp", subjectId, siteId });
-  else assert.deepEqual(value.p_actor, { tenantId: "fixture-tenant", ...target }, "Legacy Channel tuple is unchanged");
+  else assert.deepEqual(value.p_actor, value.p_actor.rootMessageId === undefined ? { tenantId: "fixture-tenant", channelId: channel, groupId: group, managerId: manager } : { tenantId: "fixture-tenant", ...target });
   assert.ok(["patientSearch", "visitSelect"].includes(value.p_input.action), "No write, draft or arbitrary SQL RPC reaches Supabase");
   if (mode === "subject-revoked" || mode === "site-revoked") return Response.json({ error: "PRIVATE_DATABASE_DETAILS" }, { status: 403 });
   if (mode === "not-found") return Response.json({ error: "PRIVATE_DATABASE_DETAILS" }, { status: 404 });
@@ -65,6 +65,12 @@ try {
   for (const body of [{ identity: {}, input: search }, { identity: { ...identity, subjectId: "" }, input: search }, { identity: { ...identity, subjectId: "x".repeat(256) }, input: search }, { identity: { ...identity, siteId: "x".repeat(129) }, input: search }, { identity: { ...identity, siteId: "../site" }, input: search }, { identity: { ...identity, role: "admin" }, input: search }, { identity: { ...identity, source: "channel" }, input: search }, { identity, target, input: search }, { identity, tenantId: "spoofed", input: search }, { target: { ...target, identity }, input: search }, { identity, input: { action: "draft", patientId, visitId, fields } }]) assert.ok((await readBackend(body)).error);
   assert.equal(requests.length, beforeInvalid, "Invalid/mixed/spoofed identities have no RPC effects");
   const patients = (await command(search)).result; assert.equal(patients.kind, "patients"); assert.equal(patients.patients[0].id, patientId); assert.ok(!JSON.stringify(patients).includes("PRIVATE")); assert.deepEqual(requests.at(-1).p_actor, { tenantId: "fixture-tenant", ...target });
+  const rootless = (await event("commands.ai.open", { chat: { type: "group", id: group } })).result.attributes.wamArgs.targetCapability;
+  assert.equal((await event("commands.ai.visit", { targetCapability: rootless, ...search })).result.kind, "patients");
+  assert.equal((await event("commands.ai.visit", { targetCapability: rootless, action: "visitSelect", patientId, visitId })).result.selectedVisitId, visitId);
+  assert.ok(!Object.hasOwn(requests.at(-1).p_actor, "rootMessageId"));
+  mode = "subject-revoked"; assert.equal((await event("commands.ai.visit", { targetCapability: rootless, ...search })).error.message, "visit_record_denied"); mode = "normal";
+  for (const rootMessageId of [null, "", "bad/root", 123]) assert.equal((await readGateway({ target: { ...target, rootMessageId }, input: search })).error, "visit_target_invalid");
   const context = (await command({ action: "visitSelect", patientId, visitId })).result; assert.equal(context.selectedVisitId, visitId);
   const draft = (await command({ action: "draft", patientId, visitId, fields })).result; assert.equal(draft.kind, "draft"); assert.equal(draft.draft.ready, true); assert.match(draft.draft.text, /\[상담 도착 안내 초안\]/); assert.equal(requests.at(-1).p_input.action, "visitSelect");
   const treatment = (await command({ action: "draft", patientId, visitId, fields: { ...fields, kind: "treatment", revision: "unknown" } })).result; assert.equal(treatment.draft.ready, false); assert.match(treatment.draft.text, /\[치료실 안내 초안\]/);

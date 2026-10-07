@@ -1,6 +1,7 @@
-export type VisitTarget = { channelId: string; groupId: string; rootMessageId: string; managerId: string };
+export type VisitReadTarget = { channelId: string; groupId: string; managerId: string; rootMessageId?: string };
+export type VisitTarget = VisitReadTarget & { rootMessageId: string };
 export type VisitIdentity = { subjectId: string; siteId: string };
-export type ChannelVisitActor = { kind: "channel"; target: VisitTarget; identity?: never };
+export type ChannelVisitActor = { kind: "channel"; target: VisitReadTarget; identity?: never };
 export type McpVisitActor = { kind: "mcp"; identity: VisitIdentity; target?: never };
 export type VisitGatewayActor = ChannelVisitActor | McpVisitActor;
 export type PatientSearchInput = { action: "patientSearch"; query: string };
@@ -38,6 +39,7 @@ export type VisitDraftResult = {
 export type VisitReadResult = PatientSearchResult | VisitContextResult;
 export type VisitResult = VisitReadResult | VisitDraftResult;
 export function visitInput(value: unknown): ParsedVisitInput;
+export function visitReadTarget(value: unknown): VisitReadTarget;
 export function visitTarget(value: unknown): VisitTarget;
 export function visitIdentity(value: unknown): VisitIdentity;
 export function visitGatewayActor(value: unknown): VisitGatewayActor;

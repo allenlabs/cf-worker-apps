@@ -1,7 +1,7 @@
 import { staffSettings, staffPatchKeys, patchStaffTransaction } from "./staff-settings.js";
 import { commandAllowed, sourceId, sourceThreadKey } from "./source-history.js";
 import { configuredModels, thinkingChoices, startInput } from "./command-settings.js";
-import { workflowFromSkill, workflowHash } from "./workflow.js";
+import { workflowFromSkill, workflowHash, workflowRender } from "./workflow.js";
 import { tenantId } from "./conversation-store.js";
 import { visitJson } from "../visit/contract.js";
 const requireValue = (ok, code) => { if (!ok) throw Error(code); };
@@ -26,6 +26,19 @@ export async function startOptions(owner, target) {
   targetFor(owner, target);
   const preferred = await staffSettings(owner, target);
   return { kind: "start-options", workflows: await workflows(owner), settings: { models: configuredModels(owner.env).map(({ id, label }) => ({ id, label })), model: { id: preferred.modelId }, thinkingChoices, thinking: { value: preferred.thinkingLevel } } };
+}
+export async function rootWorkflowDefinition(owner, target, name, revision) {
+  targetFor(owner, target);
+  requireValue(typeof name === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) && name.length <= 64 && /^[a-f0-9]{64}$/.test(revision ?? ""), "workflow_input_invalid");
+  const definition = workflowFromSkill(await owner.publishedSkill(name, revision));
+  requireValue(definition, "workflow_skill_unavailable");
+  return { definition, scope: await workflowHash(JSON.stringify([tenantId(owner.env), owner.ctx.id.toString(), target])) };
+}
+export async function rootWorkflowStatus(owner, target, operationId, reviewDigest) {
+  requireValue(/^[a-f0-9]{64}$/.test(reviewDigest ?? ""), "workflow_input_invalid");
+  const row = await receipt(owner, target, operationId);
+  requireValue(!row || row.reviewDigest === reviewDigest, "workflow_operation_conflict");
+  return row ? project(await finish(owner, row)) : null;
 }
 async function receipt(owner, target, operationId) {
   targetFor(owner, target); requireValue(uuid(operationId), "command_start_input_invalid");
@@ -57,13 +70,21 @@ export async function startStatus(owner, target, operationId) {
 }
 export async function createThread(owner, input) {
   const { target, operationId, intent } = input; startInput({ action: "create", operationId, intent, confirmed: input.confirmed }); targetFor(owner, target);
-  const requestDigest = await workflowHash(JSON.stringify([tenantId(owner.env), target, intent]));
+  const reviewed = input.reviewedWorkflow;
+  requireValue(intent.workflow ? keys(reviewed, ["reviewDigest", "textHash", "values", "source"]) && /^[a-f0-9]{64}$/.test(reviewed.reviewDigest ?? "") && /^[a-f0-9]{64}$/.test(reviewed.textHash ?? "") : reviewed === undefined, "workflow_confirmation_required");
+  const requestDigest = await workflowHash(JSON.stringify([tenantId(owner.env), target, intent, ...(reviewed ? [reviewed.reviewDigest, reviewed.textHash] : [])]));
   const previous = await receipt(owner, target, operationId);
   if (previous) { requireValue(previous.requestDigest === requestDigest, "command_start_operation_conflict"); return project(await finish(owner, previous)); }
   requireValue(owner.env.CHANNEL_REPLY_ENABLED === "true" && target.groupId === owner.env.ALLOWED_CHAT_ID, "command_start_delivery_denied");
-  requireValue(configuredModels(owner.env).some(row => row.id === intent.modelId), "model_not_permitted");
-  let workflow;
-  if (intent.workflow) { workflow = (await workflows(owner)).find(row => row.name === intent.workflow.name && row.revision === intent.workflow.revision); requireValue(workflow, "workflow_skill_unavailable"); }
+  requireValue(configuredModels(owner.env).some(row => row.id === intent.modelId), "command_start_model_not_permitted");
+  let plainText = "새 AI 업무를 시작합니다.";
+  if (intent.workflow) {
+    requireValue(target.groupId === owner.env.VISIT_MCP_GROUP_ID, "workflow_delivery_denied");
+    const { definition } = await rootWorkflowDefinition(owner, target, intent.workflow.name, intent.workflow.revision);
+    requireValue(definition.source === "none" ? reviewed.source === null : object(reviewed.source), "workflow_input_invalid");
+    plainText = workflowRender(definition, reviewed.values, reviewed.source).text;
+    requireValue(await workflowHash(plainText) === reviewed.textHash, "workflow_draft_changed");
+  }
   const nonceKey = "command-start-nonce:" + await workflowHash(JSON.stringify([tenantId(owner.env), target.nonce])), barrier = await groupKey(target), key = "command-start:" + operationId;
   const claimed = await owner.ctx.storage.transaction(async transaction => {
     const existing = await transaction.get(key);
@@ -71,7 +92,7 @@ export async function createThread(owner, input) {
     requireValue(!await transaction.get(nonceKey), "command_start_launch_used");
     requireValue(!await transaction.get(barrier), "command_start_group_uncertain");
     requireValue((await transaction.list({ prefix: "command-start:", limit: 2001 })).size < 2000, "command_start_receipt_limit");
-    await transaction.put(key, { operationId, nonce: target.nonce, requestDigest, target, intent, state: "creating" });
+    await transaction.put(key, { operationId, nonce: target.nonce, requestDigest, target, intent, ...(reviewed ? { reviewDigest: reviewed.reviewDigest, textHash: reviewed.textHash } : {}), state: "creating" });
     await transaction.put(nonceKey, operationId); await transaction.put(barrier, { operationId }); return true;
   });
   if (!claimed) return startStatus(owner, target, operationId);
@@ -79,7 +100,7 @@ export async function createThread(owner, input) {
   let result, issued = false;
   try {
     const access = await owner.channelAccess(); issued = true;
-    const response = await fetch("https://app-store-api.channel.io/general/v1/native/functions", { method: "PUT", redirect: "manual", signal: AbortSignal.timeout(15000), headers: { "content-type": "application/json", "x-access-token": access }, body: JSON.stringify({ method: "writeGroupMessage", params: { channelId: target.channelId, groupId: target.groupId, broadcast: false, dto: { plainText: workflow ? workflow.definition.title + " 업무를 시작합니다." : "새 AI 업무를 시작합니다.", botName: owner.env.PRODUCT_NAME || "Cloud Agent", requestId: "start-" + operationId } } }) });
+    const response = await fetch("https://app-store-api.channel.io/general/v1/native/functions", { method: "PUT", redirect: "manual", signal: AbortSignal.timeout(15000), headers: { "content-type": "application/json", "x-access-token": access }, body: JSON.stringify({ method: "writeGroupMessage", params: { channelId: target.channelId, groupId: target.groupId, broadcast: false, dto: { plainText, botName: owner.env.PRODUCT_NAME || "Cloud Agent", requestId: "start-" + operationId } } }) });
     const envelope = await visitJson(response, 262144);
     result = !response.ok || envelope.error ? { state: [400, 401, 403, 404, 422].includes(response.status) ? "failed" : "uncertain" } : validRoot(envelope.result?.message, target) ? { state: "created", rootMessageId: envelope.result.message.id } : { state: "uncertain" };
   } catch { result = { state: issued ? "uncertain" : "failed" }; }

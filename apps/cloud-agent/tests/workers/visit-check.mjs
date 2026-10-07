@@ -11,7 +11,7 @@ const requests = []; let mode = "normal", observed = 0, activeKey = key;
 const outbound = async request => {
   assert.equal(request.url, "https://fixture.supabase.invalid/rest/v1/rpc/cloud_agent_visit_read"); assert.equal(request.method, "POST");
   assert.equal(request.headers.get("apikey"), activeKey); assert.equal(request.headers.get("authorization"), activeKey.startsWith("eyJ") ? "Bearer " + activeKey : null, "Only legacy JWT keys receive a Bearer header");
-  const body = await request.json(); requests.push(body); assert.deepEqual(body.p_actor, { tenantId: "fixture-tenant", channelId: channel, groupId: group, rootMessageId: root, managerId: manager });
+  const body = await request.json(); requests.push(body); assert.deepEqual(body.p_actor, { tenantId: "fixture-tenant", channelId: channel, groupId: group, ...(body.p_actor.rootMessageId === undefined ? {} : { rootMessageId: root }), managerId: manager });
   assert.deepEqual(Object.keys(body), ["p_actor", "p_input"]); assert.ok(["patientSearch", "visitSelect"].includes(body.p_input.action), "No SQL selectors or write RPCs reach the backend");
   if (mode === "denied") return Response.json({ details: "PRIVATE_BACKEND_ERROR" }, { status: 403 });
   if (mode === "not-found") return Response.json({ details: "PRIVATE_BACKEND_ERROR" }, { status: 404 });
@@ -68,9 +68,12 @@ try {
   assert.equal((await call(envelope("commands.ai.visit", { targetCapability: expired, ...search }))).error.message, "command_capability_expired_or_mismatched");
   assert.equal((await call(envelope("commands.ai.visit", { targetCapability, ...search }), false)).status, 401); assert.equal(requests.length, 0);
   assert.equal((await call(envelope("commands.ai.visit", { targetCapability, ...search }, "another-manager"))).error.message, "command_capability_expired_or_mismatched");
-  assert.equal((await call(envelope("commands.ai.visit", { targetCapability: await capability(false), ...search }))).error.message, "command_thread_required");
+  const groupCapability = await capability(false);
+  assert.equal((await call(envelope("commands.ai.visit", { targetCapability: groupCapability, ...search }))).result.kind, "patients");
+  assert.ok(!Object.hasOwn(requests.at(-1).p_actor, "rootMessageId"));
+  assert.equal((await call(envelope("commands.ai.visit", { targetCapability: groupCapability, action: "draft", patientId, visitId, fields }))).error.message, "command_thread_required");
   for (const input of [{ ...search, subjectId: "untrusted" }, { ...search, dataset: "live" }, { ...search, query: "x" }, { ...search, query: "x".repeat(65) }, { ...search, query: "A\0B" }, { action: "visitSelect", patientId: "not-a-uuid" }, { action: "draft", patientId, fields }, { action: "draft", patientId, visitId, fields: { ...fields, prompt: "untrusted" } }, { action: "draft", patientId, visitId, fields: { ...fields, concernArea: "x".repeat(201) } }]) assert.match((await request(input)).error.message, /^visit_(input_invalid|selection_required)$/);
-  assert.equal(requests.length, 0, "Pre-admission rejections cause no backend call");
+  assert.equal(requests.length, 1, "Only the authorized rootless read reaches the backend");
   assert.equal((await request({ ...search, query: "x".repeat(64) })).result.kind, "patients", "64-character normalized query is supported");
   const patients = (await request(search)).result; assert.equal(patients.mode, "test"); assert.deepEqual(patients.patients[0], { id: patientId, label: "Synthetic person <img src=x>", reference: "TEST-001" }); assert.ok(!JSON.stringify(patients).includes("FORBIDDEN"));
   mode = "empty"; assert.deepEqual((await request(search)).result.patients, []); mode = "duplicate"; assert.equal((await request(search)).error.message, "visit_response_invalid"); mode = "normal";

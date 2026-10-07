@@ -6,8 +6,9 @@ type Definition = { schemaVersion: 1; title: string; template: string; confirmat
 export type WorkflowDefinition = Definition & ({ source: "none"; fields: (Field & { source?: never })[] } | { source: "visit-context"; fields: WorkflowField[] });
 export type WorkflowSource = { patient: { id: string; label: string; reference: string | null }; visit: { id: string; date: string | null; status: string | null; reservationId: string | null }; reservation: { id: string; at: string | null; type: string | null; status: string | null; procedureText: string | null; note: string | null; pod: string | null } | null; intake: { concernText: string | null } };
 type Selection = { patientId: string; visitId: string };
+type StartSettings = { modelId: string; thinkingLevel: string };
 type Pinned = { name: string; revision: string; selection?: Selection };
-export type WorkflowInput = { action: "catalog" } | (Pinned & { action: "prefill" }) | (Pinned & { action: "prepare"; values: Record<string, string> }) | (Pinned & { action: "send"; values: Record<string, string>; operationId: string; draftToken: string; confirmed: true; confirmations: string[] }) | { action: "status"; operationId: string; draftToken: string };
+export type WorkflowInput = { action: "catalog" } | (Pinned & { action: "prefill" }) | (Pinned & { action: "prepare"; intent?: StartSettings; values: Record<string, string> }) | (Pinned & { action: "send"; intent?: StartSettings; values: Record<string, string>; operationId: string; draftToken: string; confirmed: true; confirmations: string[] }) | { action: "status"; operationId: string; draftToken: string };
 export const workflowPath: "references/workflow.json";
 export const workflowSources: readonly WorkflowSourcePath[];
 export function workflowHash(value: string): Promise<string>;

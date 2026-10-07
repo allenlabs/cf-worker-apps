@@ -22,7 +22,7 @@ import { workflowFromSkill, workflowHash, workflowRender } from "./workflow.js";
 import { visitJson, visitTarget } from "../visit/contract.js";
 import { commandAllowed, commandGroups, sourceThreadKey, readSourceThread } from "./source-history.js";
 import { configuredModels, thinkingChoices, selectedSkill } from "./command-settings.js";
-import { startOptions, createThread, startStatus, threadStartPreferences } from "./command-start.js";
+import { rootWorkflowDefinition, rootWorkflowStatus, startOptions, createThread, startStatus, threadStartPreferences } from "./command-start.js";
 const NATIVE = "https://app-store-api.channel.io/general/v1/native/functions";
 const CHANNEL_GRANT_VERSION = 1;
 const nativeId = value => typeof value === "string" && /^[A-Za-z0-9_:-]{1,255}$/.test(value);
@@ -157,6 +157,9 @@ export class Credentials extends ManagementCredentials {
   skillAskSnapshot(target, selection) { return skillAskSnapshot(this, target, selection); }
   staffSettings(target) { return staffSettings(this, target); }
   patchStaffSettings(input) { return patchStaffSettings(this, input); }
+  async workflowCatalog(target) { const options = await startOptions(this, target); return { kind: "catalog", workflows: options.workflows }; }
+  workflowDefinition(target, name, revision) { return rootWorkflowDefinition(this, target, name, revision); }
+  workflowStatus(target, operationId, reviewDigest) { return rootWorkflowStatus(this, target, operationId, reviewDigest); }
   commandStartOptions(target) { return startOptions(this, target); }
   commandStart(input) { return createThread(this, input); }
   commandStartStatus(target, operationId) { return startStatus(this, target, operationId); }

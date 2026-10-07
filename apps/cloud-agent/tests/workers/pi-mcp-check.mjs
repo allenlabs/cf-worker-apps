@@ -46,7 +46,7 @@ try {
   assert.equal(context.kind, "context"); assert.equal(context.selectedVisitId, null);
   for (const mode of ["live", "non-mcp", "image", "revoked"]) assert.ok((await invoke({ mode })).error, mode + " must be denied");
   const count = (await observed()).length;
-  for (const bad of [{ ...target, groupId: "other-group" }, { ...target, managerId: undefined }, { ...target, subjectId: "forged-subject" }]) assert.ok((await invoke({ caller: { ...caller, target: bad } })).error);
+  for (const bad of [{ ...target, rootMessageId: undefined }, { ...target, rootMessageId: null }, { ...target, groupId: "other-group" }, { ...target, managerId: undefined }, { ...target, subjectId: "forged-subject" }]) assert.ok((await invoke({ caller: { ...caller, target: bad } })).error);
   assert.ok((await invoke({ env: { VISIT_INGRESS_TOKEN: "wrong-key" } })).error);
   assert.ok((await invoke({ input: { ...input, identity: { subjectId: "forged" } } })).error);
   assert.ok((await invoke({ abort: true })).error);

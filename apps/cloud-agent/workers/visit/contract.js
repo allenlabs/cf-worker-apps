@@ -23,9 +23,15 @@ export function visitInput(value) {
   return { action: value.action, patientId: value.patientId, visitId: value.visitId, fields: { kind: fields.kind, concernArea: fields.concernArea.trim(), revision: fields.revision, schedulingExceptions: fields.schedulingExceptions.trim(), externalNameChecked: fields.externalNameChecked } };
 }
 
+export function visitReadTarget(value) {
+  requireValue(keys(value, ["channelId", "groupId", "rootMessageId", "managerId"]) && ["channelId", "groupId", "managerId", ...(Object.hasOwn(value, "rootMessageId") ? ["rootMessageId"] : [])].every(key => typeof value[key] === "string" && /^[A-Za-z0-9_:-]{1,255}$/.test(value[key])), "visit_target_invalid");
+  return { channelId: value.channelId, groupId: value.groupId, ...(value.rootMessageId === undefined ? {} : { rootMessageId: value.rootMessageId }), managerId: value.managerId };
+}
+
 export function visitTarget(value) {
-  requireValue(keys(value, ["channelId", "groupId", "rootMessageId", "managerId"]) && ["channelId", "groupId", "rootMessageId", "managerId"].every(key => typeof value[key] === "string" && /^[A-Za-z0-9_:-]{1,255}$/.test(value[key])), "visit_target_invalid");
-  return { channelId: value.channelId, groupId: value.groupId, rootMessageId: value.rootMessageId, managerId: value.managerId };
+  const target = visitReadTarget(value);
+  requireValue(target.rootMessageId !== undefined, "visit_target_invalid");
+  return target;
 }
 
 export function visitIdentity(value) {
@@ -37,7 +43,7 @@ export function visitGatewayActor(value) {
   requireValue(object(value));
   if (value.kind === "channel") {
     requireValue(keys(value, ["kind", "target"]));
-    return { kind: "channel", target: visitTarget(value.target) };
+    return { kind: "channel", target: visitReadTarget(value.target) };
   }
   requireValue(value.kind === "mcp" && keys(value, ["kind", "identity"]));
   return { kind: "mcp", identity: visitIdentity(value.identity) };

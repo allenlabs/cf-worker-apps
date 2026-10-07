@@ -1,46 +1,41 @@
-# Start a team-chat thread with initial settings
+# New team-chat work before a thread exists
 
-The main team-chat composer can run `/ai` before any source thread exists. The panel shows **workflow → model → thinking level → 새 업무 시작**. Root-dependent forms, questions and history remain hidden until an actual native root is known. Existing thread composer commands keep their root settings. Employee model/thinking defaults and optional skill autocomplete are described in [Staff shortcuts](STAFF_SHORTCUTS.md).
+The main team-chat composer can run `/ai` before any source thread exists. Staff select a workflow, select any required patient and visit, edit the form, review its exact text and confirm **새 스레드 첫 메시지로 보내기**. That reviewed text becomes the first native message. Opening, selecting, prefilling, editing and reviewing create no placeholder and require no inference account. Manual forms never query the visit backend. Existing threads send the reviewed form as a reply.
 
-Choosing an item does not start AI or read patient data. Clicking **새 업무 시작** creates one bot-authored native root in the configured reply group, binds a new signed capability to its returned message ID and continues the selected workflow in the same panel. The bot root itself does not trigger inference. A workflow without source data needs no inference account. Visit-backed forms still require an explicit patient and visit after creation, through the existing authorized adapter.
+Model and thinking choices remain available before sending. Changing either clears the reviewed draft and confirmations. The signed review binds those settings, the workflow revision, source, values, exact text, confirmation set and original launch capability including its nonce. Optional AI authoring, general questions and history become available after a real root exists. When no workflow is selected, **새 업무 시작** retains the simple AI-only native root path. A direct start request selecting a workflow without reviewed form content is rejected.
 
-## Ownership and admission
+## Ownership and bindings
 
-| Operation | Owner | Effects |
+| Action | Owner | Effect |
 | --- | --- | --- |
-| `commands.ai.start` `options` | Existing Credentials owner DO | Reads enabled published workflow resources and configured model/thinking choices only |
-| `create` | Same owner | Claims UUID + one capability launch nonce; writes native root; stores initial intent |
-| `status` | Same owner | Reads receipt, finishes a known root's preferences when necessary; never sends native creation again |
-| First staff AI message or rooted AI command | Real-root Assistant DO | Selects/pins account, applies initial model/thinking once before inference/settings snapshot |
-| Later settings changes | Same Assistant | Persist normally; restarting or replaying start never restores old defaults |
+| `commands.ai.start` `options` | Credentials owner | Reads enabled published workflow resources and configured model/thinking choices |
+| Rootless workflow `catalog`, `prefill`, `prepare` | Credentials definition scope; Events review protocol | Authorizes any required source read, renders exact text and signs its review; no native write or Assistant |
+| Rootless workflow `send` | Credentials owner | Renders the reviewed values again, claims UUID and original launch nonce, writes the native root and stores initial intent |
+| Rootless workflow `status` | Credentials owner | Checks review digest and existing start receipt; never sends native creation again |
+| First rooted AI operation | Real-root Assistant | Selects/pins account and applies initial model/thinking once before inference |
 
-Events uses two external DO bindings: `PI_ASSISTANT` targets the existing Assistant class and `PI_CREDENTIALS` targets the existing Credentials class of the same runtime. Neither creates another namespace or credential owner. Existing OAuth grants, wrapping AAD, secrets and source identities remain in their original deployment.
+Events uses `PI_ASSISTANT` and `PI_CREDENTIALS` bindings to the existing classes. No new namespace, credential owner, inference account or draft store is introduced. The shared `VisitReadTarget` permits a group read without a root; `VisitTarget`, source history and Pi/Channel MCP identities still require a real root. Every read retains current business authorization. See [visit reads](VISIT_WORKFLOW.md) and [reviewed forms](WORKFLOW_SKILLS.md).
 
-Rootless options do not instantiate an Assistant, call Pi, query account metadata, rotate account assignment, read history/patient/visit data or call native APIs. Source reads, reviewed drafts and final form delivery still require a signed real-root capability. Initial setup does not alter account defaults.
+The owner stores the review digest and text hash alongside ordinary start metadata. It never stores form values, rendered clinical text or source context in the start receipt, D1 transcript or Pi history. Native send uses server-rendered text, `broadcast:false` and no `rootMessageId`. Only a successful ready receipt lets Events issue the real-root capability. Pending UI status checks retain the original rootless capability and review token.
 
-## Durable receipt and recovery
+## Durable creation and recovery
 
-The owner stores `creating → created → ready`, or `failed` / `uncertain`. It persists a known root ID before installing preferences. The request UUID and launch nonce are immutable, including after failure or abandonment. A different UUID cannot create another root from the same panel launch. The native SDK exposes `requestId`, but upstream deduplication is unproven; safety comes from the local durable claim, not a deduplication assumption.
+The owner stores `creating → created → ready`, or `failed` / `uncertain`. It persists a known root ID before installing preferences. The request digest covers tenant, full launch target, intent and reviewed message digest/hash. The request UUID and launch nonce are immutable, including after failure or abandonment. A different UUID cannot create another root from the same panel launch. The native SDK exposes `requestId`, but upstream deduplication is unproven; safety comes from the local durable claim.
 
-An ambiguous response, malformed or conflicting message identity, network failure after issue, or HTTP 5xx leaves the creation uncertain. A persisted `creating` claim after restart also remains uncertain. Status never repeats native creation. A persisted `created` root finishes setup without another native write.
+An ambiguous response, malformed or conflicting message identity, network failure after issue, or HTTP 5xx leaves creation uncertain. A persisted `creating` claim after restart also remains uncertain. Status never repeats native creation. A persisted `created` root finishes preferences without another native write. Confirmed success preserves the form's reviewed text in the panel and does not send it again as a reply.
 
-While root creation is unresolved, new unregistered roots in that group are held before lifecycle start, account selection, Pi or inference; already registered roots remain usable. The hold has no silent TTL. The Events outbox selects due first heads per thread and schedules the earliest eligible head: a backoff or quarantined new root cannot block already registered roots, while each root retains FIFO delivery. Exact admin recovery replay is idempotent; a changed action/root is refused. The Super Admin management page's **관리 기록 → 새 업무 시작 결과 확인** lists up to 50 unresolved receipts. Through the existing SSO session and same-origin CSRF mutation, the administrator can either bind a manually verified native root to that exact operation or explicitly abandon setup. Abandonment releases only its group hold, preserves the receipt/nonce, and never deletes or resends a message. Active in-flight creates cannot be recovered. Binding a root already admitted to AI is refused so settings cannot overwrite an active thread.
+While creation is unresolved, new unregistered roots in that group are held before lifecycle start, account selection, Pi or inference; already registered roots remain usable. The hold has no silent TTL. Events retains ordered pending delivery per thread. The Super Admin page's **관리 기록 → 새 업무 시작 결과 확인** lists up to 50 unresolved receipts. Its SSO/CSRF-protected recovery can bind a manually verified native root to that operation or explicitly abandon setup. Abandonment releases its group hold, preserves receipt/nonce and never deletes or resends a message. In-flight creates and roots already admitted to AI cannot be rebound. Exact recovery replay is idempotent.
 
-The owner retains at most 2,000 start receipts and fails closed when full. An operational archive/migration is required beyond that ceiling; deleting receipts ad hoc would weaken replay protection. This feature currently creates roots only in `ALLOWED_CHAT_ID` with replies enabled; the visit adapter's group configuration is independent.
+The owner retains at most 2,000 start receipts and fails closed when full. An operational archive/migration is required beyond that ceiling; deleting receipts ad hoc weakens replay protection. Creation requires `ALLOWED_CHAT_ID` and enabled replies. Workflow roots additionally require `VISIT_MCP_GROUP_ID`, matching existing form delivery policy. Current manager/group authorization is checked on each request.
 
-## Reproduce the checks
+## Verification
 
-```bash
+```sh
 npm run -w @cf-worker-apps/cloud-agent build
 npm run -w @cf-worker-apps/cloud-agent command-start-check
 npm run -w @cf-worker-apps/cloud-agent command-start-ui-check
-npm run -w @cf-worker-apps/cloud-agent command-check
-npm run -w @cf-worker-apps/cloud-agent command-ui-check
 npm run -w @cf-worker-apps/cloud-agent workflow-check
-npm run -w @cf-worker-apps/cloud-agent visit-ui-check
-npm run -w @cf-worker-apps/cloud-agent admin-ui-check
+npm run -w @cf-worker-apps/cloud-agent gateway-check
 ```
 
-The native behavioral check uses generated identities in Miniflare/workerd. It covers account-free discovery/forms, exact native target, minimal opaque native response, UUID/nonce conflicts, creating/created/ready crash points, high initial thinking before a real faux-provider generation, a later low setting after restart, held-native early-reply quarantine, existing-root continuity, uncertain no-resend and SSO/CSRF recovery. The DOM checks exercise actual selection-change and button-click handlers, retained creation UUID after lost response, status-only continuation, settings-before-start layout order, and refresh without a hidden stale workflow.
-
-The faux provider exposes one probe model: local tests prove persisted requested model intent and actual thinking behavior. Selecting a non-default production model still requires hosted-provider verification. DOM order/visibility checks do not replace a 620px hosted popup screenshot. Coverage is run through the existing app command without reducing thresholds; an unavailable workerd Profiler must be reported separately from behavioral success.
+The workerd checks use generated identities and mocked outbound APIs. They verify exact reviewed root text, no placeholder/Assistant before send, source and settings tampering, nonce/UUID conflicts, concurrent/restarted/uncertain no-resend, native response metadata, original-capability status, first preferences and administrator recovery. DOM checks exercise manual and visit forms, multiline edits, confirmation reset, settings changes, lost responses and rooted continuation. These checks do not prove hosted native-client layout, installed business authorization or a live send. Required coverage may fail separately when workerd does not expose its Profiler API; no coverage percentage is claimed in that case.
