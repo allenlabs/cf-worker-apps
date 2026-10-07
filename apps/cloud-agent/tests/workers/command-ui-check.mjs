@@ -10,7 +10,7 @@ let imageReceipt = { status: "done", image, message: "이미지를 저장했습�
 const console = new VirtualConsole(); console.on("jsdomError", error => errors.push(error));
 const dom = new JSDOM(aiPanel(), { runScripts: "dangerously", virtualConsole: console, beforeParse(window) {
   window.crypto.randomUUID = randomUUID;
-  window.ChannelIOWam = { getWamData: key => ({ appId: "fixture-app", targetCapability: "fixture-capability", rootAvailable: true, rootMessageId: "fixture-root" })[key], setSize: value => { assert.equal(value.width,760,"Host receives the wider composer"); assert.equal(value.height,620); }, close() {}, async callFunction(input) {
+  window.ChannelIOWam = { getWamData: key => ({ appId: "fixture-app", targetCapability: "fixture-capability", rootAvailable: true, rootMessageId: "fixture-root" })[key], setSize: value => { assert.equal(value.width,760,"Host receives the wider composer"); assert.equal(value.height,520,"Compact height leaves room for the native floating window chrome"); }, close() {}, async callFunction(input) {
     if (input.name === "commands.ai.workflow") return { result: { kind: "catalog", workflows: [] } };
     calls.push(structuredClone(input));
     if (input.params.action !== "help") assert.equal(window.document.getElementById("state").textContent, "요청을 처리하고 있습니다.", "Progress appears before the bridge call");
