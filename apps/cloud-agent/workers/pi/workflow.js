@@ -11,7 +11,7 @@ export const workflowPath = "references/workflow.json";
 export const workflowSources = Object.freeze(["patient.label", "patient.reference", "visit.date", "visit.status", "reservation.at", "reservation.type", "reservation.status", "reservation.procedureText", "reservation.note", "reservation.pod", "intake.concernText", "performed.procedureText", "performed.pod"]);
 export const workflowHash = async value => [...new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(value)))].map(byte => byte.toString(16).padStart(2, "0")).join("");
 export function workflowDefinition(value) {
-  requireValue(keys(value, ["schemaVersion", "title", "source", "fields", "template", "confirmations"]) && value.schemaVersion === 1 && text(value.title, 200) && value.title.trim() && ["none", "visit-context"].includes(value.source) && Array.isArray(value.fields) && value.fields.length <= 20 && Array.isArray(value.confirmations) && value.confirmations.length <= 10 && text(value.template, 4000) && value.template.trim() && encoder.encode(JSON.stringify(value)).length <= 32768 && !/(?:https?:\/\/|javascript:|<\/?script\b)/i.test(JSON.stringify(value)), "workflow_definition_invalid");
+  requireValue(keys(value, ["schemaVersion", "title", "source", "fields", "template", "confirmations", "reconcile"]) && value.schemaVersion === 1 && text(value.title, 200) && value.title.trim() && ["none", "visit-context"].includes(value.source) && Array.isArray(value.fields) && value.fields.length <= 20 && Array.isArray(value.confirmations) && value.confirmations.length <= 10 && text(value.template, 4000) && value.template.trim() && encoder.encode(JSON.stringify(value)).length <= 32768 && !/(?:https?:\/\/|javascript:|<\/?script\b)/i.test(JSON.stringify(value)), "workflow_definition_invalid");
   const fieldIds = new Set();
   const fields = value.fields.map(field => {
     requireValue(keys(field, ["id", "label", "type", "required", "maxLength", "choices", "source"]) && id(field.id) && !fieldIds.has(field.id) && text(field.label, 200) && field.label.trim() && ["text", "choice"].includes(field.type) && typeof field.required === "boolean" && Number.isInteger(field.maxLength) && field.maxLength >= 1 && field.maxLength <= 1000, "workflow_definition_invalid");
@@ -22,7 +22,9 @@ export function workflowDefinition(value) {
   const placeholders = [...value.template.matchAll(/{{([a-z][a-z0-9_]{0,63})}}/g)];
   requireValue(placeholders.every(match => fieldIds.has(match[1])) && !value.template.replace(/{{([a-z][a-z0-9_]{0,63})}}/g, "").match(/{{|}}/), "workflow_definition_invalid");
   const checks = new Set(); const confirmations = value.confirmations.map(check => { requireValue(keys(check, ["id", "label"]) && id(check.id) && !checks.has(check.id) && text(check.label, 300) && check.label.trim(), "workflow_definition_invalid"); checks.add(check.id); return { ...check }; });
-  return { schemaVersion: 1, title: value.title, source: value.source, fields, template: value.template, confirmations };
+  const reconcile = value.reconcile;
+  requireValue(reconcile === undefined || keys(reconcile, ["field", "source"]) && value.source === "visit-context" && reconcile.source === "performed.activities" && fields.some(field => field.id === reconcile.field && field.type === "text" && field.source === "performed.pod"), "workflow_definition_invalid");
+  return { schemaVersion: 1, title: value.title, source: value.source, fields, template: value.template, confirmations, ...(reconcile === undefined ? {} : { reconcile: { field: reconcile.field, source: reconcile.source } }) };
 }
 export function workflowFromSkill(skill) {
   const resource = skill?.resources?.find(row => row.path === workflowPath);
@@ -32,7 +34,7 @@ export function workflowFromSkill(skill) {
   return workflowDefinition(value);
 }
 export function workflowInput(value) {
-  requireValue(object(value) && ["catalog", "prefill", "prepare", "send", "status"].includes(value.action));
+  requireValue(object(value) && ["catalog", "prefill", "reconcile", "prepare", "send", "status"].includes(value.action));
   if (value.action === "catalog") { requireValue(keys(value, ["action"])); return { action: value.action }; }
   if (value.action === "status") { requireValue(keys(value, ["action", "operationId", "draftToken"]) && uuid(value.operationId) && text(value.draftToken, 4096)); return { ...value }; }
   const common = ["action", "name", "revision", "selection"];
@@ -40,7 +42,8 @@ export function workflowInput(value) {
   requireValue(value.selection === undefined || keys(value.selection, ["patientId", "visitId"]) && uuid(value.selection.patientId) && (value.selection.visitId === undefined || value.selection.visitId === null || uuid(value.selection.visitId)));
   if (value.selection !== undefined) value = { ...value, selection: { patientId: value.selection.patientId, visitId: value.selection.visitId ?? null } };
   if (value.action === "prefill") { requireValue(keys(value, common)); return { ...value }; }
-  requireValue(keys(value, value.action === "send" ? [...common, "intent", "finalText", "values", "operationId", "draftToken", "confirmed", "confirmations"] : [...common, "intent", "finalText", "values"]) && object(value.values) && Object.keys(value.values).length <= 20 && Object.entries(value.values).every(([key, val]) => id(key) && text(val, 1000)) && encoder.encode(JSON.stringify(value.values)).length <= 16384);
+  requireValue(keys(value, value.action === "reconcile" ? [...common, "intent", "values", "sourceHash"] : value.action === "send" ? [...common, "intent", "finalText", "values", "operationId", "draftToken", "confirmed", "confirmations"] : [...common, "intent", "finalText", "values"]) && object(value.values) && Object.keys(value.values).length <= 20 && Object.entries(value.values).every(([key, val]) => id(key) && text(val, 1000)) && encoder.encode(JSON.stringify(value.values)).length <= 16384);
+  if (value.action === "reconcile") requireValue(value.intent !== undefined && /^[a-f0-9]{64}$/.test(value.sourceHash ?? ""));
   if (value.finalText !== undefined) workflowFinalText(value.finalText);
   if (value.intent !== undefined) { startIntent(value.intent); requireValue(value.intent.workflow === undefined); }
   if (value.action === "send") requireValue(uuid(value.operationId) && text(value.draftToken, 4096) && value.confirmed === true && Array.isArray(value.confirmations) && value.confirmations.length <= 10 && value.confirmations.every(id), "workflow_confirmation_required");
@@ -51,7 +54,7 @@ export function workflowSource(context) {
   requireValue(context?.patient && (context.selectedVisitId === null || visit), "visit_selection_required");
   const reservation = !visit || visit.reservationId === null ? null : context.reservations.find(row => row.id === visit.reservationId);
   requireValue(!visit || visit.reservationId === null || reservation, "visit_response_invalid");
-  return { patient: { id: context.patient.id, label: context.patient.label, reference: context.patient.reference }, visit: visit ? { id: visit.id, date: visit.date, status: visit.status, reservationId: visit.reservationId } : null, reservation: reservation ? { id: reservation.id, at: reservation.at, type: reservation.type, status: reservation.status, procedureText: reservation.procedureText ?? null, note: reservation.note ?? null, pod: reservation.pod ?? null } : null, intake: { concernText: context.intake?.concernText ?? null }, performed: { procedureText: context.performed?.procedureText ?? null, pod: context.performed?.pod ?? null } };
+  return { patient: { id: context.patient.id, label: context.patient.label, reference: context.patient.reference }, visit: visit ? { id: visit.id, date: visit.date, status: visit.status, reservationId: visit.reservationId } : null, reservation: reservation ? { id: reservation.id, at: reservation.at, type: reservation.type, status: reservation.status, procedureText: reservation.procedureText ?? null, note: reservation.note ?? null, pod: reservation.pod ?? null } : null, intake: { concernText: context.intake?.concernText ?? null }, performed: { procedureText: context.performed?.procedureText ?? null, pod: context.performed?.pod ?? null, ...(context.performed?.activities === undefined ? {} : { activities: context.performed.activities, menu: context.performed.menu }) } };
 }
 export function workflowPrefill(definition, source = null) {
   return Object.fromEntries(definition.fields.map(field => { const [section, key] = field.source?.split(".") ?? []; const candidate = field.source ? source?.[section]?.[key] ?? "" : ""; return [field.id, typeof candidate === "string" && candidate.length <= field.maxLength && (field.type !== "choice" || field.choices.includes(candidate)) ? candidate : ""]; }));

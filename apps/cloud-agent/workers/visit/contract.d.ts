@@ -20,6 +20,11 @@ export type ParsedVisitInput = PatientSearchInput | Required<VisitSelectInput> |
 export type PatientCandidate = { id: string; label: string; reference: string | null };
 export type VisitMode = "test" | "live";
 export type PatientSearchResult = { mode: VisitMode; kind: "patients"; patients: PatientCandidate[] };
+export type VisitPerformedActivity = { id: string; performedOn: string | null; podLabel: string; types: string[]; fkCount: number; reservationId: string | null; parentId: string | null };
+export type VisitPerformedMenuEntry = { abbreviation: string; name: string | null; location: string | null; surgeryName: string | null; product: string | null; isSurgery: boolean | null };
+export type VisitPerformedResult = { procedureText: string | null; pod: string | null } & (
+  { activities?: never; menu?: never } | { activities: VisitPerformedActivity[]; menu: VisitPerformedMenuEntry[] }
+);
 export type VisitContextResult = {
   mode: VisitMode;
   kind: "context";
@@ -28,7 +33,7 @@ export type VisitContextResult = {
   visits: { id: string; date: string | null; reservationId: string | null; status: string | null }[];
   selectedVisitId: string | null;
   intake?: { concernText: string | null };
-  performed?: { procedureText: string | null; pod: string | null };
+  performed?: VisitPerformedResult;
   observedAt: string;
 };
 export type VisitDraftResult = {
@@ -46,6 +51,7 @@ export function visitIdentity(value: unknown): VisitIdentity;
 export function visitGatewayActor(value: unknown): VisitGatewayActor;
 export const visitErrors: readonly string[];
 export function visitJson(message: Request | Response, limit?: number): Promise<unknown>;
+export function performedResult(value: unknown): VisitPerformedResult;
 export function visitResult(value: unknown, input: ParsedVisitInput): VisitResult;
 export function visitDraft(context: VisitContextResult, fields: ArrivalFields): VisitDraftResult;
 export function visitOutputSize<T>(value: T): T;

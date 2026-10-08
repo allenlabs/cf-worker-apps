@@ -3,11 +3,14 @@ import { createHmac } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
+import "./visit-contract-check.mjs";
 process.chdir(fileURLToPath(new URL("../..", import.meta.url)));
 
 const channel = "fixture-channel", group = "fixture-group", manager = "fixture-manager", root = "fixture-root", signing = "ab".repeat(32), token = "fixture-visit-service-token-at-least-32", key = "sb_secret_fixture-dedicated-rpc-key";
 const patientId = "10000000-0000-0000-0000-000000000001", otherId = "10000000-0000-0000-0000-000000000002", visitId = "20000000-0000-0000-0000-000000000001", reservationId = "30000000-0000-0000-0000-000000000001";
 const performed = { procedureText: "Synthetic procedure A (2025-12-25)\nSynthetic procedure A (2025-12-29)", pod: "Synthetic procedure A (2025-12-25): POD 7\nSynthetic procedure A (2025-12-29): POD 3" };
+performed.activities = [{ id: "40000000-0000-4000-8000-000000000001", performedOn: "2025-12-25", podLabel: "7D", types: ["Synthetic procedure A"], fkCount: 3, reservationId, parentId: null }];
+performed.menu = [{ abbreviation: "Synthetic procedure A", name: "Synthetic procedure", location: null, surgeryName: null, product: null, isSurgery: true }];
 const requests = []; let mode = "normal", observed = 0, activeKey = key, performedOverride;
 const outbound = async request => {
   assert.equal(request.url, "https://fixture.supabase.invalid/rest/v1/rpc/cloud_agent_visit_read"); assert.equal(request.method, "POST");
@@ -23,7 +26,7 @@ const outbound = async request => {
   if (mode === "search-too-many") return Response.json({ mode: "test", kind: "patients", patients: Array.from({ length: 21 }, (_, i) => ({ id: "10000000-0000-0000-0000-" + String(i + 1).padStart(12, "0"), label: "Synthetic " + i, reference: null })) });
   if (body.p_input.action === "patientSearch") return Response.json({ mode: "test", kind: "patients", patients: mode === "empty" ? [] : [{ id: patientId, label: "Synthetic person <img src=x>", reference: "TEST-001", email: "must-not-return@example.invalid", chart: "FORBIDDEN_PROFILE" }, ...(mode === "duplicate" ? [{ id: patientId, label: "Duplicate", reference: null }] : [])], clinicalNotes: "FORBIDDEN_NOTES" });
   const value = { mode: "test", kind: "context", patient: { id: patientId, label: "Synthetic person <img src=x>", reference: "TEST-001", phone: "FORBIDDEN_PHONE" }, reservations: [{ id: reservationId, at: "2026-01-01T10:00:00Z", type: "consultation", status: "confirmed", procedureText: "Synthetic selected candidate", note: "Synthetic selected note", pod: "POD 3", profile: "FORBIDDEN_PROFILE" }, { id: "30000000-0000-0000-0000-000000000002", at: null, type: null, status: null, procedureText: "FORBIDDEN_UNLINKED_CANDIDATE", note: "FORBIDDEN_UNLINKED_NOTE", pod: "FORBIDDEN_UNLINKED_POD" }], visits: [{ id: visitId, date: "2026-01-01", reservationId, status: "arrived" }], selectedVisitId: body.p_input.visitId, intake: { concernText: "Synthetic intake concern", hidden: "FORBIDDEN_INTAKE" }, observedAt: `2026-01-01T10:00:${String(observed++).padStart(2, "0")}Z`, hidden: "FORBIDDEN_NOTES" };
-  value.performed = { ...performed, hidden: "FORBIDDEN_PERFORMED" };
+  value.performed = { ...performed, hidden: "FORBIDDEN_PERFORMED", activities: performed.activities.map(row => ({ ...row, hidden: "FORBIDDEN_PERFORMED" })), menu: performed.menu.map(row => ({ ...row, hidden: "FORBIDDEN_PERFORMED" })) };
   if (mode === "boundary") {
     value.reservations = Array.from({ length: 20 }, (_, i) => ({ ...value.reservations[0], id: "30000000-0000-0000-0000-" + String(i + 1).padStart(12, "0") }));
     value.visits = Array.from({ length: 20 }, (_, i) => ({ ...value.visits[0], id: "20000000-0000-0000-0000-" + String(i + 1).padStart(12, "0"), reservationId: i ? null : reservationId }));

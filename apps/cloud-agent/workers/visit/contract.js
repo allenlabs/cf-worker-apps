@@ -81,6 +81,26 @@ function patient(value) {
 }
 function unique(values) { backendValue(new Set(values.map(value => value.id)).size === values.length); }
 
+export function performedResult(value) {
+  backendValue(object(value) && nullableText(value.procedureText, 1000) && nullableText(value.pod, 1000));
+  const result = { procedureText: value.procedureText, pod: value.pod };
+  backendValue((value.activities === undefined) === (value.menu === undefined));
+  if (value.activities === undefined) return result;
+  backendValue(Array.isArray(value.activities) && value.activities.length <= 200 && Array.isArray(value.menu) && value.menu.length <= 300);
+  const line = (value, max) => text(value, max) && value.trim().length > 0 && !/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(value);
+  const calendarDate = value => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) && value.slice(0, 4) !== "0000" && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
+  const activities = Array.from(value.activities, row => {
+    backendValue(object(row) && uuid(row.id) && (row.performedOn === null || calendarDate(row.performedOn)) && line(row.podLabel, 80) && Array.isArray(row.types) && row.types.length <= 1000 && [...row.types].every(type => line(type, 1000)) && Number.isSafeInteger(row.fkCount) && row.fkCount >= 0 && (row.reservationId === null || uuid(row.reservationId)) && (row.parentId === null || uuid(row.parentId)));
+    return { id: row.id, performedOn: row.performedOn, podLabel: row.podLabel, types: [...row.types], fkCount: row.fkCount, reservationId: row.reservationId, parentId: row.parentId };
+  });
+  unique(activities);
+  const menu = Array.from(value.menu, row => {
+    backendValue(object(row) && line(row.abbreviation, 300) && ["name", "location", "surgeryName", "product"].every(key => nullableText(row[key], 300)) && (row.isSurgery === null || typeof row.isSurgery === "boolean"));
+    return { abbreviation: row.abbreviation, name: row.name, location: row.location, surgeryName: row.surgeryName, product: row.product, isSurgery: row.isSurgery };
+  });
+  return { ...result, activities, menu };
+}
+
 export function visitResult(value, input) {
   backendValue(object(value) && ["test", "live"].includes(value.mode));
   if (input.action === "draft") {
@@ -107,9 +127,8 @@ export function visitResult(value, input) {
   unique(visits); backendValue(input.visitId === null || visits.some(row => row.id === input.visitId));
   const intake = value.intake;
   backendValue(intake === undefined || object(intake) && nullableText(intake.concernText, 1000));
-  const performed = value.performed;
-  backendValue(performed === undefined || object(performed) && nullableText(performed.procedureText, 1000) && nullableText(performed.pod, 1000));
-  return { mode: value.mode, kind: "context", patient: selectedPatient, reservations, visits, selectedVisitId: value.selectedVisitId, ...(intake === undefined ? {} : { intake: { concernText: intake.concernText } }), ...(performed === undefined ? {} : { performed: { procedureText: performed.procedureText, pod: performed.pod } }), observedAt: value.observedAt };
+  const performed = value.performed === undefined ? undefined : performedResult(value.performed);
+  return { mode: value.mode, kind: "context", patient: selectedPatient, reservations, visits, selectedVisitId: value.selectedVisitId, ...(intake === undefined ? {} : { intake: { concernText: intake.concernText } }), ...(performed === undefined ? {} : { performed }), observedAt: value.observedAt };
 }
 
 export function visitDraft(context, fields) {

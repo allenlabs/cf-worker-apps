@@ -3,12 +3,12 @@ export type WorkflowSourcePath = "patient.label" | "patient.reference" | "visit.
 type Field = { id: string; label: string; required: boolean; maxLength: number } & ({ type: "text"; choices?: never } | { type: "choice"; choices: string[] });
 export type WorkflowField = Field & { source?: WorkflowSourcePath };
 type Definition = { schemaVersion: 1; title: string; template: string; confirmations: { id: string; label: string }[] };
-export type WorkflowDefinition = Definition & ({ source: "none"; fields: (Field & { source?: never })[] } | { source: "visit-context"; fields: WorkflowField[] });
+export type WorkflowDefinition = Definition & ({ source: "none"; fields: (Field & { source?: never })[]; reconcile?: never } | { source: "visit-context"; fields: WorkflowField[]; reconcile?: { field: string; source: "performed.activities" } });
 export type WorkflowSource = { patient: { id: string; label: string; reference: string | null }; visit: { id: string; date: string | null; status: string | null; reservationId: string | null } | null; reservation: { id: string; at: string | null; type: string | null; status: string | null; procedureText: string | null; note: string | null; pod: string | null } | null; intake: { concernText: string | null }; performed: NonNullable<VisitContextResult["performed"]> };
 type Selection = { patientId: string; visitId: string | null };
 type StartSettings = { modelId: string; thinkingLevel: string };
 type Pinned = { name: string; revision: string; selection?: Selection };
-export type WorkflowInput = { action: "catalog" } | (Pinned & { action: "prefill" }) | (Pinned & { action: "prepare"; intent?: StartSettings; finalText?: string; values: Record<string, string> }) | (Pinned & { action: "send"; intent?: StartSettings; finalText?: string; values: Record<string, string>; operationId: string; draftToken: string; confirmed: true; confirmations: string[] }) | { action: "status"; operationId: string; draftToken: string };
+export type WorkflowInput = { action: "catalog" } | (Pinned & { action: "prefill" }) | (Pinned & { action: "reconcile"; intent: StartSettings; sourceHash: string; values: Record<string, string> }) | (Pinned & { action: "prepare"; intent?: StartSettings; finalText?: string; values: Record<string, string> }) | (Pinned & { action: "send"; intent?: StartSettings; finalText?: string; values: Record<string, string>; operationId: string; draftToken: string; confirmed: true; confirmations: string[] }) | { action: "status"; operationId: string; draftToken: string };
 export const workflowPath: "references/workflow.json";
 export const workflowSources: readonly WorkflowSourcePath[];
 export function workflowHash(value: string): Promise<string>;

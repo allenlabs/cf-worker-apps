@@ -172,7 +172,8 @@ try {
   assert.equal(functions.success, true);
   assert.deepEqual(functions.functions.map(item => item.name), ['extension.command.metadata.getCommands', 'commands.ai.open', 'commands.ai.suggest', 'commands.ai.start', 'commands.ai.bindThread', 'commands.ai.workflow', 'commands.ai.visit', 'commands.ai.execute', 'commands.ai.status', 'extension.hook.metadata.getHooks', 'hooks.teamChatMessageCreated']);
   const workflow = functions.functions.find(item => item.name === 'commands.ai.workflow');
-  assert.deepEqual(workflow.inputSchema.properties.action.enum, ['catalog', 'prefill', 'prepare', 'send', 'status']);
+  assert.deepEqual(workflow.inputSchema.properties.action.enum, ['catalog', 'prefill', 'reconcile', 'prepare', 'send', 'status']);
+  assert.deepEqual(workflow.inputSchema.properties.sourceHash, { type: 'string', pattern: '^[a-f0-9]{64}$' });
   assert.deepEqual(workflow.inputSchema.required, ['targetCapability', 'action']);
   assert.equal(workflow.inputSchema.additionalProperties, false);
   assert.equal(workflow.outputSchema.type, 'object');

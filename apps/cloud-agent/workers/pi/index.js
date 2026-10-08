@@ -1,4 +1,5 @@
 import { workflowDraftInput, workflowDraftDefinition, workflowDraftPrompt, workflowDraftResult } from "./workflow-assist.js";
+import { reconcileWorkflow } from "./workflow-reconcile.js";
 import { resolveShortcut, suggestShortcuts, skillAskSnapshot } from "./skill-shortcuts.js";
 import { staffSettings, patchStaffSettings } from "./staff-settings.js";
 import { Agent } from "agents";
@@ -152,6 +153,7 @@ function tokenFields(token) {
 }
 
 export class Credentials extends ManagementCredentials {
+  workflowReconcile(input) { return reconcileWorkflow(this, input); }
   resolveShortcut(target, input) { return resolveShortcut(this, target, input); }
   suggestShortcuts(target, query) { return suggestShortcuts(this, target, query); }
   skillAskSnapshot(target, selection) { return skillAskSnapshot(this, target, selection); }
