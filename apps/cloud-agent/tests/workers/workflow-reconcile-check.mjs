@@ -121,8 +121,22 @@ try {
   assert.equal((await reconcileWorkflow(providerOwner, productionInput)).pod, expected, "Production completeSimple path parses actual provider SSE with no override");
   assert.equal(providerRequests, 1); assert.deepEqual(selectedAccounts, [accountB]); assert.equal(providerReports[0].accountId, accountB);
   assert.deepEqual(providerReports[0].usage, { input: 8, output: 5, cacheRead: 2, cacheWrite: 0, totalTokens: 15, reasoning: 1 });
-  truncated = true; await assert.rejects(() => reconcileWorkflow(providerOwner, productionInput), /workflow_reconcile_unavailable/);
+  truncated = true; await assert.rejects(() => reconcileWorkflow(providerOwner, productionInput), { message: "workflow_reconcile_provider_length" });
   assert.equal(providerRequests, 2, "Truncated provider output is not retried"); assert.equal(providerReports[1].usage.totalTokens, 30, "Billed invalid output is counted before rejection");
   assert.equal(cursor, 0); assert.ok([...providerStore.keys()].every(key => key.startsWith("workflow-reconciliation-usage:")), "No thread, prompt or classifier result persisted");
+  truncated = false;
+  const privateError = "SYNTHETIC_PRIVATE_PROVIDER_DETAIL", rejectPrivate = async () => { throw Error(privateError); };
+  const failsWith = (subject, code) => assert.rejects(() => reconcileWorkflow(subject, productionInput), error => error.message === code && !error.message.includes(privateError));
+  await failsWith({ ...providerOwner, accounts: rejectPrivate }, "workflow_reconcile_account");
+  await failsWith({ ...providerOwner, env: { ...providerOwner.env, Credentials: { ...providerOwner.env.Credentials, getByName: id => ({ ...providerOwner.env.Credentials.getByName(id), status: rejectPrivate }) } } }, "workflow_reconcile_model");
+  await failsWith({ ...providerOwner, ctx: { ...providerOwner.ctx, storage: { ...providerOwner.ctx.storage, transaction: rejectPrivate } } }, "workflow_reconcile_usage");
+  globalThis.fetch = rejectPrivate;
+  await failsWith(providerOwner, "workflow_reconcile_provider");
+  const token = ["fixture", Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "synthetic-account" } })).toString("base64url"), "fixture"].join(".");
+  const codexOwner = { ...providerOwner, env: { ...providerOwner.env, Credentials: { ...providerOwner.env.Credentials, getByName: id => ({ ...providerOwner.env.Credentials.getByName(id), status: async () => ({ inferenceReady: true, provider: "codex" }), codexAccess: async () => ({ access: token }) }) } } };
+  let rejectedRequests = 0;
+  globalThis.fetch = async (url, options) => { assert.equal(new Request(url, options).url, "https://chatgpt.com/backend-api/codex/responses"); rejectedRequests++; return Response.json({ error: { message: privateError } }, { status: 400 }); };
+  await failsWith(codexOwner, "workflow_reconcile_provider_http_400");
+  assert.equal(rejectedRequests, 1, "Provider diagnostics report only status and never retry or expose upstream errors");
 } finally { globalThis.fetch = actualFetch; }
 console.log("Workflow reconciliation checks passed: source-bound root/reply route, no-tools minimized evidence, complete same-day partitions, FK selection, conservative unknown dates, stale data, authorization, model failures and unchanged ordinary draft guard.");

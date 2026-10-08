@@ -24,7 +24,7 @@ function fixture(mode = "success", root = false, optIn = true) {
         if (p.action === "catalog") return { result: { kind: "catalog", workflows: [workflow] } };
         if (p.action === "prefill") return { result: { kind: "prefill", values: { person: "Synthetic person", pod: original, note: "" }, text: "Synthetic person\n" + original, sourceHash, mode: "live" } };
         if (p.action === "reconcile") {
-          const result = mode === "failed" ? { error: { message: "workflow_reconcile_unavailable" } } : { result: { kind: "reconciled", name: row.name, revision, values: { ...p.values, pod: reconciled, ...(mode === "malformed" ? { person: "Invented person" } : {}) }, text: "Synthetic person\n" + reconciled, merged: 1, mode: "live" } };
+          const result = mode === "failed" || mode.startsWith("error:") ? { error: { message: mode === "failed" ? "workflow_reconcile_unavailable" : mode.slice(6) } } : { result: { kind: "reconciled", name: row.name, revision, values: { ...p.values, pod: reconciled, ...(mode === "malformed" ? { person: "Invented person" } : {}) }, text: "Synthetic person\n" + reconciled, merged: 1, mode: "live" } };
           if (mode === "hold") return new Promise(resolve => { release = () => resolve(result); });
           return result;
         }
@@ -62,10 +62,12 @@ for (const rooted of [false, true]) {
   assert.equal(f.get("workflow-check-review").checked, false); assert.equal(f.get("workflow-send").disabled, true);
   assert.equal(f.errors.length, 0); f.dom.window.close();
 }
-for (const mode of ["failed", "malformed"]) {
+for (const mode of ["failed", "malformed", ...["account", "model", "provider", "usage", "provider_aborted", "provider_length", "provider_http_400"].map(stage => "error:workflow_reconcile_" + stage), "error:SYNTHETIC_PRIVATE_PROVIDER_DETAIL", "error:toString"]) {
   const f = fixture(mode); await select(f); await until(() => f.get("workflow-state").className === "error" && !f.get("workflow-prepare").disabled);
   assert.equal(f.get("workflow-field-pod").value, original); assert.equal(f.get("workflow-draft").value, "Synthetic person\n" + original);
   assert.match(f.get("workflow-state").textContent, /원본 POD를 유지/);
+  if (mode.startsWith("error:workflow_reconcile_")) assert.ok(f.get("workflow-state").textContent.includes("[진단: " + mode.slice("error:workflow_reconcile_".length) + "]"));
+  if (["error:SYNTHETIC_PRIVATE_PROVIDER_DETAIL", "error:toString"].includes(mode)) { assert.match(f.get("workflow-state").textContent, /진단: bridge/); assert.ok(!f.get("workflow-state").textContent.includes(mode.slice(6)), "Unknown native errors are never displayed verbatim"); }
   assert.equal(f.calls.filter(call => call.params.action === "reconcile").length, 1, "Failure never retries automatically");
   assert.equal(f.get("workflow-field-person").value, "Synthetic person"); assert.equal(f.errors.length, 0); f.dom.window.close();
 }

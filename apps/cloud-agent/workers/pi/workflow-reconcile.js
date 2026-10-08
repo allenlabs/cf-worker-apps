@@ -98,20 +98,32 @@ export async function reconcileWorkflow(owner, input, completeOverride) {
   requireValue(input.intent.workflow === undefined && configuredModels(owner.env).some(model => model.id === input.intent.modelId), "command_start_model_not_permitted");
   const skill = await owner.publishedSkill(input.name, input.revision), definition = workflowFromSkill(skill);
   requireValue(definition?.reconcile, "workflow_reconcile_unavailable");
+  let failure = "workflow_reconcile_unavailable";
   const complete = completeOverride ?? (async context => {
+    failure = "workflow_reconcile_account";
     const accountId = await reconciliationAccount(owner, input.target);
-    requireValue(accountId === "owner" || /^account-[a-f0-9-]{36}$/.test(accountId), "workflow_reconcile_unavailable");
+    requireValue(accountId === "owner" || /^account-[a-f0-9-]{36}$/.test(accountId), failure);
+    failure = "workflow_reconcile_model";
     const credentials = owner.env.Credentials.getByName(accountId), models = createModels();
-    installSubscriptionModels(models, () => credentials);
+    let providerStatus = null;
+    installSubscriptionModels(models, () => credentials, undefined, diagnostic => {
+      if (Number.isSafeInteger(diagnostic.status) && diagnostic.status >= 100 && diagnostic.status <= 599) providerStatus = diagnostic.status;
+      if (providerStatus >= 400) failure = "workflow_reconcile_provider_http_" + providerStatus;
+    });
     const selected = await subscriptionModel(models, credentials, input.intent.modelId), model = models.getModel(selected.provider, selected.id);
+    failure = "workflow_reconcile_provider";
     const response = await models.completeSimple(model, context, { toolChoice: "none", maxTokens: 8192, ...(input.intent.thinkingLevel === "off" ? {} : { reasoning: input.intent.thinkingLevel }), signal: AbortSignal.timeout(55000), maxRetries: 0, cacheRetention: "none" });
+    const providerFailure = ["aborted", "length"].includes(response.stopReason) ? "workflow_reconcile_provider_" + response.stopReason : providerStatus >= 400 ? "workflow_reconcile_provider_http_" + providerStatus : "workflow_reconcile_provider";
+    failure = "workflow_reconcile_usage";
     await reportReconciliationUsage(owner, accountId, response.usage);
-    requireValue(response.stopReason === "stop" && response.content.every(part => ["text", "thinking"].includes(part.type)), "workflow_reconcile_unavailable");
+    failure = providerFailure;
+    requireValue(response.stopReason === "stop" && response.content.every(part => ["text", "thinking"].includes(part.type)), failure);
+    failure = "workflow_reconcile_invalid";
     return response.content.filter(part => part.type === "text").map(part => part.text).join("");
   });
   let result;
   try { result = await classifyPerformed(input.performed, skill.body, complete); }
-  catch (error) { throw Error(["workflow_reconcile_invalid", "workflow_reconcile_too_large", "workflow_reconcile_unavailable"].includes(error.message) ? error.message : "workflow_reconcile_unavailable"); }
+  catch (error) { throw Error(["workflow_reconcile_invalid", "workflow_reconcile_too_large", "workflow_reconcile_unavailable"].includes(error?.message) ? error.message : failure); }
   requireValue(await owner.publishedSkill(input.name, input.revision), "workflow_skill_unavailable");
   return result;
 }
