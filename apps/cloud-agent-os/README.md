@@ -43,6 +43,8 @@ MCP is opt-in deployment configuration. It installs the upstream connector; it d
 automatically connect a server or grant tools. For a read-only pilot, authorize only the intended
 server/scopes and bind specific read tools. Do not assume an MCP server's full catalog is read-only.
 Keep `MCP_ALLOW_INSECURE=false`. Verify an innocuous metadata tool before patient or business data.
+The wrapper pins MCP `BASE_URL` to `${origin}/gatekeeper/mcp`, so connection links and the OAuth
+callback return through the public router. The client introduces itself as `Cloud Agent OS`.
 
 For an endpoint that advertises both read and write OAuth scopes, set an explicit policy:
 

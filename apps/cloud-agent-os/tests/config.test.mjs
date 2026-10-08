@@ -54,6 +54,21 @@ test('storage, model service and optional MCP remain explicit', () => {
   assert(!buildCommands(noMcp).some(step => step.args.includes('@gadgets/mcp-gatekeeper')));
 });
 
+test('connect links and OAuth callbacks stay on the router origin for every deployment', () => {
+  const candidate = structuredClone(example);
+  candidate.origin = 'https://pilot.example.net';
+  const configs = generateConfigs(candidate, bases);
+  assert.equal(configs.workshop.vars.PUBLIC_BASE_URL, candidate.origin);
+  assert.equal(configs.oidc.vars.PUBLIC_BASE_URL, candidate.origin);
+  assert.equal(configs.mcp.vars.BASE_URL, `${candidate.origin}/gatekeeper/mcp`);
+  assert.equal(new URL(`${configs.mcp.vars.BASE_URL}/oauth`).href, `${candidate.origin}/gatekeeper/mcp/oauth`);
+  assert(configs.router.services.some(binding => binding.binding === 'GATEKEEPER_MCP'
+    && binding.service === configs.mcp.name));
+  assert.equal(configs.mcp.vars.MCP_CLIENT_NAME, 'Cloud Agent OS');
+  assert.equal(configs.workshop.services.find(binding => binding.binding === 'GATEKEEPER_CONTEXT')
+    .props.sharingDomain, candidate.origin);
+});
+
 test('reject unsafe auth/deployment input before any build or deploy', () => {
   for (const mutate of [
     c => { c.auth.allowedIdentities = []; },

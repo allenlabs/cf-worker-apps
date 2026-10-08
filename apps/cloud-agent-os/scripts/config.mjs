@@ -154,6 +154,8 @@ export function generateConfigs(input, bases) {
   };
   result.oidc.secrets = { required: ['OIDC_CLIENT_SECRET'] };
   if (result.mcp) result.mcp.vars = {
+    BASE_URL: `${config.origin}/gatekeeper/mcp`,
+    MCP_CLIENT_NAME: 'Cloud Agent OS',
     MCP_ALLOW_INSECURE: 'false',
     ...(config.mcpScopes ? { MCP_OAUTH_SCOPES: JSON.stringify(config.mcpScopes) } : {}),
   };
