@@ -1,0 +1,13 @@
+{
+  "name": "cloud-agent-os-gatekeeper-oidc",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": { "check": "node tests/check.mjs" },
+  "dependencies": {
+    "@gadgets/gatekeeper-kit": "workspace:*",
+    "@gadgets/workshop-shared": "workspace:*",
+    "jose": "^6.2.12"
+  }
+}

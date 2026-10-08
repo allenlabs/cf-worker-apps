@@ -6,6 +6,8 @@ Cloudflare Agents and Pi keep one durable conversation per Channel Talk team-cha
 
 Read [the management workspace](docs/WORKSPACE_UI.md), [customer isolation](docs/TENANCY.md), and [Manager display names](docs/MANAGER_DIRECTORY.md) for the conversation UI and installation boundaries. Read [the architecture](docs/ARCHITECTURE.md) for the implemented runtime and [repository content storage](docs/REPOSITORY_CONTENT.md) for the proposed document-source integration. The [filesystem and plugin design](docs/FILESYSTEM_AND_PLUGINS.md) adds administrator uploads and per-root working files. The [common and organization Git plugin design](docs/COMMON_ORG_GIT_PLUGINS.md) describes scoped catalogs and automatic GitHub import. The [personal Git authoring design](docs/PERSONAL_GIT_AUTHORING.md) covers owner-scoped drafts and a container-free GitHub writer. The implemented [GitHub App connector](docs/GITHUB_CONNECTOR.md) adds private administrator drafts, Pi-assisted text authoring and an explicit reviewed atomic commit. Generic implementation, tests and design are published here before private installation tuning.
 
+The optional [Cloudflare OS pilot](../cloud-agent-os/README.md) runs a separate pinned OS workspace with organization SSO. Its private inference binding reuses an authorized subscription account while Cloudflare OS runs its own agent loop and tools. Existing conversations and credentials remain in their original stores.
+
 ## Work in a cloud checkout
 
 Use Node 24 or newer. From the repository root:

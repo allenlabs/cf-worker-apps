@@ -1,0 +1,5 @@
+{
+  "repository": "https://github.com/cloudflare/cloudflare-os.git",
+  "commit": "4358072f8cb1bc9ddfb6ee11122e194c76cd71e0",
+  "starterReference": "https://github.com/cloudflare/cloudflare-os-starter/tree/3d211477ad009e13a98d863d843e5c12a29ad02b"
+}

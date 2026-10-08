@@ -1,0 +1,100 @@
+--- a/packages/mcp-shared/src/account.ts
++++ b/packages/mcp-shared/src/account.ts
+@@ -48,6 +48,7 @@
+ import { fetchOptions, isAllowedUrl, sdkFetch, type FetchOptions } from "./fetch.js";
+ import type { McpLog } from "./log.js";
+ import { sameEndpoint } from "./scope.js";
++import { configuredOAuthScope } from "./oauth-scope.js";
+ import { hostOf } from "./util.js";
+ 
+ /**
+@@ -173,6 +174,8 @@
+ export type AccountEnv = ConnectionEnv & {
+   /** Public base URL of this gatekeeper Worker, used to build the OAuth redirect URI. */
+   BASE_URL?: string;
++  /** Explicit OAuth scope lists keyed by exact MCP endpoint; unset preserves discovery. */
++  MCP_OAUTH_SCOPES?: string;
+ };
+ 
+ // Longest server-supplied name kept. It appears in every approval prompt, so it is capped,
+@@ -503,6 +506,7 @@
+         grant_types: ["authorization_code", "refresh_token"],
+         response_types: ["code"],
+         token_endpoint_auth_method: "none",
++        scope: configuredOAuthScope(this.env.MCP_OAUTH_SCOPES, server.endpoint),
+       },
+       clientInformation: context => {
+         current();
+@@ -620,6 +624,7 @@
+           this.oauthProvider(server, generation, reconnect, url => { redirectUrl = url; });
+         result = await auth(provider, {
+           serverUrl: server.endpoint,
++          scope: configuredOAuthScope(this.env.MCP_OAUTH_SCOPES, server.endpoint),
+           resourceMetadataUrl: resourceMetadataUrl ? new URL(resourceMetadataUrl) : undefined,
+           fetchFn: sdkFetch(this.fetchOptions()),
+         });
+@@ -687,6 +692,7 @@
+     try {
+       result = await auth(this.oauthProvider(server, pending.generation, reconnect), {
+         serverUrl: server.endpoint,
++        scope: configuredOAuthScope(this.env.MCP_OAUTH_SCOPES, server.endpoint),
+         authorizationCode: code,
+         iss: issuer,
+         fetchFn: sdkFetch(this.fetchOptions()),
+--- a/packages/gatekeeper-mcp/src/env.d.ts
++++ b/packages/gatekeeper-mcp/src/env.d.ts
+@@ -5,6 +5,7 @@
+     BASE_URL?: string;
+     MCP_ALLOW_INSECURE?: string;
+     MCP_CLIENT_NAME?: string;
++    MCP_OAUTH_SCOPES?: string;
+   }
+ 
+   interface GlobalProps {
+--- a/packages/mcp-shared/__tests__/account-endpoint.test.ts
++++ b/packages/mcp-shared/__tests__/account-endpoint.test.ts
+@@ -1026,3 +1026,44 @@
+       deployment("https://old.example/mcp"), server("https://evil.example/mcp"))).toBeNull();
+   });
+ });
++
++
++describe("deployment OAuth scope policy", () => {
++  it.each([true, false])("uses explicit read scopes ahead of advertised write scopes: %s", async configured => {
++    const context = fakeContext();
++    const complete = vi.fn(async () => HANDOFF);
++    stubOAuthServer();
++    const originalFetch = globalThis.fetch;
++    let registrationScope: unknown;
++    vi.stubGlobal("fetch", async (input: string, init?: RequestInit) => {
++      const url = String(input);
++      if (url === "https://auth.example/register") {
++        registrationScope = JSON.parse(String(init?.body)).scope;
++      }
++      const response = await originalFetch(input, init);
++      if (url.includes("oauth-protected-resource")) {
++        const document: unknown = await response.json();
++        if (!document || typeof document !== "object") throw new Error("Invalid test metadata");
++        return Response.json({ ...document, scopes_supported: ["openid", "example.read", "example.write"] });
++      }
++      return response;
++    });
++    const env = configured ? { MCP_OAUTH_SCOPES: JSON.stringify({
++      "https://mcp.example/mcp": ["openid", "example.read"],
++    }) } : {};
++    const nonce = "8".repeat(64);
++    const account = new OAuthFlowAccount(context as never, env);
++    await account.setCallback({ complete } as never, nonce);
++    const outcome = await account.beginConnect(nonce, server("https://mcp.example/mcp"));
++    if (outcome.kind !== "redirect") throw new Error("Expected OAuth redirect");
++    const redirect = new URL(outcome.url);
++    expect(redirect.searchParams.get("scope")).toBe(configured
++      ? "openid example.read" : "openid example.read example.write");
++    expect(registrationScope).toBe(configured ? "openid example.read" : "openid example.read example.write");
++    const state = redirect.searchParams.get("state");
++    if (!state) throw new Error("Expected OAuth state");
++    const resumed = new OAuthFlowAccount(context as never, env);
++    expect(await resumed.acceptAuthCode("authorization-code", state.slice(state.indexOf(":") + 1))).toEqual(HANDOFF);
++    expect(complete).toHaveBeenCalledOnce();
++  });
++});

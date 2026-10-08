@@ -1,0 +1,17 @@
+--- a/packages/workshop-backend/src/ai-models.ts
++++ b/packages/workshop-backend/src/ai-models.ts
+@@ -1,4 +1,5 @@
+ import { DurableObject, RpcStub, RpcTarget } from "cloudflare:workers";
++import { cloudAgentModel } from "./cloud-agent-model";
+ import { validateRpc } from "capnweb-validate";
+ import type {
+   AnthropicMessagesCompat, Api, AssistantMessageEventStream, Context, FetchFunction, Model,
+@@ -564,6 +565,8 @@
+ export function getModel(env: Cloudflare.Env, config: AiModelConfig,
+                          initiator: AiChatAuthorInfo,
+                          options: ModelRoutingOptions = {}): ModelHandle {
++  const bound = cloudAgentModel(env, config, initiator);
++  if (bound) return bound;
+   // BYOK: a connected user's own Cloudflare account pays for everything (all providers, including
+   // Workers AI), routed through the user's own AI Gateway with unified billing. Honored regardless
+   // of whether a platform AI Gateway is configured, so connected users are always billed correctly.

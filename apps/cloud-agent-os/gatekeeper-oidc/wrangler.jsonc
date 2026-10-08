@@ -1,0 +1,11 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "cloud-agent-os-gatekeeper-oidc",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-04",
+  "compatibility_flags": ["allow_irrevocable_stub_storage"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["OidcLogin"] }],
+  "observability": { "enabled": false }
+}

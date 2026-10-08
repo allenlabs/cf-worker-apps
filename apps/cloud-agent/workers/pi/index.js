@@ -11,6 +11,7 @@ import { Harness, createRegistry, LiveDoc } from "@earendil-works/pi-durable";
 import { ManagementCredentials, adminRoute, channelScope } from "./admin.js";
 import { attachConversationStore, objectKey, updateConversation, recordChannelEvent, recordChannelReceipt, channelReceipts, pinTenant, conversationDatabase, tenantId, commandReceipt, saveCommandReceipt, commandPrompt } from "./conversation-store.js";
 export { GitHubAuthoring } from "./github-authoring.js";
+export { CloudAgentInference } from "./inference-entrypoint.js";
 
 import { storageError } from "./pi-journal.js";
 import { resolveManagers } from "./manager-directory.js";

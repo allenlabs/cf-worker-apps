@@ -1,0 +1,13 @@
+# OIDC sign-in gatekeeper
+
+An auth-only Cloudflare OS gatekeeper for an Ed25519 OIDC issuer. It exposes no agent resources and never returns provider credentials to the Workshop or browser. It uses the upstream connect handshake and handoff, PKCE S256, nonce-bound ID tokens, and an exact email/subject allowlist. Every attempt is single-use and expires in ten minutes. Only the verified email is available to the Workshop while its login callback runs; the temporary identity is then removed.
+
+Bind the Worker as `GATEKEEPER_OIDC` in the router and Workshop backend, using the `GatekeeperVendor` entrypoint for backend RPC. Configure `AUTH_GATEKEEPERS=oidc` and `DISABLE_PASSWORD_AUTH=true` on the backend. Disable the starter's Cloudflare Access mode and corresponding frontend build flag. Preserve the Workshop's signup policy and `ADMINS` configuration: this gatekeeper does not grant administrator or clinical data access.
+
+Required variables: `PUBLIC_BASE_URL` (HTTPS origin), `OIDC_ISSUER` (exact issuer without trailing slash), `OIDC_CLIENT_ID`, and `OIDC_ALLOWED_IDENTITIES` (nonempty JSON array of `{ "email": "person@example.invalid", "subject": "issuer-subject" }`). `OIDC_CLIENT_SECRET` is a Worker secret. Optional variables are `OIDC_DISPLAY_NAME`, `OIDC_LOGIN_URL` (fixed trusted HTTPS login entry), and `OIDC_LOGIN_SITE`. The latter adds `sitename`; the authorization URL is sent as `callbackURL`. Deployment configuration, rather than request parameters, owns these values.
+
+Register a dedicated confidential OIDC client with callback `${PUBLIC_BASE_URL}/gatekeeper/oidc/oauth`, scopes `openid profile email`, grant `authorization_code`, response `code`, token authentication `client_secret_basic`, PKCE required, and consent enabled. Do not reuse another application's client or enable dynamic registration globally. Only same-origin discovery endpoints and EdDSA/Ed25519 signing keys are supported by this pilot adapter.
+
+The Worker exports `GatekeeperVendor`, `GatekeeperUserImpl` and the SQLite Durable Object `OidcLogin`. Enable `allow_irrevocable_stub_storage` for the upstream callback capability. Use a new namespace for this pilot; do not change an existing deployment's DO identities.
+
+Run `node tests/check.mjs /absolute/path/to/cloudflare-os` after installing that checkout's dependencies. The check bundles this source and drives the real Worker/DO RPC flow under Miniflare, mocking only the external identity provider. All identities and keys are generated test fixtures. It verifies signed callbacks, replay, issuer/audience/nonce/allowlist failures, expiry, and cleanup; it does not claim to test a hosted SSO login or change the Workshop's own session lifetime.

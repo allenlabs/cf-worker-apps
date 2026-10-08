@@ -1,0 +1,181 @@
+--- a/packages/workshop-frontend/src/AddModelModal.tsx
++++ b/packages/workshop-frontend/src/AddModelModal.tsx
+@@ -108,6 +108,7 @@
+ 
+ export default function AddModelModal({ visible, onCancel, onSuccess, authenticatedApi, aiConfig, mode = { type: 'add' } }: AddModelModalProps) {
+   const toasts = useKumoToastManager()
++  const bridgeModel = import.meta.env.VITE_CODEX_BRIDGE_MODEL?.trim()
+ 
+   // Edit and clone modes take their initial state from the source model, so the caller remounts
+   // the modal (with a `key`) to switch source.
+@@ -115,8 +116,11 @@
+   const editing = mode.type === 'edit'
+ 
+   const [loading, setLoading] = useState(false)
+-  const [selection, setSelection] = useState<SelectionType | null>(
++  const [selected, setSelection] = useState<SelectionType | null>(
+     source && { type: 'custom', provider: source.config.provider })
++  const selection: SelectionType | null = bridgeModel
++    ? { type: 'suggested', provider: 'openai', modelId: bridgeModel, displayName: 'Codex subscription' }
++    : selected
+   const [selectValue, setSelectValue] = useState<string | undefined>(undefined)
+ 
+   // Form fields (used for custom models). A null secret keeps the source's withheld value.
+@@ -189,6 +193,7 @@
+   }
+ 
+   const validate = (): boolean => {
++    if (bridgeModel) return true
+     const newErrors: Record<string, string> = {}
+ 
+     if (!selection) {
+@@ -202,7 +207,7 @@
+ 
+     const isOllama = selection?.provider === 'ollama'
+     const isCloudflare = selection?.provider === 'cloudflare'
+-    const showCredentials = !gatewayMode
++    const showCredentials = !gatewayMode && !bridgeModel
+ 
+     if (showCredentials && selection && isTokenRequired(selection.provider, headerRows) && effectiveApiToken?.trim() === '') {
+       newErrors.apiToken = apiToken === null
+@@ -262,7 +267,9 @@
+       const extraHeaders = gatewayMode ? undefined : headerRowsToRecord(headerRows)
+       const contextWindowTokens = parseTokenLimit(contextWindow)
+       const outputLimitTokens = parseTokenLimit(outputLimit)
+-      const config: RedactedAiModelConfig = {
++      const config: RedactedAiModelConfig = bridgeModel
++        ? { provider: 'openai', model: bridgeModel, apiToken: '' }
++        : {
+         provider: selection!.provider,
+         model: finalModelId,
+         apiToken: gatewayMode ? '' : effectiveApiToken?.trim() ?? null,
+@@ -276,7 +283,7 @@
+       if (editing) {
+         await authenticatedApi.updateModel(profile, config)
+       } else {
+-        await authenticatedApi.addModel(profile, config, source?.profile.id)
++        await authenticatedApi.addModel(profile, config, bridgeModel ? undefined : source?.profile.id)
+       }
+       toasts.add({ title: editing ? 'AI model updated successfully' : 'AI model added successfully', variant: 'success' })
+       onSuccess()
+@@ -297,7 +304,7 @@
+   const example = selection ? exampleModel(selection.provider) : null
+   const isOllama = selection?.provider === 'ollama'
+   const isCloudflare = selection?.provider === 'cloudflare'
+-  const showCredentials = !gatewayMode
++  const showCredentials = !gatewayMode && !bridgeModel
+   const tokenRequired = selection !== null && isTokenRequired(selection.provider, headerRows)
+   const title = { add: 'Add AI Model', edit: 'Edit AI Model', clone: 'Clone AI Model' }[mode.type]
+ 
+@@ -321,7 +328,9 @@
+ 
+         <div className="space-y-4">
+           {/* Model / Provider selection */}
+-          {source ? (
++          {bridgeModel ? (
++            <Input label="Codex subscription" value={bridgeModel} readOnly />
++          ) : source ? (
+             <Input
+               label="Provider"
+               value={PROVIDER_LABELS[source.config.provider] || source.config.provider}
+@@ -431,7 +440,7 @@
+             />
+           )}
+ 
+-          {selection && (
++          {selection && !bridgeModel && (
+             <Collapsible.Root
+               open={advancedOpen}
+               onOpenChange={setAdvancedOpen}
+--- a/packages/workshop-frontend/src/vite-env.d.ts
++++ b/packages/workshop-frontend/src/vite-env.d.ts
+@@ -8,6 +8,9 @@
+   // In this mode, password-based login/signup is disabled and the app authenticates
+   // via the CF Access JWT that Access injects into requests before they reach the server.
+   readonly VITE_CF_ACCESS_MODE?: string;
++
++  // Fixed subscription model exposed by this deployment; server-side policy remains authoritative.
++  readonly VITE_CODEX_BRIDGE_MODEL?: string;
+ }
+ 
+ interface ImportMeta {
+--- a/packages/workshop-frontend/src/AddModelModal.test.tsx
++++ b/packages/workshop-frontend/src/AddModelModal.test.tsx
+@@ -3,7 +3,7 @@
+ 
+ import { act } from 'react'
+ import { createRoot, type Root } from 'react-dom/client'
+-import { afterEach, describe, expect, it, vi } from 'vitest'
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+ import type { RpcStub } from 'capnweb'
+ import type { AuthenticatedApi, RedactedAiModelConfig } from '@gadgets/workshop-shared/api'
+ 
+@@ -57,9 +57,12 @@
+ describe('AddModelModal with a stored model', () => {
+   let root: Root | undefined
+ 
++  beforeEach(() => vi.stubEnv('VITE_CODEX_BRIDGE_MODEL', ''))
++
+   afterEach(() => {
+     act(() => root?.unmount())
+     document.body.innerHTML = ''
++    vi.unstubAllEnvs()
+   })
+ 
+   const render = async (mode: ModelModalMode) => {
+@@ -148,4 +151,55 @@
+       PROFILE.id,
+     )
+   })
++
++  it('adds the configured subscription model without asking for an API credential', async () => {
++    vi.stubEnv('VITE_CODEX_BRIDGE_MODEL', 'gpt-fixture-codex')
++    const { addModel } = await render({ type: 'add' })
++    expect(labeledInput('Codex subscription').value).toBe('gpt-fixture-codex')
++    expect(labeledInput('Codex subscription').readOnly).toBe(true)
++    expect(document.body.textContent).not.toContain('API Token')
++    expect(document.body.textContent).not.toContain('API URL')
++    expect(document.body.textContent).not.toContain('Advanced Settings')
++    expect(document.body.querySelector('input[aria-label="Header value"]')).toBeNull()
++    expect(document.body.querySelector('[role="combobox"]')).toBeNull()
++    await click(button('Add Model'))
++    expect(addModel).toHaveBeenCalledWith(
++      { type: 'agent', id: 'gpt-fixture-codex', name: 'Codex subscription' },
++      { provider: 'openai', model: 'gpt-fixture-codex', apiToken: '' },
++      undefined,
++    )
++  })
++
++  it('does not carry source credentials or endpoints into a subscription clone', async () => {
++    vi.stubEnv('VITE_CODEX_BRIDGE_MODEL', 'gpt-fixture-codex')
++    const { addModel } = await render({ type: 'clone', source: { profile: PROFILE, config: CONFIG } })
++    await click(button('Add Model'))
++    expect(addModel).toHaveBeenCalledWith(
++      { type: 'agent', id: 'gpt-fixture-codex', name: 'Codex subscription' },
++      { provider: 'openai', model: 'gpt-fixture-codex', apiToken: '' },
++      undefined,
++    )
++  })
++
++  it('edits a subscription profile with the fixed model and empty credentials', async () => {
++    vi.stubEnv('VITE_CODEX_BRIDGE_MODEL', 'gpt-fixture-codex')
++    const { updateModel } = await render({ type: 'edit', source: { profile: PROFILE, config: CONFIG } })
++    await click(button('Save Changes'))
++    expect(updateModel).toHaveBeenCalledWith(
++      { ...PROFILE, name: 'Codex subscription' },
++      { provider: 'openai', model: 'gpt-fixture-codex', apiToken: '' },
++    )
++  })
++
++  it('still requires an API token in the normal direct-provider mode', async () => {
++    const config: RedactedAiModelConfig = { provider: 'openai', model: 'gpt-example', apiToken: '' }
++    const { updateModel } = await render({ type: 'edit', source: { profile: PROFILE, config } })
++    expect(labeledInput('API Token').value).toBe('')
++    await click(button('Save Changes'))
++    expect(updateModel).not.toHaveBeenCalled()
++    expect(document.body.textContent).toContain('Please enter your API token')
++    await type(labeledInput('API Token'), 'fixture-token')
++    await click(button('Save Changes'))
++    expect(updateModel).toHaveBeenCalledWith(PROFILE, { ...config, apiToken: 'fixture-token' })
++  })
+ })

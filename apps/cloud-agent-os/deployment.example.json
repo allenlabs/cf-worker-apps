@@ -1,0 +1,30 @@
+{
+  "accountId": "00000000000000000000000000000000",
+  "origin": "https://os.example.com",
+  "workers": {
+    "router": "example-os-router",
+    "workshop": "example-os-workshop",
+    "context": "example-os-context",
+    "oidc": "example-os-oidc",
+    "mcp": "example-os-mcp"
+  },
+  "resources": {
+    "blueprintsKvNamespaceId": "11111111111111111111111111111111",
+    "avatarsKvNamespaceId": "22222222222222222222222222222222",
+    "contextKvNamespaceId": "33333333333333333333333333333333",
+    "blueprintContentBucket": "example-os-blueprints"
+  },
+  "auth": {
+    "issuer": "https://auth.example.com/oidc",
+    "clientId": "example-os-client",
+    "displayName": "Company SSO",
+    "allowedIdentities": [{ "email": "admin@example.com", "subject": "example-subject" }]
+  },
+  "admins": ["admin@example.com"],
+  "modelBridge": {
+    "service": "example-cloud-agent",
+    "model": "gpt-5.4",
+    "allowedUserIds": ["admin@example.com"]
+  },
+  "mcp": true
+}
