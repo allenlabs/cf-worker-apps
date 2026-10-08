@@ -25,6 +25,13 @@ const otherKey = generateKeyPairSync("ed25519").privateKey;
 const jwk = { ...publicKey.export({ format: "jwk" }), kid: "fixture", alg: "EdDSA", use: "sig" };
 let claimsOverride = {}, discoveryOverride = {}, userinfoOverride = {}, keyOverride = null;
 let idNonce, challenge, calls = 0, fallback = false, wrongSignature = false;
+let tokenFailure = null, providerFailure = null, malformedToken = false;
+const privateFailure = "fixture-private-code-token-nonce-email-url-stack";
+async function expectFailure(response, code, status = 400) {
+  assert.equal(response.status, status, `HTTP status for ${code}`);
+  assert.equal(await response.text(), `Sign-in failed (${code}). Restart sign-in from the application.`,
+    `fixed, credential-free diagnostic for ${code}`);
+}
 const jwt = () => {
   const header = Buffer.from(JSON.stringify({ alg: "EdDSA", kid: "fixture" })).toString("base64url");
   const payload = Buffer.from(JSON.stringify({ iss: issuer, sub: subject, aud: clientId, nonce: idNonce,
@@ -54,6 +61,7 @@ export class Probe extends DurableObject {
 }
 export class Callback extends WorkerEntrypoint {
   async complete(account) {
+    if (this.env.TEST_CALLBACK_FAILURE) throw new Error(${JSON.stringify(privateFailure)});
     if (this.ctx.props.delay) await new Promise(resolve => setTimeout(resolve, this.ctx.props.delay));
     const email = await account.getAuthenticatedEmail();
     await this.ctx.exports.Probe.get(this.ctx.exports.Probe.idFromName('result')).save(email);
@@ -61,6 +69,10 @@ export class Callback extends WorkerEntrypoint {
   }
 }
 export class OidcLogin extends BaseLogin {
+  async clear() {
+    await super.clear();
+    if (this.env.TEST_CLEAR_FAILURE) throw new Error(${JSON.stringify(privateFailure)});
+  }
   async fetch(request) {
     const path = new URL(request.url).pathname;
     if(path === '/expire') {
@@ -93,6 +105,7 @@ export default {
     durableObjects: { OidcLogin: { className: "OidcLogin", useSQLite: true }, Probe: { className: "Probe", useSQLite: true } }, bindings,
     outboundService: async request => {
       const url = new URL(request.url);
+      if (providerFailure === url.href) return new Response(privateFailure, {status:503});
       if (url.href === `${issuer}/.well-known/openid-configuration`) return Response.json({ issuer,
         authorization_endpoint: `${issuer}/authorize`, token_endpoint: `${issuer}/token`, jwks_uri: `${issuer}/jwks`,
         userinfo_endpoint: `${issuer}/userinfo`, id_token_signing_alg_values_supported:["EdDSA"], code_challenge_methods_supported:["S256"], ...discoveryOverride });
@@ -108,7 +121,8 @@ export default {
       assert.equal(body.get("grant_type"),"authorization_code");
       assert.equal(body.get("redirect_uri"),`${origin}/gatekeeper/oidc/oauth`);
       assert.equal(createHash("sha256").update(body.get("code_verifier")).digest("base64url"),challenge);
-      return Response.json({access_token:"fixture-access-token",token_type:"Bearer",id_token:jwt()});
+      if (tokenFailure) return Response.json({error:tokenFailure,error_description:privateFailure}, {status:401});
+      return Response.json({access_token:"fixture-access-token",token_type:"Bearer",id_token:malformedToken ? privateFailure : jwt()});
     } };
   const make = changes => new Miniflare(convertV4MiniflareOptions({...options,bindings:{...bindings,...changes}}));
   const mf = make({});
@@ -136,7 +150,7 @@ export default {
   };
   try {
     let attempt = await authorize();
-    assert.equal((await mf.dispatchFetch(attempt.url)).status,400,"initiation replay");
+    await expectFailure(await mf.dispatchFetch(attempt.url),"sign_in_attempt_expired");
     let result = await complete(attempt);
     assert.equal(result.status,200,await result.clone().text());
     const html = await result.text();
@@ -146,13 +160,15 @@ export default {
     assert.deepEqual(await (await probe.get(probe.idFromName("result")).fetch("https://test.invalid")).json(),{email});
     assert.deepEqual(await inspect(attempt),{keys:[],email:null},"transient identity removed after handoff");
     const count = calls;
-    assert.equal((await complete(attempt)).status,400); assert.equal(calls,count,"no repeated code exchange");
+    await expectFailure(await complete(attempt),"sign_in_attempt_expired"); assert.equal(calls,count,"no repeated code exchange");
 
     for (const claims of [{iss:"https://other.example.invalid"},{aud:"other-client"},{nonce:"wrong"},
       {exp:Math.floor(Date.now()/1000)-1},{iat:Math.floor(Date.now()/1000)+3600},{email_verified:false},
       {email:"not-allowed@example.invalid"},{sub:"wrong-subject"},{aud:[clientId,"another"],azp:"another"}]) {
       claimsOverride=claims; attempt=await authorize(); result=await complete(attempt);
-      assert.equal(result.status,400,`rejected ${Object.keys(claims).join(",")}`);
+      const code = claims.email_verified === false ? "verified_email_required"
+        : claims.email || claims.sub ? "identity_not_allowed" : "invalid_identity_token";
+      await expectFailure(result, code, code === "invalid_identity_token" ? 400 : 403);
       assert.deepEqual(await inspect(attempt),{keys:[],email:null});
     }
     claimsOverride={};
@@ -160,21 +176,45 @@ export default {
     assert.equal((await complete(attempt)).status,200);
     assert.deepEqual(await (await probe.get(probe.idFromName("result")).fetch("https://test.invalid")).json(),{email:null},"expired identity cannot authorize Workshop session creation");
     assert.deepEqual(await inspect(attempt),{keys:[],email:null}); claimsOverride={};
-    wrongSignature=true; attempt=await authorize(); assert.equal((await complete(attempt)).status,400); wrongSignature=false;
-    keyOverride=[{...jwk,alg:"RS256"}]; attempt=await authorize(); assert.equal((await complete(attempt)).status,400); keyOverride=null;
+    wrongSignature=true; attempt=await authorize(); await expectFailure(await complete(attempt),"invalid_identity_token"); wrongSignature=false;
+    keyOverride=[{...jwk,alg:"RS256"}]; attempt=await authorize(); await expectFailure(await complete(attempt),"invalid_identity_keys"); keyOverride=null;
+    malformedToken=true; attempt=await authorize(); await expectFailure(await complete(attempt),"invalid_identity_token"); malformedToken=false;
     fallback=true; attempt=await authorize(); assert.equal((await complete(attempt)).status,200,"verified userinfo fallback");
     for(const profile of [{sub:"mismatch"},{email_verified:false},{email_verified:undefined}]) {
-      userinfoOverride=profile; attempt=await authorize(); assert.equal((await complete(attempt)).status,400);
+      userinfoOverride=profile; attempt=await authorize();
+      await expectFailure(await complete(attempt), profile.sub ? "identity_subject_mismatch" : "verified_email_required", profile.sub ? 400 : 403);
     }
     userinfoOverride={};fallback=false;
     attempt=await authorize(); const before=calls; await inspect(attempt,"/expire");
-    assert.equal((await complete(attempt)).status,400); assert.equal(calls,before,"expired attempt never exchanges code");
+    await expectFailure(await complete(attempt),"sign_in_attempt_expired"); assert.equal(calls,before,"expired attempt never exchanges code");
     attempt=await authorize(); assert.equal((await mf.dispatchFetch(`${callback(attempt.authorization)}&state=duplicate`)).status,400);
     attempt=await authorize(); assert.equal((await mf.dispatchFetch(callback(attempt.authorization).replace(encodeURIComponent(issuer),encodeURIComponent("https://other.example.invalid")))).status,400);
     assert.equal((await complete(attempt)).status,400,"mismatched issuer consumes attempt");
     attempt=await authorize(); const denied=new URL(callback(attempt.authorization)); denied.searchParams.set("error","access_denied");
     assert.equal((await mf.dispatchFetch(denied)).status,400); assert.equal((await complete(attempt)).status,400);
-    discoveryOverride={token_endpoint:"https://other.example.invalid/token"}; const failed=await start(); assert.equal(failed.begun.status,400); discoveryOverride={};
+    discoveryOverride={token_endpoint:"https://other.example.invalid/token"}; const failed=await start();
+    await expectFailure(failed.begun,"identity_provider_endpoint_mismatch",502); discoveryOverride={};
+    for (const error of ["invalid_client", "invalid_grant", "invalid_verification", "identity_not_allowed", privateFailure]) {
+      tokenFailure=error; attempt=await authorize();
+      await expectFailure(await complete(attempt), error === "invalid_client" ? "token_client_rejected"
+        : error === "invalid_grant" ? "token_grant_rejected" : "token_exchange_failed");
+      assert.deepEqual(await inspect(attempt),{keys:[],email:null});
+      const after=calls; await expectFailure(await complete(attempt),"sign_in_attempt_expired"); assert.equal(calls,after);
+    }
+    tokenFailure=null;
+    attempt=await authorize(); providerFailure=`${issuer}/.well-known/openid-configuration`;
+    await expectFailure(await complete(attempt),"identity_provider_unavailable",502); providerFailure=null;
+    assert.deepEqual(await inspect(attempt),{keys:[],email:null});
+    for (const [binding, code] of [["TEST_CALLBACK_FAILURE","sign_in_handoff_failed"],["TEST_CLEAR_FAILURE","sign_in_cleanup_failed"]]) {
+      const failureInstance=make({[binding]:true});
+      try {
+        const failureAttempt=await authorize(failureInstance);
+        await expectFailure(await failureInstance.dispatchFetch(callback(failureAttempt.authorization)),code,502);
+        const namespace=await failureInstance.getDurableObjectNamespace("OidcLogin");
+        const id=namespace.idFromString(failureAttempt.authorization.searchParams.get("state").split(":")[0]);
+        assert.deepEqual(await (await namespace.get(id).fetch("https://test.invalid/state")).json(),{keys:[],email:null});
+      } finally { await failureInstance.dispose(); }
+    }
     assert.equal((await mf.dispatchFetch(`${origin}/test/start`,{method:"POST",body:JSON.stringify({scopes:"full"})})).status,400);
     for (const allowed of ["", "[]", JSON.stringify([{email,subject:""}])]) {
       const deniedInstance=make({OIDC_ALLOWED_IDENTITIES:allowed});
@@ -187,6 +227,6 @@ export default {
       assert.equal(entry.origin,"https://login.example.invalid"); assert.equal(entry.searchParams.get("sitename"),"example");
       assert.equal(new URL(entry.searchParams.get("callbackURL")).origin,new URL(issuer).origin);
     } finally {await loginInstance.dispose();}
-    console.log("OIDC native workerd checks passed: signed login, handoff cleanup, replay, PKCE, issuer/audience/nonce, verified email, subject allowlist, expiry and auth-only scope.");
+    console.log("OIDC native workerd checks passed: signed login, fixed RPC failure categories/statuses, credential-free token/JWT/handoff/cleanup failures, replay, PKCE, issuer/audience/nonce, verified email, subject allowlist, expiry and auth-only scope.");
   } finally { await mf.dispose(); }
 } finally { await rm(output,{recursive:true,force:true}); }

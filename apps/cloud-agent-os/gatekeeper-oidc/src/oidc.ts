@@ -13,8 +13,29 @@ export interface Env {
   OIDC_LOGIN_SITE?: string;
 }
 
+const SIGN_IN_FAILURES = {
+  invalid_identity_response: 400, invalid_sign_in_configuration: 503,
+  identity_provider_unavailable: 502, identity_provider_protocol_mismatch: 502,
+  identity_provider_endpoint_mismatch: 502, invalid_identity_token: 400,
+  invalid_identity_keys: 400, identity_subject_mismatch: 400,
+  verified_email_required: 403, identity_not_allowed: 403,
+  sign_in_only: 400, invalid_sign_in_attempt: 400, sign_in_attempt_expired: 400,
+  invalid_sign_in_callback: 400, invalid_sign_in_handoff: 400, restart_sign_in: 400,
+  token_client_rejected: 400, token_grant_rejected: 400, token_exchange_failed: 400,
+  sign_in_handoff_failed: 502, sign_in_cleanup_failed: 502, sign_in_failed: 400,
+} as const;
+export type SignInCode = keyof typeof SIGN_IN_FAILURES;
+export type SignInFailure = { code: SignInCode; status: number };
+export type SignInResult<T> = { ok: true; value: T } | { ok: false; error: SignInFailure };
+
 export class SignInError extends Error {
-  constructor(readonly code: string, readonly status = 400) { super(code); }
+  constructor(readonly code: SignInCode) { super(code); }
+}
+
+/** Only fixed categories cross RPC; provider messages and exception properties never do. */
+export function signInFailure(error: unknown, fallback: SignInCode): { ok: false; error: SignInFailure } {
+  const code = error instanceof SignInError && Object.hasOwn(SIGN_IN_FAILURES, error.code) ? error.code : fallback;
+  return { ok: false, error: { code, status: SIGN_IN_FAILURES[code] } };
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -29,7 +50,7 @@ function text(value: unknown, maximum = 2048): string {
 
 function httpsUrl(value: string): URL {
   const url = new URL(value);
-  if (url.protocol !== "https:" || url.username || url.password || url.hash) throw new SignInError("invalid_sign_in_configuration", 503);
+  if (url.protocol !== "https:" || url.username || url.password || url.hash) throw new SignInError("invalid_sign_in_configuration");
   return url;
 }
 
@@ -56,7 +77,7 @@ export function configuration(env: Env) {
     return { issuer: env.OIDC_ISSUER, origin: origin.origin, clientId, clientSecret, allowed, login,
       displayName: env.OIDC_DISPLAY_NAME ? text(env.OIDC_DISPLAY_NAME, 128) : "Organization SSO",
       callback: `${origin.origin}/gatekeeper/oidc/oauth` };
-  } catch { throw new SignInError("invalid_sign_in_configuration", 503); }
+  } catch { throw new SignInError("invalid_sign_in_configuration"); }
 }
 
 export type Configuration = ReturnType<typeof configuration>;
@@ -70,7 +91,7 @@ export function allowedIdentity(config: Configuration, identity: VerifiedIdentit
 async function remoteJson(url: string, headers?: Record<string, string>): Promise<Record<string, unknown>> {
   const response = await fetch(url, { headers: { accept: "application/json", ...headers },
     redirect: "manual", signal: AbortSignal.timeout(15000) });
-  if (!response.ok) throw new SignInError("identity_provider_unavailable", 502);
+  if (!response.ok) throw new SignInError("identity_provider_unavailable");
   return record(JSON.parse(await readTextCapped(response, 65536)));
 }
 
@@ -79,11 +100,11 @@ export async function discover(config: Configuration) {
   if (document.issuer !== config.issuer || !Array.isArray(document.id_token_signing_alg_values_supported)
       || !document.id_token_signing_alg_values_supported.includes("EdDSA")
       || !Array.isArray(document.code_challenge_methods_supported) || !document.code_challenge_methods_supported.includes("S256")) {
-    throw new SignInError("identity_provider_protocol_mismatch", 502);
+    throw new SignInError("identity_provider_protocol_mismatch");
   }
   function endpoint(key: string) {
     const value = httpsUrl(text(document[key]));
-    if (value.origin !== new URL(config.issuer).origin) throw new SignInError("identity_provider_endpoint_mismatch", 502);
+    if (value.origin !== new URL(config.issuer).origin) throw new SignInError("identity_provider_endpoint_mismatch");
     return value.href;
   }
   return { authorization: endpoint("authorization_endpoint"), token: endpoint("token_endpoint"),
@@ -127,8 +148,8 @@ export async function verifyIdentity(config: Configuration, endpoints: Awaited<R
     profile = await remoteJson(endpoints.userinfo, { authorization: `Bearer ${tokens.accessToken}` });
     if (profile.sub !== subject) throw new SignInError("identity_subject_mismatch");
   }
-  if (profile.email_verified !== true) throw new SignInError("verified_email_required", 403);
+  if (profile.email_verified !== true) throw new SignInError("verified_email_required");
   const identity = { email: text(profile.email, 320).trim().toLowerCase(), subject, expiresAt: payload.exp * 1000 };
-  if (!allowedIdentity(config, identity)) throw new SignInError("identity_not_allowed", 403);
+  if (!allowedIdentity(config, identity)) throw new SignInError("identity_not_allowed");
   return identity;
 }
