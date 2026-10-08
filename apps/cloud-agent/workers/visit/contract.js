@@ -107,7 +107,9 @@ export function visitResult(value, input) {
   unique(visits); backendValue(input.visitId === null || visits.some(row => row.id === input.visitId));
   const intake = value.intake;
   backendValue(intake === undefined || object(intake) && nullableText(intake.concernText, 1000));
-  return { mode: value.mode, kind: "context", patient: selectedPatient, reservations, visits, selectedVisitId: value.selectedVisitId, ...(intake === undefined ? {} : { intake: { concernText: intake.concernText } }), observedAt: value.observedAt };
+  const performed = value.performed;
+  backendValue(performed === undefined || object(performed) && nullableText(performed.procedureText, 1000) && nullableText(performed.pod, 1000));
+  return { mode: value.mode, kind: "context", patient: selectedPatient, reservations, visits, selectedVisitId: value.selectedVisitId, ...(intake === undefined ? {} : { intake: { concernText: intake.concernText } }), ...(performed === undefined ? {} : { performed: { procedureText: performed.procedureText, pod: performed.pod } }), observedAt: value.observedAt };
 }
 
 export function visitDraft(context, fields) {

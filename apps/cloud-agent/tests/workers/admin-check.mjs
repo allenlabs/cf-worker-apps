@@ -8,7 +8,7 @@ import { resolve, join } from "node:path";
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const wranglerRequire = createRequire(require.resolve("wrangler/package.json"));
-const { build } = await import(wranglerRequire.resolve("esbuild"));
+const { build } = wranglerRequire("esbuild");
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import { Script } from "node:vm";
 

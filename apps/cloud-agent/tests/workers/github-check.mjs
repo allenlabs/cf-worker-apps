@@ -9,7 +9,7 @@ import { createRequire } from "node:module";
 import { Script } from "node:vm";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 const require = createRequire(import.meta.url), wranglerRequire = createRequire(require.resolve("wrangler/package.json"));
-const { build } = await import(wranglerRequire.resolve("esbuild"));
+const { build } = wranglerRequire("esbuild");
 const directory = await mkdtemp(join(tmpdir(), "cloud-agent-github-check-")), entry = join(directory, "entry.js"), bundle = join(directory, "worker.js");
 await writeFile(entry, `import { ManagementCredentials,adminRoute } from ${JSON.stringify(resolve("workers/pi/admin.js"))};
 import { GitHubAuthoring as BaseGitHubAuthoring } from ${JSON.stringify(resolve("workers/pi/github-authoring.js"))};

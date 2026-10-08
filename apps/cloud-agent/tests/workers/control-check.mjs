@@ -241,7 +241,7 @@ try {
     assert.equal(output.text, "MOCK_SKILL_OK");
     const transcript = JSON.stringify(output.entries);
     assert.ok(transcript.includes('"name":"activate_skill"') && transcript.includes('"name":"' + name + '"'), "Workflow was not activated through the native skill tool");
-    assert.ok(transcript.includes(rawContent.split("---")[2].trim().split("\n")[0]), "Workflow body was not loaded");
+    assert.ok(transcript.includes(rawContent.split("---")[2].trim().split(/\r?\n/)[0]), "Workflow body was not loaded");
   }
   console.log(JSON.stringify({ checks: 'PASS', reviewer: 'independent', runtime: 'workerd', bundleSHA256: actual, concurrentAccountCreates: count, concurrentSkillPublications: skills.length, csrfAndCanonicalOrigin: true, legacyBearerMutationDenied: true, ownerGrantPreservedAfterRestart: true, skillStatePreservedAfterRestart: true, scriptAndTraversalDenied: true, staffHelpModelThinkingOnly: true, staffAdvancedWithoutInferenceOrMutation: true, actualRuntimeAdminIdempotencyAndConflict: true, doneAdminReplayRepairsProjectionWithoutMutation: true, ledgerOnlyPendingBusy409: true, interruptedAdminDoesNotRepeat: true, explicitRoundRobinConcurrentRoots: true, duplicateAndPolicyRetryPreserveCursor: true, fixedAdmissionRetryAndImmutablePins: true, disconnectedPinDoesNotResolveOtherAccount: true, encryptedMetadataNullLegacy: true, actualNativeUsageNoDoubleCountOnRetryCloneFork: true, usageAbsoluteMonotonicAccountIsolatedAndPersistent: true, mockChannelReplies: writes.length, realNetworkCalls: 0, oidcSignatureCheckedBy: 'separate writer admin-check and auth-check' }));
 } finally {

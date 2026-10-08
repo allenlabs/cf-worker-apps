@@ -1,10 +1,10 @@
 import type { VisitContextResult } from "../visit/contract.js";
-export type WorkflowSourcePath = "patient.label" | "patient.reference" | "visit.date" | "visit.status" | "reservation.at" | "reservation.type" | "reservation.status" | "reservation.procedureText" | "reservation.note" | "reservation.pod" | "intake.concernText";
+export type WorkflowSourcePath = "patient.label" | "patient.reference" | "visit.date" | "visit.status" | "reservation.at" | "reservation.type" | "reservation.status" | "reservation.procedureText" | "reservation.note" | "reservation.pod" | "intake.concernText" | "performed.procedureText" | "performed.pod";
 type Field = { id: string; label: string; required: boolean; maxLength: number } & ({ type: "text"; choices?: never } | { type: "choice"; choices: string[] });
 export type WorkflowField = Field & { source?: WorkflowSourcePath };
 type Definition = { schemaVersion: 1; title: string; template: string; confirmations: { id: string; label: string }[] };
 export type WorkflowDefinition = Definition & ({ source: "none"; fields: (Field & { source?: never })[] } | { source: "visit-context"; fields: WorkflowField[] });
-export type WorkflowSource = { patient: { id: string; label: string; reference: string | null }; visit: { id: string; date: string | null; status: string | null; reservationId: string | null } | null; reservation: { id: string; at: string | null; type: string | null; status: string | null; procedureText: string | null; note: string | null; pod: string | null } | null; intake: { concernText: string | null } };
+export type WorkflowSource = { patient: { id: string; label: string; reference: string | null }; visit: { id: string; date: string | null; status: string | null; reservationId: string | null } | null; reservation: { id: string; at: string | null; type: string | null; status: string | null; procedureText: string | null; note: string | null; pod: string | null } | null; intake: { concernText: string | null }; performed: NonNullable<VisitContextResult["performed"]> };
 type Selection = { patientId: string; visitId: string | null };
 type StartSettings = { modelId: string; thinkingLevel: string };
 type Pinned = { name: string; revision: string; selection?: Selection };

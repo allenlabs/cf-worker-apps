@@ -28,6 +28,7 @@ export type VisitContextResult = {
   visits: { id: string; date: string | null; reservationId: string | null; status: string | null }[];
   selectedVisitId: string | null;
   intake?: { concernText: string | null };
+  performed?: { procedureText: string | null; pod: string | null };
   observedAt: string;
 };
 export type VisitDraftResult = {

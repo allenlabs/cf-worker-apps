@@ -8,7 +8,7 @@ import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import { MANAGER_DIRECTORY_SCHEMA } from "../../workers/pi/manager-directory.js";
 
 const require = createRequire(import.meta.url), wranglerRequire = createRequire(require.resolve("wrangler/package.json"));
-const { build } = await import(wranglerRequire.resolve("esbuild"));
+const { build } = wranglerRequire("esbuild");
 const directory = await mkdtemp(join(tmpdir(), "cloud-agent-manager-check-"));
 const entry = join(directory, "entry.js"), bundle = join(directory, "worker.js");
 const helper = fileURLToPath(new URL("../../workers/pi/manager-directory.js", import.meta.url));

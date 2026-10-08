@@ -9,7 +9,7 @@ import { createStorageConformance } from "@earendil-works/pi-durable/testing";
 
 process.chdir(fileURLToPath(new URL("../..", import.meta.url)));
 const require = createRequire(import.meta.url), wranglerRequire = createRequire(require.resolve("wrangler/package.json"));
-const { build } = await import(wranglerRequire.resolve("esbuild"));
+const { build } = wranglerRequire("esbuild");
 const directory = await mkdtemp(join(tmpdir(), "cloud-agent-storage-check-")), entry = join(directory, "fixture.js"), bundle = join(directory, "worker.js");
 await writeFile(entry, `
 import worker, { Assistant as BaseAssistant, Credentials as BaseCredentials } from ${JSON.stringify(resolve("workers/pi/index.js"))};

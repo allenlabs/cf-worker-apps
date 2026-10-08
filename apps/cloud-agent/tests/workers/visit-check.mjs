@@ -7,7 +7,8 @@ process.chdir(fileURLToPath(new URL("../..", import.meta.url)));
 
 const channel = "fixture-channel", group = "fixture-group", manager = "fixture-manager", root = "fixture-root", signing = "ab".repeat(32), token = "fixture-visit-service-token-at-least-32", key = "sb_secret_fixture-dedicated-rpc-key";
 const patientId = "10000000-0000-0000-0000-000000000001", otherId = "10000000-0000-0000-0000-000000000002", visitId = "20000000-0000-0000-0000-000000000001", reservationId = "30000000-0000-0000-0000-000000000001";
-const requests = []; let mode = "normal", observed = 0, activeKey = key;
+const performed = { procedureText: "Synthetic procedure A (2025-12-25)\nSynthetic procedure A (2025-12-29)", pod: "Synthetic procedure A (2025-12-25): POD 7\nSynthetic procedure A (2025-12-29): POD 3" };
+const requests = []; let mode = "normal", observed = 0, activeKey = key, performedOverride;
 const outbound = async request => {
   assert.equal(request.url, "https://fixture.supabase.invalid/rest/v1/rpc/cloud_agent_visit_read"); assert.equal(request.method, "POST");
   assert.equal(request.headers.get("apikey"), activeKey); assert.equal(request.headers.get("authorization"), activeKey.startsWith("eyJ") ? "Bearer " + activeKey : null, "Only legacy JWT keys receive a Bearer header");
@@ -22,14 +23,16 @@ const outbound = async request => {
   if (mode === "search-too-many") return Response.json({ mode: "test", kind: "patients", patients: Array.from({ length: 21 }, (_, i) => ({ id: "10000000-0000-0000-0000-" + String(i + 1).padStart(12, "0"), label: "Synthetic " + i, reference: null })) });
   if (body.p_input.action === "patientSearch") return Response.json({ mode: "test", kind: "patients", patients: mode === "empty" ? [] : [{ id: patientId, label: "Synthetic person <img src=x>", reference: "TEST-001", email: "must-not-return@example.invalid", chart: "FORBIDDEN_PROFILE" }, ...(mode === "duplicate" ? [{ id: patientId, label: "Duplicate", reference: null }] : [])], clinicalNotes: "FORBIDDEN_NOTES" });
   const value = { mode: "test", kind: "context", patient: { id: patientId, label: "Synthetic person <img src=x>", reference: "TEST-001", phone: "FORBIDDEN_PHONE" }, reservations: [{ id: reservationId, at: "2026-01-01T10:00:00Z", type: "consultation", status: "confirmed", procedureText: "Synthetic selected candidate", note: "Synthetic selected note", pod: "POD 3", profile: "FORBIDDEN_PROFILE" }, { id: "30000000-0000-0000-0000-000000000002", at: null, type: null, status: null, procedureText: "FORBIDDEN_UNLINKED_CANDIDATE", note: "FORBIDDEN_UNLINKED_NOTE", pod: "FORBIDDEN_UNLINKED_POD" }], visits: [{ id: visitId, date: "2026-01-01", reservationId, status: "arrived" }], selectedVisitId: body.p_input.visitId, intake: { concernText: "Synthetic intake concern", hidden: "FORBIDDEN_INTAKE" }, observedAt: `2026-01-01T10:00:${String(observed++).padStart(2, "0")}Z`, hidden: "FORBIDDEN_NOTES" };
+  value.performed = { ...performed, hidden: "FORBIDDEN_PERFORMED" };
   if (mode === "boundary") {
     value.reservations = Array.from({ length: 20 }, (_, i) => ({ ...value.reservations[0], id: "30000000-0000-0000-0000-" + String(i + 1).padStart(12, "0") }));
     value.visits = Array.from({ length: 20 }, (_, i) => ({ ...value.visits[0], id: "20000000-0000-0000-0000-" + String(i + 1).padStart(12, "0"), reservationId: i ? null : reservationId }));
   }
   if (mode === "reservations-too-many") value.reservations = Array.from({ length: 21 }, (_, i) => ({ ...value.reservations[0], id: "30000000-0000-0000-0000-" + String(i + 1).padStart(12, "0") }));
-  if (mode === "missing-candidates") { delete value.intake; delete value.reservations[0].pod; }
-  if (mode === "null-candidates") { value.intake.concernText = null; value.reservations[0].pod = null; }
-  if (mode === "candidate-boundary") { value.intake.concernText = "x".repeat(1000); value.reservations[0].pod = "x".repeat(40); }
+  if (mode === "missing-candidates") { delete value.intake; delete value.performed; delete value.reservations[0].pod; }
+  if (mode === "null-candidates") { value.intake.concernText = null; value.performed = { procedureText: null, pod: null }; value.reservations[0].pod = null; }
+  if (mode === "candidate-boundary") { value.intake.concernText = "x".repeat(1000); value.performed = { procedureText: "x".repeat(1000), pod: "😀".repeat(500) }; value.reservations[0].pod = "x".repeat(40); }
+  if (mode === "invalid-performed") value.performed = performedOverride;
   if (mode === "long-concern") value.intake.concernText = "x".repeat(1001);
   if (mode === "invalid-intake") value.intake = null;
   if (mode === "missing-concern") value.intake = {};
@@ -79,14 +82,20 @@ try {
   mode = "empty"; assert.deepEqual((await request(search)).result.patients, []); mode = "duplicate"; assert.equal((await request(search)).error.message, "visit_response_invalid"); mode = "normal";
   const select = { action: "visitSelect", patientId };
   const context = (await request(select)).result; assert.equal(context.selectedVisitId, null, "There is no implicit latest visit selection"); assert.ok(!JSON.stringify(context).includes("FORBIDDEN")); assert.equal(requests.at(-1).p_input.visitId, null); assert.deepEqual(context.intake, { concernText: "Synthetic intake concern" }, "Authorized patient intake is available without a schedule"); assert.ok(context.reservations.every(row => !Object.hasOwn(row, "pod") && !Object.hasOwn(row, "note") && !Object.hasOwn(row, "procedureText")), "Unselected context exposes no candidate content");
+  assert.deepEqual(context.performed, performed, "Patient-level performed episodes survive projection without a selected visit, including both labelled POD lines");
   mode = "boundary"; assert.equal((await request(search)).result.patients.length, 20); const boundary = (await request({ ...select, visitId })).result; assert.equal(boundary.visits.length, 20); assert.equal(boundary.reservations.length, 20); assert.equal(boundary.visits[1].reservationId, null, "An unavailable projected reservation link remains unresolved");
   mode = "search-too-many"; assert.equal((await request(search)).error.message, "visit_response_invalid"); mode = "normal";
   const selected = (await request({ ...select, visitId })).result; assert.equal(selected.selectedVisitId, visitId); assert.equal(selected.reservations[0].procedureText, "Synthetic selected candidate"); assert.equal(selected.reservations[0].note, "Synthetic selected note"); assert.ok(!Object.hasOwn(selected.reservations[1], "procedureText") && !Object.hasOwn(selected.reservations[1], "note"), "Candidates are projected only on the explicitly selected visit linked reservation");
   assert.equal(selected.reservations[0].pod, "POD 3"); assert.ok(!Object.hasOwn(selected.reservations[1], "pod")); assert.deepEqual(selected.intake, { concernText: "Synthetic intake concern" }); assert.ok(!JSON.stringify(selected).includes("FORBIDDEN"));
-  mode = "missing-candidates"; const older = (await request({ ...select, visitId })).result; assert.ok(!Object.hasOwn(older, "intake") && !Object.hasOwn(older.reservations[0], "pod"), "Older backends may omit new candidates");
-  mode = "null-candidates"; const unknown = (await request({ ...select, visitId })).result; assert.deepEqual(unknown.intake, { concernText: null }); assert.equal(unknown.reservations[0].pod, null);
-  mode = "candidate-boundary"; const bounded = (await request({ ...select, visitId })).result; assert.equal(bounded.intake.concernText.length, 1000); assert.equal(bounded.reservations[0].pod.length, 40);
+  assert.deepEqual(selected.performed, performed, "Selecting a visit does not scope performed summaries to its reservation");
+  mode = "missing-candidates"; const older = (await request({ ...select, visitId })).result; assert.ok(!Object.hasOwn(older, "intake") && !Object.hasOwn(older, "performed") && !Object.hasOwn(older.reservations[0], "pod"), "Older backends may omit new candidates");
+  mode = "null-candidates"; const unknown = (await request({ ...select, visitId })).result; assert.deepEqual(unknown.intake, { concernText: null }); assert.deepEqual(unknown.performed, { procedureText: null, pod: null }); assert.equal(unknown.reservations[0].pod, null);
+  mode = "candidate-boundary"; const bounded = (await request({ ...select, visitId })).result; assert.equal(bounded.intake.concernText.length, 1000); assert.equal(bounded.reservations[0].pod.length, 40); assert.deepEqual(bounded.performed, { procedureText: "x".repeat(1000), pod: "😀".repeat(500) }, "Both performed summaries accept exactly 1,000 UTF-16 code units");
   for (mode of ["long-concern", "invalid-intake", "missing-concern", "null-byte-concern", "long-pod", "invalid-pod", "null-byte-pod"]) { assert.equal((await request({ ...select, visitId })).error.message, "visit_response_invalid", mode); if (["long-concern", "invalid-intake", "missing-concern", "null-byte-concern"].includes(mode)) assert.equal((await request(select)).error.message, "visit_response_invalid", "Patient-level intake is validated without a schedule"); else { const unselected = (await request(select)).result; assert.deepEqual(unselected.intake, { concernText: "Synthetic intake concern" }); assert.ok(unselected.reservations.every(row => !Object.hasOwn(row, "pod")), "Unselected reservation candidates are discarded"); } }
+  mode = "invalid-performed";
+  for (performedOverride of [null, [], {}, { procedureText: null }, { pod: null }, { procedureText: 3, pod: null }, { procedureText: null, pod: [] }, { procedureText: "A\0B", pod: null }, { procedureText: null, pod: "A\0B" }, { procedureText: "x".repeat(1001), pod: null }, { procedureText: null, pod: "x".repeat(1001) }, { procedureText: null, pod: "😀".repeat(501) }]) {
+    for (const selectedVisitId of [null, visitId]) assert.equal((await request({ ...select, visitId: selectedVisitId })).error.message, "visit_response_invalid", "Malformed or oversized performed summaries fail with and without a selected visit");
+  }
   mode = "normal";
   const draftInput = { action: "draft", patientId, visitId, fields };
   const draft = (await request(draftInput)).result; assert.equal(draft.draft.ready, true); assert.deepEqual(draft.draft.missingFields, []); assert.match(draft.draft.text, /가상 테스트 자료/); assert.match(draft.draft.text, /\[상담 도착 안내 초안\]/); assert.match(draft.draft.text, /재수술 여부: 아니요/); assert.deepEqual(requests.at(-1).p_input, { action: "visitSelect", patientId, visitId }, "Draft performs an authorized fresh read, not a cached client snapshot");
