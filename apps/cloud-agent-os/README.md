@@ -39,6 +39,18 @@ the upstream direct-provider form and its normal API-token validation remain unc
 A successful OS login alone must not select or authorize an
 arbitrary subscription account.
 
+Set `modelBridge.management` to `"admin"` to manage that existing connection centrally.
+Admin's **Providers** tab shows the configured Codex subscription and lets an administrator
+enable or disable its fixed model. The model is then available to permitted users without
+creating a per-user provider record. Users choose their default and quick models on **Models**,
+and can select a model for each chat. Personal provider creation and edits are refused by the
+server in this mode; existing records and preferences are retained rather than deleted.
+Disabling the subscription prevents new calls through previously issued model bindings too.
+No provider credential or account selection is stored in admin configuration: the deployment's
+service binding and the existing runtime's account/model/actor policy remain authoritative.
+Omitting `management`, or setting it to `"user"`, preserves the original per-user setup flow.
+This subscription catalog does not require or emulate a Cloudflare AI Gateway.
+
 MCP is opt-in deployment configuration. It installs the upstream connector; it does not
 automatically connect a server or grant tools. For a read-only pilot, authorize only the intended
 server/scopes and bind specific read tools. Do not assume an MCP server's full catalog is read-only.
@@ -88,7 +100,9 @@ checkout remains unchanged. Do not edit generated build trees; change the review
 The build adds the overlay workspace importer to a disposable lockfile while reusing upstream's
 locked dependencies. It runs upstream's uncached Context, frontend, router and backend builds,
 and the MCP library/configurator builds when enabled. `--check` also drives the OIDC Worker/DO flow
-under Miniflare, runs the MCP account OAuth regression suite, and tests the model-configuration UI.
+under Miniflare, runs the MCP account OAuth regression suite, and tests model configuration,
+admin-managed subscription authorization, restored-user identity, model preferences and the
+selection-only UI alongside the existing Gateway behavior.
 Generated Wrangler files preserve upstream build
 rules and DO migrations, and are deleted when the build or deployment exits. `--check` packages
 Workers with Wrangler `--dry-run`; it does not create cloud resources or verify a real login.
@@ -113,11 +127,13 @@ file; this avoids an interactive first-deployment prompt or a dummy Worker boots
 
 1. Confirm `/api` rejects an unauthenticated session and login offers only the configured SSO.
 2. Sign in as an allowed identity, reload, and confirm `/admin` is restricted to configured admins.
-3. Create an agent model profile using the configured bridge model; test one short model response.
+3. In admin management mode, confirm the configured subscription in Admin's Providers tab and
+   choose its model as a user; in user management mode, create a model profile first. Test one
+   short model response.
 4. Connect the permitted MCP endpoint and call a specifically granted harmless read tool.
 5. Confirm every internal Worker has no public route and that browser/network output contains no credentials.
 
-For model setup, open Add Model and confirm the displayed Codex subscription. Its model config is
+For per-user model setup, open Add Model and confirm the displayed Codex subscription. Its model config is
 `{ "provider": "openai", "model": "<configured model>", "apiToken": "" }`.
 The bridge enforces the model and user server-side; the frontend flag grants no permission and
 adding a profile cannot broaden them.

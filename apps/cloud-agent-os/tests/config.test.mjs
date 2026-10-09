@@ -54,6 +54,35 @@ test('storage, model service and optional MCP remain explicit', () => {
   assert(!buildCommands(noMcp).some(step => step.args.includes('@gadgets/mcp-gatekeeper')));
 });
 
+test('admin model management is opt-in and changes no identities, scopes or bindings', () => {
+  const legacy = structuredClone(example);
+  delete legacy.modelBridge.management;
+  const managed = structuredClone(legacy);
+  managed.modelBridge.management = 'admin';
+  const before = generateConfigs(legacy, bases);
+  const after = generateConfigs(managed, bases);
+  assert.equal(before.workshop.vars.CODEX_BRIDGE_MANAGEMENT, 'user');
+  assert.equal(after.workshop.vars.CODEX_BRIDGE_MANAGEMENT, 'admin');
+  assert.equal(buildCommands(legacy).find(step => step.env.VITE_CODEX_BRIDGE_MODEL)
+    .env.VITE_CODEX_BRIDGE_MANAGEMENT, 'user');
+  assert.equal(buildCommands(managed).find(step => step.env.VITE_CODEX_BRIDGE_MODEL)
+    .env.VITE_CODEX_BRIDGE_MANAGEMENT, 'admin');
+  after.workshop.vars.CODEX_BRIDGE_MANAGEMENT = 'user';
+  assert.deepEqual(after, before);
+  const explicitUser = structuredClone(legacy);
+  explicitUser.modelBridge.management = 'user';
+  assert.deepEqual(generateConfigs(explicitUser, bases), before);
+});
+
+test('cold builds produce typed-storage runtime exports before checking consumers', () => {
+  const steps = buildCommands(example);
+  const dependency = steps.findIndex(step => step.args.includes('@gadgets/typed-storage'));
+  assert(dependency >= 0, 'typed-storage needs an explicit build, not just a TypeScript path alias');
+  for (const consumer of ['@gadgets/gatekeeper-context', '@gadgets/workshop-backend']) {
+    assert(dependency < steps.findIndex(step => step.args.includes(consumer)));
+  }
+});
+
 test('connect links and OAuth callbacks stay on the router origin for every deployment', () => {
   const candidate = structuredClone(example);
   candidate.origin = 'https://pilot.example.net';
@@ -77,6 +106,8 @@ test('reject unsafe auth/deployment input before any build or deploy', () => {
     c => { c.auth.allowedIdentities[0].email = 'ADMIN@example.com'; },
     c => { c.modelBridge.allowedUserIds = ['stranger@example.com']; },
     c => { c.modelBridge.service = c.workers.workshop; },
+    c => { c.modelBridge.management = 'Admin'; },
+    c => { c.modelBridge.management = true; },
     c => { c.auth.clientSecret = 'must-never-be-in-config'; },
     c => { c.auth.issuer = 'http://auth.example.com'; },
     c => { c.auth.issuer = 'https://auth.example.com/oidc/'; },

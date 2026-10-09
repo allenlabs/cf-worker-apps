@@ -84,7 +84,9 @@ export function parseDeployment(value) {
   }
   emails(value.admins, 'admins');
   assert(value.admins.every(email => allowed.includes(email)), 'Every admin must be allowed to sign in');
-  object(value.modelBridge, ['service', 'model', 'allowedUserIds'], 'modelBridge');
+  object(value.modelBridge, ['service', 'model', 'allowedUserIds', 'management'], 'modelBridge');
+  assert(value.modelBridge.management === undefined || ['user', 'admin'].includes(value.modelBridge.management),
+    'modelBridge.management must be user or admin');
   text(value.modelBridge.service, 'modelBridge.service', /^[a-z][a-z0-9-]{0,62}$/);
   assert(!names.some(key => value.workers[key] === value.modelBridge.service), 'Model service must be a separate runtime');
   text(value.modelBridge.model, 'modelBridge.model', /^[a-zA-Z0-9._/-]+$/);
@@ -123,6 +125,7 @@ export function generateConfigs(input, bases) {
     AUTH_GATEKEEPERS: 'oidc',
     DISABLE_PASSWORD_AUTH: 'true',
     CODEX_BRIDGE_MODEL: config.modelBridge.model,
+    CODEX_BRIDGE_MANAGEMENT: config.modelBridge.management ?? 'user',
     CODEX_BRIDGE_ALLOWED_USER_IDS: JSON.stringify(config.modelBridge.allowedUserIds),
   };
   result.workshop.services = [
@@ -168,11 +171,13 @@ export function buildCommands(config) {
     args: ['exec', 'vp', 'run', '-F', pkg, '--no-cache', name], env,
   });
   return [
+    task('@gadgets/typed-storage'),
     task('@gadgets/gatekeeper-context', 'build:app'),
     task('@gadgets/gatekeeper-context'),
     ...(config.mcp ? [task('@gadgets/mcp-shared'), task('@gadgets/mcp-gatekeeper', 'build:configurator')] : []),
     task('@gadgets/workshop-frontend', 'build', {
       VITE_CF_ACCESS_MODE: 'false', VITE_CODEX_BRIDGE_MODEL: config.modelBridge.model,
+      VITE_CODEX_BRIDGE_MANAGEMENT: config.modelBridge.management ?? 'user',
     }),
     task('@gadgets/router'),
     task('@gadgets/workshop-backend'),

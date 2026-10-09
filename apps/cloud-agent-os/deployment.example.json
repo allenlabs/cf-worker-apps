@@ -22,6 +22,7 @@
   },
   "admins": ["admin@example.com"],
   "modelBridge": {
+    "management": "admin",
     "service": "example-cloud-agent",
     "model": "gpt-5.4",
     "allowedUserIds": ["admin@example.com"]

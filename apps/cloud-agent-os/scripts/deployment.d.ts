@@ -17,7 +17,13 @@ export interface DeploymentConfig {
     loginSite?: string;
   };
   admins: string[];
-  modelBridge: { service: string; model: string; allowedUserIds: string[] };
+  modelBridge: {
+    service: string;
+    model: string;
+    allowedUserIds: string[];
+    /** Admin offers the configured subscription to users; user preserves per-user setup. */
+    management?: 'user' | 'admin';
+  };
   mcp: boolean;
   mcpScopes?: Record<string, string[]>;
 }

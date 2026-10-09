@@ -1,0 +1,1011 @@
+diff --git a/packages/workshop-backend/src/admin-settings.ts b/packages/workshop-backend/src/admin-settings.ts
+index ea0387a..d082d89 100644
+--- a/packages/workshop-backend/src/admin-settings.ts
++++ b/packages/workshop-backend/src/admin-settings.ts
+@@ -9,6 +9,7 @@ import { ADMIN_CONFIG_KEY, FEATURED_BLUEPRINTS_KEY, isReservedBlueprintKey, pars
+ import { MAX_AGENT_HINT, defaultOutputFormatId, listPromotedFormats, normalizeAdminConfig, reorderFormats, sanitizeAddedModel, sanitizeModelSettings, sanitizeOutputOverrides, serializeAdminConfig } from './admin-config.js';
+ import { makeAdminSettingsStorage, type AdminConfig, type AdminSettingsStorage, type FormatCuration } from './storage-schema/admin-settings-storage.js';
+ import { getModelTokenLimits } from './agent-compaction.js';
++import { isAdminManagedSubscription, SubscriptionModels } from "./subscription-models.js";
+ import { AiGatewayConfig, GatewayModels, assertGatewayProvider, gatewayModelConfig, gatewayRunConfig, getAiGatewayConfig, isCatalogModel } from './ai-gateway.js';
+ import { AgentTurnError, completeText } from './ai-invoke.js';
+ import { gatewayBuiltInReasoning, gatewayReasoningLevels, getModel, isRuntimeModel } from './ai-models.js';
+@@ -342,6 +343,8 @@ export class AdminSettings extends DurableObject<Cloudflare.Env> {
+       resourceVendors: await this.#listResourceConfig(config, adminUserId),
+       formats: await this.#listFormatConfig(config),
+       gatewayModels: this.#listGatewayModels(config),
++      subscriptionModel: isAdminManagedSubscription(this.env)
++          ? this.#subscriptionDescriptor(config) : undefined,
+     };
+   }
+ 
+@@ -444,6 +447,22 @@ export class AdminSettings extends DurableObject<Cloudflare.Env> {
+     await this.#mutateFormats(formats => reorderFormats(formats, blueprintIds));
+   }
+ 
++  #subscriptionDescriptor(config: AdminConfig): NonNullable<AdminSettingsView["subscriptionModel"]> {
++    const [model] = new SubscriptionModels(this.env, config).all;
++    return { id: model.id, name: model.name, enabled: model.mode !== "disabled" };
++  }
++
++  /** Change only the fixed subscription model's availability, using the existing atomic config mirror. */
++  async setSubscriptionModelEnabled(enabled: boolean): Promise<void> {
++    if (typeof enabled !== "boolean") throw new Error("Subscription availability must be a boolean.");
++    await this.#mutateAdminConfig(config => {
++      const model = this.#subscriptionDescriptor(config);
++      const modes = Object.fromEntries(entriesWithout(config.modelModes, model.id));
++      if (!enabled) modes[model.id] = "disabled";
++      return { ...config, modelModes: modes };
++    });
++  }
++
+   // --- AI Gateway models ---
+ 
+   // The gateway's configuration. Throws outside AI Gateway mode, which has no models to manage.
+@@ -981,6 +1000,10 @@ export class AdminApiImpl extends RpcTarget implements AdminApi {
+     return this.admin.setFormatOrder(blueprintIds);
+   }
+ 
++  setSubscriptionModelEnabled(enabled: boolean): Promise<void> {
++    return this.admin.setSubscriptionModelEnabled(enabled);
++  }
++
+   setGatewayModelMode(modelId: string, mode: GatewayModelMode): Promise<void> {
+     return this.admin.setGatewayModelMode(modelId, mode);
+   }
+diff --git a/packages/workshop-backend/src/ai-gateway.ts b/packages/workshop-backend/src/ai-gateway.ts
+index 51cd4bc..3f2cb84 100644
+--- a/packages/workshop-backend/src/ai-gateway.ts
++++ b/packages/workshop-backend/src/ai-gateway.ts
+@@ -5,6 +5,7 @@ import {
+ import { readAdminConfig } from "./admin-config.js";
+ import type { AdminConfig } from "./storage-schema/admin-settings-storage.js";
+ import type { UserAiModelRecord } from "./storage-schema/user-storage.js";
++import { isAdminManagedSubscription, SubscriptionModels } from "./subscription-models.js";
+ 
+ // The model used for quick tasks like title generation when AI Gateway mode is active.
+ //
+@@ -318,11 +319,16 @@ export class GatewayModels {
+   }
+ }
+ 
+-/**
+- * The deployment's AI Gateway models, or null if AI Gateway mode is not enabled. Only a gateway
+- * deployment reads the admin config for them.
+- */
+-export async function getGatewayModels(env: Cloudflare.Env): Promise<GatewayModels | null> {
++/** The deployment-provided catalog, independent of whether inference uses AI Gateway. */
++export type DeploymentModels = GatewayModels | SubscriptionModels;
++
++/** Subscription requests read authoritative settings so disabling revokes the next lookup despite KV lag. */
++export async function getGatewayModels(env: Cloudflare.Env, userId?: string,
++    readAuthoritativeConfig?: () => Promise<AdminConfig>): Promise<DeploymentModels | null> {
++  if (isAdminManagedSubscription(env)) {
++    if (!readAuthoritativeConfig) throw new Error("Admin-managed subscriptions require authoritative configuration.");
++    return new SubscriptionModels(env, await readAuthoritativeConfig(), userId);
++  }
+   let gateway = getAiGatewayConfig(env);
+   if (!gateway) return null;
+   return new GatewayModels(gateway, await readAdminConfig(env));
+diff --git a/packages/workshop-backend/src/ai-models.ts b/packages/workshop-backend/src/ai-models.ts
+index 0091b28..3494061 100644
+--- a/packages/workshop-backend/src/ai-models.ts
++++ b/packages/workshop-backend/src/ai-models.ts
+@@ -913,7 +913,8 @@ export class LanguageModelGatekeeper
+     // A session starts on each call of the binding, so a binding minted before an admin disabled
+     // its gateway model stops working at its next call. While users may not add their own models,
+     // so does a binding for any other model: one a user added, or one the admin added and removed.
+-    let models = await getGatewayModels(this.env);
++    let models = await getGatewayModels(this.env, this.ctx.props.initiator.id,
++        () => this.ctx.exports.AdminSettings.getByName("").getAdminConfig());
+     if (models?.get(config.model)?.provider === config.provider) {
+       models.refuseDisabled(config.model);
+     } else {
+diff --git a/packages/workshop-backend/src/server.ts b/packages/workshop-backend/src/server.ts
+index 5d5151b..4fa460f 100644
+--- a/packages/workshop-backend/src/server.ts
++++ b/packages/workshop-backend/src/server.ts
+@@ -17,6 +17,7 @@ export { PendingLogin, LoginConnectCallbackImpl };
+ import { GatekeeperUiFrame } from "@gadgets/workshop-shared/gatekeeper";
+ import { LanguageModelGatekeeper } from "./ai-models";
+ import { getGatewayModels } from "./ai-gateway.js";
++import { SubscriptionModels } from "./subscription-models.js";
+ import { AdminSettings, AdminApiImpl } from "./admin-settings.js";
+ import { blueprintContentKey, buildBlueprintArchiveStream, sanitizeBlueprintOutput, parseBlueprintArchive, randomBlueprintId } from "./blueprint-archive.js";
+ import { BlueprintKvRecord, listFeaturedBlueprintsFromKv, readBlueprintKvRecord } from "./storage-schema/blueprints-kv.js";
+@@ -235,10 +236,12 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
+   }
+ 
+   async getAiConfig(): Promise<AiGatewayInfo> {
+-    let models = await getGatewayModels(this.env);
++    let models = await getGatewayModels(this.env, this.#userId.name,
++        () => this.adminSettings.getByName("").getAdminConfig());
+     if (models) {
+       return {
+         enabled: true,
++        ...(models instanceof SubscriptionModels ? { transport: "subscription" as const } : {}),
+         enabledProviders: [...models.providers] as AiModelProvider[],
+         builtInModelIds: models.all.map(model => model.id),
+         userModelsEnabled: models.userModels,
+diff --git a/packages/workshop-backend/src/user.ts b/packages/workshop-backend/src/user.ts
+index 0fb8fc8..9e24fbc 100644
+--- a/packages/workshop-backend/src/user.ts
++++ b/packages/workshop-backend/src/user.ts
+@@ -11,7 +11,8 @@ import {
+ } from "./storage-schema/user-storage.js";
+ import { recordAnalytics } from "./analytics";
+ import { createWorkshopLogger } from "./observability";
+-import { getGatewayModels, type GatewayModels } from "./ai-gateway.js";
++import { getGatewayModels, type DeploymentModels } from "./ai-gateway.js";
++import { isAdminManagedSubscription, SubscriptionModels } from "./subscription-models.js";
+ import { utcDayKey, nextUtcMidnightIso, DailyQuotaResult } from "./ai-gateway-billing/limits/config.js";
+ import type { AdminSettings } from "./admin-settings.js";
+ import { deleteBlueprintContent } from "./blueprint-archive.js";
+@@ -449,11 +450,18 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
+     this.storage.profile.put(profile);
+   }
+ 
++  // A DO reopened by serialized ID has no ctx.id.name. Only the identity persisted by verified
++  // account creation authorizes model access; an uncreated object's placeholder profile does not.
++  #modelUserId(): string | undefined {
++    return this.storage.created.get() ? this.storage.profile.get().id : undefined;
++  }
++
+   async listModels(): Promise<AiChatAuthorInfo[]> {
+-    return this.#listModels(await getGatewayModels(this.env));
++    return this.#listModels(await getGatewayModels(this.env, this.#modelUserId(),
++        () => this.adminSettings.getByName("").getAdminConfig()));
+   }
+ 
+-  #listModels(models: GatewayModels | null): AiChatAuthorInfo[] {
++  #listModels(models: DeploymentModels | null): AiChatAuthorInfo[] {
+     let result: AiChatAuthorInfo[] = [];
+ 
+     // When AI Gateway mode is active, include the gateway models the deployment offers.
+@@ -474,7 +482,8 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
+ 
+   async addModel(profile: AiChatAuthorInfo, config: RedactedAiModelConfig,
+                  copySecretsFrom?: string): Promise<void> {
+-    let models = await getGatewayModels(this.env);
++    let models = await getGatewayModels(this.env, this.#modelUserId(),
++        () => this.adminSettings.getByName("").getAdminConfig());
+     models?.refuseUserModel();
+     let source: AiModelConfig | undefined;
+     if (copySecretsFrom !== undefined) {
+@@ -488,12 +497,14 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
+   }
+ 
+   async getModelConfig(id: string): Promise<{profile: AiChatAuthorInfo, config: RedactedAiModelConfig}> {
+-    let {profile, config} = this.#getHandAddedModel(id, await getGatewayModels(this.env));
++    let {profile, config} = this.#getHandAddedModel(id, await getGatewayModels(this.env, this.#modelUserId(),
++        () => this.adminSettings.getByName("").getAdminConfig()));
+     return {profile, config: redactModelConfig(config)};
+   }
+ 
+   async updateModel(profile: AiChatAuthorInfo, config: RedactedAiModelConfig): Promise<void> {
+-    let models = await getGatewayModels(this.env);
++    let models = await getGatewayModels(this.env, this.#modelUserId(),
++        () => this.adminSettings.getByName("").getAdminConfig());
+     models?.refuseUserModel();
+     let stored = this.#getHandAddedModel(profile.id, models).config;
+     if (config.provider !== stored.provider || config.model !== stored.model) {
+@@ -503,7 +514,8 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
+   }
+ 
+   /** The stored record of a model the user added, throwing for AI Gateway models. */
+-  #getHandAddedModel(id: string, models: GatewayModels | null): UserAiModelRecord {
++  #getHandAddedModel(id: string, models: DeploymentModels | null): UserAiModelRecord {
++    if (models instanceof SubscriptionModels) models.refuseUserModel();
+     let record = this.storage.aiModels.get(id);
+     // A stored model sharing a gateway model's ID is shadowed by it (see listModels()).
+     if (!record || models?.get(id)) {
+@@ -512,7 +524,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
+     return record;
+   }
+ 
+-  #putModel(profile: AiChatAuthorInfo, config: AiModelConfig, models: GatewayModels | null) {
++  #putModel(profile: AiChatAuthorInfo, config: AiModelConfig, models: DeploymentModels | null) {
+     if (models && !models.providers.has(config.provider)) {
+       throw new Error(`Provider "${config.provider}" is not available in AI Gateway mode.`);
+     }
+@@ -532,18 +544,31 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
+ 
+   async deleteModel(id: string): Promise<void> {
+     // In AI Gateway mode, don't allow deleting the gateway's own models, whatever their mode.
+-    let model = (await getGatewayModels(this.env))?.get(id);
++    let models = await getGatewayModels(this.env, this.#modelUserId(),
++        () => this.adminSettings.getByName("").getAdminConfig());
++    let model = models?.get(id);
+     if (model) throw new Error(`Cannot delete built-in model "${model.name}".`);
++    if (models instanceof SubscriptionModels) models.refuseUserModel();
+ 
+     this.storage.aiModels.delete(id);
+   }
+ 
+   async setQuickModel(id: string | null): Promise<void> {
++    if (id !== null && isAdminManagedSubscription(this.env)) {
++      const models = await getGatewayModels(this.env, this.#modelUserId(),
++          () => this.adminSettings.getByName("").getAdminConfig());
++      if (!models?.resolve(id)) throw new Error(`No such model: ${id}`);
++    }
+     this.storage.quickModel.put(id);
+   }
+ 
+   async getQuickModel(): Promise<null | string> {
+     let result = this.storage.quickModel.get();
++    if (isAdminManagedSubscription(this.env)) {
++      const models = await getGatewayModels(this.env, this.#modelUserId(),
++          () => this.adminSettings.getByName("").getAdminConfig());
++      return result && models?.resolve(result) ? result : null;
++    }
+     if (result && this.storage.aiModels.get(result)) {
+       return result;
+     } else {
+@@ -558,7 +583,8 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
+   async setPreferredModel(id: string | null): Promise<void> {
+     if (id !== null) {
+       // Any model that resolves is accepted, hidden ones included (see getExternalMessageChatContext()).
+-      if (!this.#resolveModel(id, await getGatewayModels(this.env))) {
++      if (!this.#resolveModel(id, await getGatewayModels(this.env, this.#modelUserId(),
++        () => this.adminSettings.getByName("").getAdminConfig()))) {
+         throw new Error(`No such model: ${id}`);
+       }
+     }
+@@ -659,10 +685,11 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
+   /** DO NOT MAKE PUBLIC -- returns API keys. Pure read: call sites replay it across DO resets
+    * via retryOnDoReset, so it must stay free of writes and side effects. */
+   async getChatContext(modelId: string | null): Promise<UserChatContext> {
+-    return this.#getChatContext(modelId, await getGatewayModels(this.env));
++    return this.#getChatContext(modelId, await getGatewayModels(this.env, this.#modelUserId(),
++        () => this.adminSettings.getByName("").getAdminConfig()));
+   }
+ 
+-  #getChatContext(modelId: string | null, models: GatewayModels | null): UserChatContext {
++  #getChatContext(modelId: string | null, models: DeploymentModels | null): UserChatContext {
+     let result: UserChatContext = {
+       profile: this.storage.profile.get()
+     };
+@@ -679,7 +706,10 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
+     }
+ 
+     // Resolve the quick model (used for lightweight tasks like title generation).
+-    if (models) {
++    if (models instanceof SubscriptionModels) {
++      const quickModelId = this.storage.quickModel.get();
++      result.quickModel = quickModelId ? models.resolve(quickModelId)?.config : undefined;
++    } else if (models) {
+       // In AI Gateway mode, always use the hardcoded quick model.
+       result.quickModel = models.gateway.getQuickModelConfig();
+     } else {
+@@ -698,7 +728,8 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
+     // An existing chat keeps its model while it still resolves, even once no longer offered. A new
+     // conversation takes the user's preferred model only while it is still offered, as the web
+     // composer does with its stored choice, and otherwise the first available model.
+-    let models = await getGatewayModels(this.env);
++    let models = await getGatewayModels(this.env, this.#modelUserId(),
++        () => this.adminSettings.getByName("").getAdminConfig());
+     let selectedModelId = existingChatModelId;
+     if (selectedModelId === null || !this.#resolveModel(selectedModelId, models)) {
+       let offered = this.#listModels(models);
+@@ -714,7 +745,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
+    * whatever its mode, so a disabled one resolves to nothing rather than to the stored model. No
+    * stored model resolves on a gateway deployment whose users may not add their own.
+    */
+-  #resolveModel(id: string, models: GatewayModels | null): UserAiModelRecord | undefined {
++  #resolveModel(id: string, models: DeploymentModels | null): UserAiModelRecord | undefined {
+     if (models?.get(id)) return models.resolve(id);
+     return models && !models.userModels ? undefined : this.storage.aiModels.get(id);
+   }
+diff --git a/packages/workshop-frontend/src/AdminPage.tsx b/packages/workshop-frontend/src/AdminPage.tsx
+index 07abee6..45b8599 100644
+--- a/packages/workshop-frontend/src/AdminPage.tsx
++++ b/packages/workshop-frontend/src/AdminPage.tsx
+@@ -10,6 +10,7 @@ import SiteLogo from './components/SiteLogo'
+ import { useDocumentTitle } from './useDocumentTitle'
+ import AdminFormatsPanel from './components/format/AdminFormatsPanel'
+ import { AdminModelsPanel } from './features/ai-models/AdminModelsPanel'
++import { isAdminManagedSubscription } from './features/ai-models/modelManagement'
+ 
+ // Preset accent colors offered in the Theme section ('' = default brand).
+ const ACCENT_PRESETS: { label: string; value: string }[] = [
+@@ -93,6 +94,7 @@ export default function AdminPage() {
+   // The models the deployment provides through AI Gateway; absent outside AI Gateway mode (see
+   // AdminModelsPanel).
+   const [gatewayModels, setGatewayModels] = useState<AdminSettingsView['gatewayModels']>(undefined)
++  const [subscriptionModel, setSubscriptionModel] = useState<AdminSettingsView['subscriptionModel']>(undefined)
+   // Re-reads can overlap, since leaving the Models tab drops the panel's in-flight state, and an
+   // earlier one answering last must not replace what a later one showed.
+   const gatewayModelsRead = useRef(0)
+@@ -118,6 +120,7 @@ export default function AdminPage() {
+     setAccentDraft(view.accentColor)
+     setFormats(view.formats)
+     setGatewayModels(view.gatewayModels)
++    setSubscriptionModel(view.subscriptionModel)
+   }
+ 
+   // Mint the admin capability once (the access check happens server-side) and load settings.
+@@ -432,7 +435,7 @@ export default function AdminPage() {
+           { value: 'general', label: 'General' },
+           { value: 'gatekeepers', label: 'Gatekeepers' },
+           { value: 'formats', label: 'Formats' },
+-          { value: 'models', label: 'Models' },
++          { value: 'models', label: isAdminManagedSubscription() ? 'Providers' : 'Models' },
+           { value: 'access', label: 'Access' },
+         ]}
+       />
+@@ -451,10 +454,14 @@ export default function AdminPage() {
+         <AdminModelsPanel
+           admin={admin.api}
+           gatewayModels={gatewayModels}
++          subscriptionModel={subscriptionModel}
+           onChanged={async () => {
+             const read = ++gatewayModelsRead.current
+             const view = await admin.api.getSettings()
+-            if (read === gatewayModelsRead.current) setGatewayModels(view.gatewayModels)
++            if (read === gatewayModelsRead.current) {
++              setGatewayModels(view.gatewayModels)
++              setSubscriptionModel(view.subscriptionModel)
++            }
+           }}
+         />
+       )}
+diff --git a/packages/workshop-frontend/src/BlueprintLandingPage.test.tsx b/packages/workshop-frontend/src/BlueprintLandingPage.test.tsx
+index 93b9ddc..6566177 100644
+--- a/packages/workshop-frontend/src/BlueprintLandingPage.test.tsx
++++ b/packages/workshop-frontend/src/BlueprintLandingPage.test.tsx
+@@ -73,9 +73,9 @@ function subscription() {
+   })
+ }
+ 
+-function authenticatedApi(): RpcStub<AuthenticatedApi> {
++function authenticatedApi(models: AiChatAuthorInfo[] = [MODEL]): RpcStub<AuthenticatedApi> {
+   return {
+-    listModels: async () => [MODEL],
++    listModels: async () => models,
+     listGatekeeperVendors: async () => [],
+     subscribeConnectedAccounts: subscription,
+     getAdminApi: async () => null,
+@@ -99,6 +99,7 @@ describe('BlueprintLandingPage model configuration', () => {
+     act(() => root?.unmount())
+     rootContainer?.remove()
+     testState.authenticatedApi = null
++    vi.unstubAllEnvs()
+     Object.defineProperty(window, 'innerWidth', { configurable: true, value: originalInnerWidth })
+   })
+ 
+@@ -132,4 +133,18 @@ describe('BlueprintLandingPage model configuration', () => {
+       .find(button => button.textContent === 'Save connection')!
+     expect(save.disabled).toBe(false)
+   })
++
++  it('directs users with no managed model to their administrator', async () => {
++    vi.stubEnv('VITE_CODEX_BRIDGE_MANAGEMENT', 'admin')
++    testState.authenticatedApi = authenticatedApi([])
++    rootContainer = document.createElement('div')
++    document.body.appendChild(rootContainer)
++    root = createRoot(rootContainer)
++    await act(async () => root!.render(<BlueprintLandingPage rpcStub={publicApi()} />))
++    const configure = Array.from(document.body.querySelectorAll('button'))
++      .find(button => button.textContent === 'Configure')!
++    await act(async () => configure.click())
++    expect(document.body.textContent).toContain('Ask your administrator')
++    expect(document.body.textContent).not.toContain('Add a model from AI Providers')
++  })
+ })
+diff --git a/packages/workshop-frontend/src/BlueprintLandingPage.tsx b/packages/workshop-frontend/src/BlueprintLandingPage.tsx
+index 82ba8ec..a9155de 100644
+--- a/packages/workshop-frontend/src/BlueprintLandingPage.tsx
++++ b/packages/workshop-frontend/src/BlueprintLandingPage.tsx
+@@ -23,6 +23,7 @@ import { useDocumentTitle } from './useDocumentTitle'
+ import { AccountsSubscriberAdapter } from './accountsSubscriber'
+ import { useDialogSelectPortalContainer } from './useDialogSelectPortalContainer'
+ import { openConnectWindow } from './connectHandoff'
++import { isAdminManagedSubscription } from './features/ai-models/modelManagement'
+ 
+ interface Props {
+   rpcStub: RpcStub<PublicApi>
+@@ -1409,7 +1410,9 @@ function BindingField({
+         </Select>
+         {models.length === 0 && (
+           <p className="text-xs text-kumo-subtle mt-1">
+-            No AI models are available yet. Add a model from AI Providers first.
++            {isAdminManagedSubscription()
++              ? 'No AI models are available yet. Ask your administrator to enable a model.'
++              : 'No AI models are available yet. Add a model from AI Providers first.'}
+           </p>
+         )}
+       </div>
+diff --git a/packages/workshop-frontend/src/OnboardingWizard.tsx b/packages/workshop-frontend/src/OnboardingWizard.tsx
+index ddeb853..9143c7b 100644
+--- a/packages/workshop-frontend/src/OnboardingWizard.tsx
++++ b/packages/workshop-frontend/src/OnboardingWizard.tsx
+@@ -33,6 +33,7 @@ import SiteLogo from './components/SiteLogo'
+ import { useDocumentTitle } from './useDocumentTitle'
+ import { AccountsSubscriberAdapter } from './accountsSubscriber'
+ import { openConnectWindow } from './connectHandoff'
++import { canAddPersonalModels } from './features/ai-models/modelManagement'
+ 
+ // ─── constants ──────────────────────────────────────────────────────────────────
+ 
+@@ -88,8 +89,7 @@ export default function OnboardingWizard({
+   const [aiConfig, setAiConfig] = useState<AiGatewayInfo | null>(null)
+   const [addModelOpen, setAddModelOpen] = useState(false)
+   const [modelsLoading, setModelsLoading] = useState(true)
+-  // False only on an AI Gateway deployment whose administrator turned adding models off.
+-  const canAddModels = aiConfig?.enabled !== true || aiConfig.userModelsEnabled
++  const canAddModels = canAddPersonalModels(aiConfig)
+ 
+   // Connections state
+   const [vendors, setVendors] = useState<VendorEntry[]>([])
+@@ -712,7 +712,7 @@ export default function OnboardingWizard({
+ 
+     {/* Add Model Modal — outside the wizard's inner content so it's not
+         clipped by overflow-hidden on the sliding panel */}
+-    <AddModelModal
++    {canAddModels && <AddModelModal
+       visible={addModelOpen}
+       onCancel={() => setAddModelOpen(false)}
+       onSuccess={() => {
+@@ -721,7 +721,7 @@ export default function OnboardingWizard({
+       }}
+       authenticatedApi={authenticatedApi}
+       aiConfig={aiConfig}
+-    />
++    />}
+     </>
+   )
+ }
+diff --git a/packages/workshop-frontend/src/components/Header.tsx b/packages/workshop-frontend/src/components/Header.tsx
+index eb2f084..0c21eca 100644
+--- a/packages/workshop-frontend/src/components/Header.tsx
++++ b/packages/workshop-frontend/src/components/Header.tsx
+@@ -7,6 +7,7 @@ import { useState, useEffect, useRef } from 'react'
+ import UserMenu from './UserMenu'
+ import TopBarNotice from '../TopBarNotice'
+ import SiteLogo from './SiteLogo'
++import { isAdminManagedSubscription } from '../features/ai-models/modelManagement'
+ 
+ export default function Header() {
+   const auth = useOptionalAuthenticatedApi()
+@@ -175,7 +176,7 @@ export default function Header() {
+                   className={navLinkClass}
+                   activeProps={{ className: navLinkActiveClass }}
+                 >
+-                  Providers
++                  {isAdminManagedSubscription() ? 'Models' : 'Providers'}
+                 </Link>
+                 {auth.isAdmin && (
+                   <Link
+diff --git a/packages/workshop-frontend/src/components/UserMenu.tsx b/packages/workshop-frontend/src/components/UserMenu.tsx
+index 8b926e7..62c3365 100644
+--- a/packages/workshop-frontend/src/components/UserMenu.tsx
++++ b/packages/workshop-frontend/src/components/UserMenu.tsx
+@@ -2,6 +2,7 @@ import { useNavigate } from '@tanstack/react-router'
+ import { DropdownMenu } from '@cloudflare/kumo'
+ import { useAuthenticatedApi } from '../AuthContext'
+ import { useAvatar } from '../useAvatar'
++import { isAdminManagedSubscription } from '../features/ai-models/modelManagement'
+ import { MENU_CONTENT, MENU_ITEM, MENU_ITEM_DANGER, MENU_POSITIONER_STYLE } from './menuStyles'
+ 
+ export default function UserMenu() {
+@@ -42,7 +43,7 @@ export default function UserMenu() {
+           onClick={() => navigate({ to: '/providers' })}
+           className={MENU_ITEM}
+         >
+-          Providers
++          {isAdminManagedSubscription() ? 'Models' : 'Providers'}
+         </DropdownMenu.Item>
+         {isAdmin && (
+           <DropdownMenu.Item
+diff --git a/packages/workshop-frontend/src/features/ai-models/AdminModelsPanel.tsx b/packages/workshop-frontend/src/features/ai-models/AdminModelsPanel.tsx
+index bb003c6..2571607 100644
+--- a/packages/workshop-frontend/src/features/ai-models/AdminModelsPanel.tsx
++++ b/packages/workshop-frontend/src/features/ai-models/AdminModelsPanel.tsx
+@@ -25,6 +25,7 @@ import { rpcFailureDescription } from '../../rpcErrors'
+ import { PROVIDER_LABELS, REASONING_LEVEL_LABELS } from './modelForm'
+ import { fetchModelsDev, suggestModels } from './modelsDev'
+ import { useGatewayTests } from './useGatewayTests'
++import { AdminSubscriptionModelCard } from './AdminSubscriptionModelCard'
+ 
+ const CARD = 'rounded-xl border border-kumo-line bg-kumo-elevated p-6'
+ const GROUP_HEADING = 'mb-2 text-sm font-semibold text-kumo-default'
+@@ -129,10 +130,12 @@ const DefaultReasoningSetting = ({ level, disabled, onChange }: {
+   )
+ }
+ 
+-export const AdminModelsPanel = ({ admin, gatewayModels, onChanged }: {
++export const AdminModelsPanel = ({ admin, gatewayModels, subscriptionModel, onChanged }: {
+   admin: RpcStub<AdminApi>
+   /** What the server last reported. Absent when the deployment isn't in AI Gateway mode. */
+   gatewayModels: AdminSettingsView['gatewayModels']
++  /** The fixed subscription provider, when managed by this deployment's administrator. */
++  subscriptionModel?: AdminSettingsView['subscriptionModel']
+   /** Re-read the settings after a write, so that the panel shows what the server holds. */
+   onChanged: () => Promise<void>
+ }) => {
+@@ -159,6 +162,10 @@ export const AdminModelsPanel = ({ admin, gatewayModels, onChanged }: {
+     focusBeforeWrite.current = null
+   }, [busy])
+ 
++  if (subscriptionModel) {
++    return <AdminSubscriptionModelCard admin={admin} model={subscriptionModel} onChanged={onChanged} />
++  }
++
+   if (!gatewayModels) {
+     return (
+       <div className={CARD}>
+diff --git a/packages/workshop-frontend/src/homePromptFlow.test.tsx b/packages/workshop-frontend/src/homePromptFlow.test.tsx
+index c7b6d8d..70e6087 100644
+--- a/packages/workshop-frontend/src/homePromptFlow.test.tsx
++++ b/packages/workshop-frontend/src/homePromptFlow.test.tsx
+@@ -4,13 +4,17 @@
+ import { act } from "react";
+ import { createRoot, type Root } from "react-dom/client";
+ import { afterEach, describe, expect, it, vi } from "vitest";
++import type { AiChatAuthorInfo } from '@gadgets/workshop-shared/api';
+ 
+ const testState = vi.hoisted(() => {
+-  const listModels = vi.fn<() => Promise<never[]>>(async () => []);
++  const listModels = vi.fn<() => Promise<AiChatAuthorInfo[]>>(async () => []);
++  const getPreferredModel = vi.fn<() => Promise<string | null>>(async () => null);
+   const newGadget = vi.fn<() => never>();
+   return {
+     addToast: vi.fn<(toast: unknown) => void>(),
+-    authenticatedApi: { listModels, newGadget },
++    authenticatedApi: { listModels, getPreferredModel, newGadget },
++    getPreferredModel,
++    selectedModels: [] as Array<string | null>,
+     currentUser: { id: "user-a", name: "User A" },
+     listModels,
+     navigate: vi.fn<(options: unknown) => void>(),
+@@ -37,13 +41,15 @@ vi.mock("./AuthContext", () => ({
+ }));
+ 
+ vi.mock("./features/chat/composer/ChatComposer", () => ({
+-  ChatComposer: ({ seedText, seedNonce, draftStorageKey }: {
++  ChatComposer: ({ seedText, seedNonce, draftStorageKey, selectedModel }: {
+     seedText?: string;
+     seedNonce?: number;
+     draftStorageKey?: string;
++    selectedModel: { id: string } | null;
+   }) => {
+     testState.seeds.push({ text: seedText, nonce: seedNonce });
+     testState.draftStorageKeys.push(draftStorageKey);
++    testState.selectedModels.push(selectedModel?.id ?? null);
+     return <textarea aria-label="Prompt" readOnly value={seedText ?? ""} />;
+   },
+ }));
+@@ -66,7 +72,11 @@ describe("Home prompt route flow", () => {
+     localStorage.clear();
+     testState.seeds.length = 0;
+     testState.draftStorageKeys.length = 0;
++    testState.selectedModels.length = 0;
+     vi.clearAllMocks();
++    testState.listModels.mockResolvedValue([]);
++    testState.getPreferredModel.mockResolvedValue(null);
++    vi.unstubAllEnvs();
+   });
+ 
+   it("seeds the composer once, clears route state, and does not create a workspace", async () => {
+@@ -83,4 +93,40 @@ describe("Home prompt route flow", () => {
+     expect(testState.newGadget).not.toHaveBeenCalled();
+     expect(testState.draftStorageKeys).toContain("gadgets:composer-draft:v1:user-a:home");
+   });
++
++  it.each([
++    [null, 'model-two'],
++    ['model-one', 'model-one'],
++    ['__gadgets_no_agent__', null],
++    ['removed-model', 'model-two'],
++  ])('uses the managed preference as a fallback while preserving stored choice %s', async (stored, expected) => {
++    vi.stubEnv('VITE_CODEX_BRIDGE_MANAGEMENT', 'admin');
++    testState.listModels.mockResolvedValue([
++      { type: 'agent', id: 'model-one', name: 'First model' },
++      { type: 'agent', id: 'model-two', name: 'Second model' },
++    ]);
++    testState.getPreferredModel.mockResolvedValue('model-two');
++    if (stored !== null) localStorage.setItem('lastSelectedModel', stored);
++    container = document.createElement('div');
++    document.body.append(container);
++    root = createRoot(container);
++    await act(async () => root!.render(<HomePageContent />));
++    expect(testState.selectedModels.at(-1)).toBe(expected);
++    expect(testState.getPreferredModel).toHaveBeenCalledOnce();
++  });
++
++  it('keeps first-model fallback and avoids loading the preference in legacy mode', async () => {
++    vi.stubEnv('VITE_CODEX_BRIDGE_MANAGEMENT', 'user');
++    testState.listModels.mockResolvedValue([
++      { type: 'agent', id: 'model-one', name: 'First model' },
++      { type: 'agent', id: 'model-two', name: 'Second model' },
++    ]);
++    testState.getPreferredModel.mockResolvedValue('model-two');
++    container = document.createElement('div');
++    document.body.append(container);
++    root = createRoot(container);
++    await act(async () => root!.render(<HomePageContent />));
++    expect(testState.selectedModels.at(-1)).toBe('model-one');
++    expect(testState.getPreferredModel).not.toHaveBeenCalled();
++  });
+ });
+diff --git a/packages/workshop-frontend/src/modelSelection.ts b/packages/workshop-frontend/src/modelSelection.ts
+index 001d8de..d30129d 100644
+--- a/packages/workshop-frontend/src/modelSelection.ts
++++ b/packages/workshop-frontend/src/modelSelection.ts
+@@ -7,6 +7,7 @@ export const NO_AGENT_OPTION_VALUE = "__gadgets_no_agent__";
+ 
+ export function getStoredSelectedModel(
+   models: AiChatAuthorInfo[],
++  preferredModel?: string | null,
+ ): string | null {
+   const storedModel = localStorage.getItem(LAST_SELECTED_MODEL_KEY);
+ 
+@@ -18,10 +19,19 @@ export function getStoredSelectedModel(
+     return storedModel;
+   }
+ 
++  if (preferredModel && models.some((model) => model.id === preferredModel)) {
++    return preferredModel;
++  }
++
+   // Default: Return the first configured model, or null if none are configured.
+   return models[0]?.id ?? null;
+ }
+ 
++/** Reset to the user's default without persisting an explicit No agent choice. */
++export function clearSelectedModel(): void {
++  localStorage.removeItem(LAST_SELECTED_MODEL_KEY);
++}
++
+ export function persistSelectedModel(modelId: string | null): void {
+   localStorage.setItem(
+     LAST_SELECTED_MODEL_KEY,
+diff --git a/packages/workshop-frontend/src/routes/index.tsx b/packages/workshop-frontend/src/routes/index.tsx
+index f62dcd8..fd7ef53 100644
+--- a/packages/workshop-frontend/src/routes/index.tsx
++++ b/packages/workshop-frontend/src/routes/index.tsx
+@@ -22,6 +22,7 @@ import {
+ import { useDocumentTitle } from "../useDocumentTitle";
+ import { homePromptFromSearch } from "../homePrompt";
+ import { composerDraftStorageKey } from "../features/chat/composer/draft/composerDraft";
++import { isAdminManagedSubscription } from '../features/ai-models/modelManagement';
+ 
+ type HomeSearch = { prompt?: string };
+ 
+@@ -59,11 +60,19 @@ export function HomePageContent({ prompt }: HomeSearch) {
+ 
+   useEffect(() => {
+     let cancelled = false;
+-    authenticatedApi.listModels()
+-      .then((list) => {
++    Promise.all([
++      authenticatedApi.listModels(),
++      isAdminManagedSubscription()
++        ? authenticatedApi.getPreferredModel().catch((err) => {
++          logRpcFailure('Failed to load the preferred model:', err);
++          return null;
++        })
++        : Promise.resolve(null),
++    ])
++      .then(([list, preferredModel]) => {
+         if (cancelled) return;
+         setModels(list);
+-        setSelectedModel(getStoredSelectedModel(list));
++        setSelectedModel(getStoredSelectedModel(list, preferredModel));
+       })
+       .catch((err) => {
+         logRpcFailure("Failed to fetch models:", err);
+diff --git a/packages/workshop-frontend/src/routes/providers.tsx b/packages/workshop-frontend/src/routes/providers.tsx
+index 0b27b7d..35aa850 100644
+--- a/packages/workshop-frontend/src/routes/providers.tsx
++++ b/packages/workshop-frontend/src/routes/providers.tsx
+@@ -1,6 +1,6 @@
+ import { createFileRoute } from '@tanstack/react-router'
+ import { useState, useEffect, useRef } from 'react'
+-import { DropdownMenu, useKumoToastManager } from '@cloudflare/kumo'
++import { DropdownMenu, Select, useKumoToastManager } from '@cloudflare/kumo'
+ import { useAuthenticatedApi } from '../AuthContext'
+ import { AiChatAuthorInfo, AiGatewayInfo } from '@gadgets/workshop-shared/api'
+ import {
+@@ -15,6 +15,8 @@ import {
+ import AddModelModal, { type ModelModalMode } from '../AddModelModal'
+ import { useDocumentTitle } from '../useDocumentTitle'
+ import { MENU_CONTENT, MENU_ITEM, MENU_ITEM_DANGER } from '../components/menuStyles'
++import { canAddPersonalModels, isAdminManagedSubscription, isSubscriptionSelectionOnly } from '../features/ai-models/modelManagement'
++import { clearSelectedModel, persistSelectedModel } from '../modelSelection'
+ 
+ export const Route = createFileRoute('/providers')({ component: ProvidersPage })
+ 
+@@ -23,6 +25,9 @@ export const Route = createFileRoute('/providers')({ component: ProvidersPage })
+ const PRIMARY_BTN =
+   'press inline-flex h-9 shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded-lg bg-kumo-brand px-3.5 text-[13px] font-medium tracking-[-0.25px] text-white transition-colors hover:bg-kumo-brand-hover'
+ 
++const AUTOMATIC_MODEL = '__gadgets_automatic_model__'
++const AUTOMATIC_MODEL_LABEL = 'Automatic (first available model)'
++
+ // ─── model row ─────────────────────────────────────────────────────────────────
+ 
+ // Rows mirror the Blueprints list: a clickable row (here, clicking sets/clears the quick model)
+@@ -32,6 +37,7 @@ function ModelRow({
+   isQuick,
+   isBuiltIn,
+   canEdit,
++  canDelete,
+   onEdit,
+   onClone,
+   onDelete,
+@@ -42,6 +48,7 @@ function ModelRow({
+   isBuiltIn: boolean
+   /** Whether Edit and Clone are offered. Both save a model of the user's own. */
+   canEdit: boolean
++  canDelete: boolean
+   onEdit: () => void
+   onClone: () => void
+   onDelete: () => void
+@@ -119,7 +126,7 @@ function ModelRow({
+                 </DropdownMenu.Item>
+               </>
+             )}
+-            {!isBuiltIn && (
++            {!isBuiltIn && canDelete && (
+               <DropdownMenu.Item variant="danger" onClick={onDelete} className={MENU_ITEM_DANGER}>
+                 <Trash size={13} className="mr-2" />
+                 Delete provider
+@@ -145,12 +152,14 @@ function Notice({ children }: { children: React.ReactNode }) {
+ // ─── main page ────────────────────────────────────────────────────────────────
+ 
+ function ProvidersPage() {
+-  useDocumentTitle('AI Providers')
++  useDocumentTitle(isAdminManagedSubscription() ? 'Models' : 'AI Providers')
+ 
+   const { authenticatedApi } = useAuthenticatedApi()
+   const toasts = useKumoToastManager()
+   const [models, setModels] = useState<AiChatAuthorInfo[]>([])
+   const [quickModel, setQuickModel] = useState<string | null>(null)
++  const [preferredModel, setPreferredModel] = useState<string | null>(null)
++  const [preferredBusy, setPreferredBusy] = useState(false)
+   const [aiConfig, setAiConfig] = useState<AiGatewayInfo | null>(null)
+   const [search, setSearch] = useState('')
+   const [loading, setLoading] = useState(true)
+@@ -163,17 +172,22 @@ function ProvidersPage() {
+   const fetchAll = async () => {
+     setLoadError(false)
+     try {
+-      const [modelList, qm, cfg] = await Promise.all([
++      const [modelList, qm, cfg, preferred] = await Promise.all([
+         authenticatedApi.listModels(),
+         authenticatedApi.getQuickModel(),
+         authenticatedApi.getAiConfig(),
++        isAdminManagedSubscription() ? authenticatedApi.getPreferredModel() : Promise.resolve(null),
+       ])
++      const reportedPreferred = isSubscriptionSelectionOnly(cfg) && !isAdminManagedSubscription()
++        ? await authenticatedApi.getPreferredModel()
++        : preferred
+       setModels(modelList)
+       setQuickModel(qm)
++      setPreferredModel(reportedPreferred)
+       setAiConfig(cfg)
+       // Each dialog saves a model of the user's own, so none stays open, or opens late, once the
+       // deployment says users may not add theirs.
+-      if (cfg.enabled && !cfg.userModelsEnabled) {
++      if (!canAddPersonalModels(cfg)) {
+         ++openRequest.current
+         setSheetOpen(false)
+         setSourceMode(null)
+@@ -188,9 +202,9 @@ function ProvidersPage() {
+ 
+   useEffect(() => { fetchAll() }, [authenticatedApi])
+ 
+-  const gatewayMode = aiConfig?.enabled === true
+-  // False only on an AI Gateway deployment whose administrator turned adding models off.
+-  const canAddModels = aiConfig?.enabled !== true || aiConfig.userModelsEnabled
++  const gatewayMode = aiConfig?.enabled === true && aiConfig.transport !== 'subscription'
++  const selectionOnly = isSubscriptionSelectionOnly(aiConfig)
++  const canAddModels = canAddPersonalModels(aiConfig)
+ 
+   const isBuiltIn = (modelId: string): boolean =>
+     aiConfig?.enabled === true && aiConfig.builtInModelIds.includes(modelId)
+@@ -247,6 +261,26 @@ function ProvidersPage() {
+     }
+   }
+ 
++  const preferredInFlight = useRef(false)
++  const handleSetPreferred = async (modelId: string | null) => {
++    if (preferredInFlight.current || preferredModel === modelId) return
++    preferredInFlight.current = true
++    setPreferredBusy(true)
++    try {
++      await authenticatedApi.setPreferredModel(modelId)
++      setPreferredModel(modelId)
++      // A choice on this page is deliberate, so it becomes this browser's starting choice too.
++      if (modelId === null) clearSelectedModel()
++      else persistSelectedModel(modelId)
++    } catch (err) {
++      console.error('Failed to set preferred model:', err)
++      toasts.add({ title: 'Failed to update default model', variant: 'error' })
++    } finally {
++      preferredInFlight.current = false
++      setPreferredBusy(false)
++    }
++  }
++
+   const filtered = models.filter((m) => {
+     if (!search) return true
+     const q = search.toLowerCase()
+@@ -257,9 +291,11 @@ function ProvidersPage() {
+     <div className="mx-auto flex h-full w-full max-w-4xl flex-col px-3 sm:px-10">
+       <header className="flex flex-col items-stretch gap-4 px-3 pb-3 pt-6 sm:flex-row sm:items-end sm:justify-between sm:pt-10">
+         <div className="min-w-0">
+-          <h1 className="text-2xl font-semibold tracking-tight text-kumo-default">AI providers</h1>
++          <h1 className="text-2xl font-semibold tracking-tight text-kumo-default">{selectionOnly ? 'Models' : 'AI providers'}</h1>
+           <p className="mt-1 text-[13px] leading-[18px] tracking-[-0.25px] text-kumo-subtle">
+-            Configure the AI models available to your workspaces.
++            {selectionOnly
++              ? 'Choose from the models provided by your administrator.'
++              : 'Configure the AI models available to your workspaces.'}
+           </p>
+         </div>
+         {canAddModels && (
+@@ -276,6 +312,30 @@ function ProvidersPage() {
+         )}
+       </header>
+ 
++      {selectionOnly && !loading && !loadError && (
++        <div className="mb-4 px-3">
++          <Select<string>
++            label="Default model"
++            aria-label="Default model"
++            className="w-full sm:w-80"
++            value={models.some(model => model.id === preferredModel) ? preferredModel! : AUTOMATIC_MODEL}
++            disabled={preferredBusy}
++            onValueChange={(value, { reason }) => {
++              if (reason !== 'item-press' || !value) return
++              void handleSetPreferred(value === AUTOMATIC_MODEL ? null : value)
++            }}
++            renderValue={id => id === AUTOMATIC_MODEL
++              ? AUTOMATIC_MODEL_LABEL : models.find(model => model.id === id)?.name ?? id}
++          >
++            <Select.Option value={AUTOMATIC_MODEL}>{AUTOMATIC_MODEL_LABEL}</Select.Option>
++            {models.map(model => <Select.Option key={model.id} value={model.id}>{model.name}</Select.Option>)}
++          </Select>
++          <p className="mt-1 text-xs text-kumo-subtle">
++            Used for new conversations. You can choose another model in any chat.
++          </p>
++        </div>
++      )}
++
+       {/* Search — hidden when the user has no models */}
+       {!loading && !loadError && models.length > 0 && (
+         <div className="mb-3 px-3">
+@@ -285,7 +345,7 @@ function ProvidersPage() {
+               type="text"
+               value={search}
+               onChange={(e) => setSearch(e.target.value)}
+-              placeholder="Search providers…"
++              placeholder={selectionOnly ? 'Search models…' : 'Search providers…'}
+               className="h-9 w-full rounded-lg border border-kumo-line bg-kumo-base pl-9 pr-4 text-[13px] tracking-[-0.25px] text-kumo-default placeholder:text-kumo-inactive transition-[border-color,box-shadow] duration-150 ease-out focus:border-kumo-ring focus:outline-none focus:ring-[3px] focus:ring-kumo-ring/15"
+             />
+           </div>
+@@ -334,7 +394,7 @@ function ProvidersPage() {
+           </div>
+         ) : loadError ? (
+           <div className="py-12 text-center text-sm">
+-            <p className="text-kumo-danger">Something went wrong loading your providers.</p>
++            <p className="text-kumo-danger">Something went wrong loading your {selectionOnly ? 'models' : 'providers'}.</p>
+             <button type="button" onClick={fetchAll} className="mt-1 cursor-pointer text-kumo-brand underline">
+               Try again
+             </button>
+@@ -351,7 +411,7 @@ function ProvidersPage() {
+               <p className="mt-1 text-[13px] leading-[18px] text-kumo-subtle">
+                 {canAddModels
+                   ? 'Add a provider to start building workspaces with AI.'
+-                  : 'Your deployment’s administrator offers no models at the moment.'}
++                  : 'Ask your administrator to enable a model.'}
+               </p>
+             </div>
+             {canAddModels && (
+@@ -362,7 +422,7 @@ function ProvidersPage() {
+             )}
+           </div>
+         ) : filtered.length === 0 ? (
+-          <div className="py-12 text-center text-sm text-kumo-inactive">No providers found</div>
++          <div className="py-12 text-center text-sm text-kumo-inactive">No {selectionOnly ? 'models' : 'providers'} found</div>
+         ) : (
+           filtered.map((model) => (
+             <div
+@@ -374,6 +434,7 @@ function ProvidersPage() {
+                 isQuick={quickModel === model.id}
+                 isBuiltIn={isBuiltIn(model.id)}
+                 canEdit={canAddModels}
++                canDelete={!selectionOnly}
+                 onEdit={() => openWithSource('edit', model)}
+                 onClone={() => openWithSource('clone', model)}
+                 onDelete={() => handleDelete(model)}
+@@ -385,7 +446,7 @@ function ProvidersPage() {
+       </div>
+ 
+       {/* Add model dialog */}
+-      <AddModelModal
++      {canAddModels && <AddModelModal
+         visible={sheetOpen}
+         onCancel={() => setSheetOpen(false)}
+         onSuccess={() => {
+@@ -394,8 +455,8 @@ function ProvidersPage() {
+         }}
+         authenticatedApi={authenticatedApi}
+         aiConfig={aiConfig}
+-      />
+-      {sourceMode && (
++      />}
++      {canAddModels && sourceMode && (
+         <AddModelModal
+           key={`${sourceMode.type}:${sourceMode.source.profile.id}`}
+           visible
+diff --git a/packages/workshop-frontend/src/vite-env.d.ts b/packages/workshop-frontend/src/vite-env.d.ts
+index 61037df..8475f41 100644
+--- a/packages/workshop-frontend/src/vite-env.d.ts
++++ b/packages/workshop-frontend/src/vite-env.d.ts
+@@ -11,6 +11,8 @@ interface ImportMetaEnv {
+ 
+   // Fixed subscription model exposed by this deployment; server-side policy remains authoritative.
+   readonly VITE_CODEX_BRIDGE_MODEL?: string;
++  // Set to "admin" when the deployment centrally manages its subscription provider.
++  readonly VITE_CODEX_BRIDGE_MANAGEMENT?: string;
+ }
+ 
+ interface ImportMeta {
+diff --git a/packages/workshop-shared/src/api.ts b/packages/workshop-shared/src/api.ts
+index 55a616f..ffbc951 100644
+--- a/packages/workshop-shared/src/api.ts
++++ b/packages/workshop-shared/src/api.ts
+@@ -1010,6 +1010,15 @@ export type AdminSettingsView = {
+   resourceVendors: AdminResourceVendor[];
+   /** The blueprints promoted as standard output formats, in menu order (including disabled ones). */
+   formats: AdminFormat[];
++  /** The fixed subscription model an admin may enable or disable; absent in user-managed mode. */
++  subscriptionModel?: {
++    /** Immutable model ID fixed by the deployment's inference bridge. */
++    id: string;
++    /** Credential-free display name of the subscription. */
++    name: string;
++    /** Whether this model remains available to authorized users. */
++    enabled: boolean;
++  };
+   /** The models the deployment provides through AI Gateway. Absent outside AI Gateway mode. */
+   gatewayModels?: {
+     /** The providers a model may be added under: the ones the gateway both enables and serves. */
+@@ -1186,6 +1195,12 @@ export interface AdminApi {
+   /** Reorder the menu. `blueprintIds` must be a permutation of the currently promoted ids. */
+   setFormatOrder(blueprintIds: string[]): Promise<void>;
+ 
++  /**
++   * Enable or disable the deployment's fixed admin-managed subscription model.
++   * Changes no credentials or account/model policy; throws outside admin-managed mode.
++   */
++  setSubscriptionModelEnabled(enabled: boolean): Promise<void>;
++
+   // --- AI Gateway models ---
+   //
+   // The models the deployment provides through AI Gateway (AdminSettingsView.gatewayModels). Each
+@@ -1448,9 +1463,11 @@ export type CloudflareAccountOption = {
+ /** Supported AI providers. */
+ export type AiModelProvider = "openai" | "anthropic" | "google" | "cloudflare" | "ollama";
+ 
+-/** Information about the AI gateway configuration. Returned by `AuthenticatedApi.getAiConfig()`. */
++/** Deployment-provided model configuration, returned by `AuthenticatedApi.getAiConfig()`. */
+ export type AiGatewayInfo = {
+   enabled: true;
++  /** Set when this catalog uses the existing subscription service rather than AI Gateway. */
++  transport?: "subscription";
+   /**
+    * The providers the deployment enables: the ones CF_AI_GATEWAY_PROVIDERS lists and the ones its
+    * admin turned on (see AdminApi.setGatewayProviderEnabled). A user can add a model of their own
+@@ -1465,7 +1482,7 @@ export type AiGatewayInfo = {
+   /**
+    * Whether users may add models of their own (see AdminApi.setUserModelsEnabled). When false,
+    * addModel() and updateModel() refuse, and the models the user added are neither listed nor
+-   * resolved.
++   * resolved. Always false for the admin-managed subscription transport.
+    */
+   userModelsEnabled: boolean;
+ } | {

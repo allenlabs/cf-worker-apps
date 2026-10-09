@@ -32,15 +32,6 @@ try {
     // The new workspace package reuses existing upstream dependencies. Its importer is added to
     // the disposable lockfile; upstream's tracked lockfile is never changed.
     run('pnpm', ['install', '--no-frozen-lockfile'], { cwd: checkout });
-    if (values.check) {
-      run(process.execPath, [join(checkout, packages.oidc, 'tests/check.mjs'), checkout], { cwd: checkout });
-      if (config.mcp) run('pnpm', ['exec', 'vitest', 'run', '__tests__/account-endpoint.test.ts'], {
-        cwd: join(checkout, 'packages/mcp-shared'),
-      });
-      run('pnpm', ['exec', 'vitest', 'run', 'src/AddModelModal.test.tsx'], {
-        cwd: join(checkout, 'packages/workshop-frontend'),
-      });
-    }
     const requireUpstream = createRequire(join(checkout, 'scripts/package.json'));
     const { parse, printParseErrorCode } = requireUpstream('jsonc-parser');
     const bases = {};
@@ -58,6 +49,24 @@ try {
       }
       for (const { args, env } of buildCommands(config)) {
         run('pnpm', args, { cwd: checkout, env: { ...process.env, ...env } });
+      }
+      if (values.check) {
+        run(process.execPath, [join(checkout, packages.oidc, 'tests/check.mjs'), checkout], { cwd: checkout });
+        if (config.mcp) run('pnpm', ['exec', 'vitest', 'run', '__tests__/account-endpoint.test.ts'], {
+          cwd: join(checkout, 'packages/mcp-shared'),
+        });
+        run('pnpm', ['exec', 'vitest', 'run', '__tests__/subscription-models.test.ts',
+          '__tests__/user-models.test.ts', '__tests__/admin-settings-models.test.ts'], {
+          cwd: join(checkout, packages.workshop),
+        });
+        run('pnpm', ['exec', 'vitest', 'run', 'src/AddModelModal.test.tsx',
+          'src/features/ai-models/AdminModelsPanel.test.tsx',
+          'src/features/ai-models/AdminModelsPanel.subscription.test.tsx',
+          'src/routes/-providers.test.tsx', 'src/OnboardingWizard.test.tsx',
+          'src/BlueprintLandingPage.test.tsx',
+          'src/features/chat/composer/ComposerModelSelector.test.tsx', 'src/homePromptFlow.test.tsx'], {
+          cwd: join(checkout, 'packages/workshop-frontend'),
+        });
       }
       for (const key of order) {
         run('pnpm', ['exec', 'wrangler', 'deploy', '--config', 'wrangler.cloud-agent-os.jsonc',
