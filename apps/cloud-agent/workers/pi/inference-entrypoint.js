@@ -2,7 +2,7 @@ import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { z } from "zod";
 import { installSubscriptionModels } from "./subscription-models.js";
-import { codexPayloadShape, codexRequestShape } from "./codex-http.js";
+import { codexDiagnostic, codexPayloadShape, codexRequestShape } from "./codex-http.js";
 
 const encoder = new TextEncoder();
 const INPUT_LIMIT = 1048576, FRAME_LIMIT = 524288, OUTPUT_LIMIT = 8388608;
@@ -38,7 +38,9 @@ function policy(env) {
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 120000) fail("inference_bridge_not_configured");
   const requestEncoding = env.INFERENCE_BRIDGE_REQUEST_ENCODING ?? "native";
   if (!["native", "identity"].includes(requestEncoding)) fail("inference_bridge_not_configured");
-  return { users, accountId: env.INFERENCE_BRIDGE_ACCOUNT_ID, modelId: env.INFERENCE_BRIDGE_MODEL, timeoutMs, requestEncoding };
+  const provider = env.INFERENCE_BRIDGE_PROVIDER ?? "codex";
+  if (!["codex", "siwc"].includes(provider)) fail("inference_bridge_not_configured");
+  return { users, accountId: env.INFERENCE_BRIDGE_ACCOUNT_ID, modelId: env.INFERENCE_BRIDGE_MODEL, timeoutMs, requestEncoding, provider };
 }
 
 function safeMessage(value) {
@@ -87,11 +89,12 @@ function htmlDiagnostic(markers) {
   };
 }
 
-function terminalDiagnostic({ credentialAccessFailed, fetchAttempted, responseReceived, response, request, payload, credentialExpiry, responseMetadata }) {
+function terminalDiagnostic({ provider, credentialAccessFailed, fetchAttempted, responseReceived, response, request, payload, credentialExpiry, responseMetadata }) {
   const boolean = value => typeof value === "boolean" ? value : null;
   const category = ["upstream_blocked", "permission_denied", "invalid_response", "success", "auth_required", "rate_limited", "upstream_error"].includes(response?.category) ? response.category : null;
   const contentType = ["json", "html", "sse", "other", "missing"].includes(response?.contentType) ? response.contentType : null;
   return {
+    provider: ["codex", "siwc"].includes(provider) ? provider : null,
     phase: credentialAccessFailed ? "credential" : !fetchAttempted ? "provider_setup" : responseReceived ? "response" : "fetch",
     credentialAccessFailed, fetchAttempted, responseReceived,
     credentialExpiry: ["future", "expired", "unavailable"].includes(credentialExpiry) ? credentialExpiry : null,
@@ -119,6 +122,10 @@ function terminalDiagnostic({ credentialAccessFailed, fetchAttempted, responseRe
   };
 }
 
+function siwcEndpoint(value) {
+  try { return new URL(value).href === "https://api.openai.com/v1/responses"; } catch { return null; }
+}
+
 class InferenceCancellation extends RpcTarget {
   #cancel;
   constructor(cancel) { super(); this.#cancel = cancel; }
@@ -138,14 +145,21 @@ export class CloudAgentInference extends WorkerEntrypoint {
     if (!configured.users.includes(input.userId)) fail("inference_bridge_user_denied");
     const credentials = this.env.Credentials.getByName(configured.accountId);
     const status = await credentials.status();
-    if (!status.inferenceReady || status.provider !== "codex") fail("inference_bridge_account_unavailable");
+    if (configured.provider === "codex" ? !status.inferenceReady || status.provider !== "codex" : status.connected !== true || status.directUsageGranted !== true) fail("inference_bridge_account_unavailable");
     const models = createModels();
-    const observed = { credentialAccessFailed: false, fetchAttempted: false, responseReceived: false };
+    const observed = { provider: configured.provider, credentialAccessFailed: false, fetchAttempted: false, responseReceived: false };
     const credentialFacade = { async codexAccess() {
       try {
         const credential = await credentials.codexAccess();
         observed.credentialExpiry = credentialExpiry(credential?.access);
         return credential;
+      }
+      catch (error) { observed.credentialAccessFailed = true; throw error; }
+    }, async access() {
+      try {
+        const token = await credentials.access();
+        observed.credentialExpiry = credentialExpiry(token);
+        return token;
       }
       catch (error) { observed.credentialAccessFailed = true; throw error; }
     } };
@@ -158,7 +172,7 @@ export class CloudAgentInference extends WorkerEntrypoint {
         ...htmlDiagnostic(diagnostic.htmlMarkers), htmlTruncated: diagnostic.htmlTruncated
       };
     });
-    const model = models.getModel("openai-codex", configured.modelId);
+    const model = models.getModel(configured.provider === "codex" ? "openai-codex" : "openai", configured.modelId);
     if (!model) fail("inference_bridge_model_unavailable");
     // Credentials status is local; an in-flight credential refresh retains its existing HTTP timeout.
     const abort = new AbortController(), deadline = setTimeout(() => abort.abort(), configured.timeoutMs);
@@ -171,16 +185,30 @@ export class CloudAgentInference extends WorkerEntrypoint {
         observed.response = undefined;
         observed.responseMetadata = undefined;
         observed.request = undefined;
-        if (configured.requestEncoding === "identity") {
+        if (configured.provider === "codex" && configured.requestEncoding === "identity") {
           if (typeof identityBody !== "string") fail("inference_bridge_payload_unavailable");
           const headers = new Headers(args[1]?.headers);
           headers.delete("content-encoding");
           args = [args[0], { ...args[1], headers, body: identityBody }];
         }
-        try { observed.request = codexRequestShape(args[0], args[1], model.id); } catch { /* Observation cannot change transport. */ }
+        try {
+          observed.request = codexRequestShape(args[0], args[1], model.id);
+          if (configured.provider === "siwc") observed.request.expectedEndpoint = siwcEndpoint(typeof args[0] === "string" || args[0] instanceof URL ? args[0] : args[0]?.url);
+        } catch { /* Observation cannot change transport. */ }
         const response = await globalThis.fetch(...args);
         observed.responseReceived = true;
         try {
+          // The API provider's onResponse hook runs only on success. Observe error headers here,
+          // without installing the Codex-specific stream wrapper or reading the response body.
+          if (configured.provider === "siwc") {
+            const diagnostic = codexDiagnostic("inference", response);
+            observed.response = {
+              status: diagnostic.status, category: diagnostic.category, contentType: diagnostic.contentType, challenge: diagnostic.challenge,
+              redirected: typeof response.redirected === "boolean" ? response.redirected : null,
+              expectedFinalEndpoint: response.url ? siwcEndpoint(response.url) : null,
+              cfErrorType: diagnostic.cfErrorType, cfErrorOriginPresent: diagnostic.cfErrorOriginPresent
+            };
+          }
           const edgeColo = response.headers.get("cf-ray")?.match(/-([A-Z]{3})$/)?.[1] ?? null;
           const server = response.headers.get("server")?.trim().toLowerCase();
           observed.responseMetadata = { edgeColo, server: server == null ? "missing" : ["cloudflare", "nginx", "envoy"].includes(server) ? server : "other" };
@@ -189,7 +217,7 @@ export class CloudAgentInference extends WorkerEntrypoint {
       },
       onPayload: body => {
         // Keep the exact provider JSON only for this call; native encoding forwards the original fetch arguments.
-        if (configured.requestEncoding === "identity") identityBody = JSON.stringify(body);
+        if (configured.provider === "codex" && configured.requestEncoding === "identity") identityBody = JSON.stringify(body);
         try { observed.payload = codexPayloadShape(body); } catch { /* Observation cannot change payload. */ }
       }
     })[Symbol.asyncIterator]();
