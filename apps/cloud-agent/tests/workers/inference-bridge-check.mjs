@@ -16,15 +16,18 @@ const access = "e30." + Buffer.from(JSON.stringify({ "https://api.openai.com/aut
 const source = join(app, "workers/pi/inference-entrypoint.js");
 const adapter = join(root, "apps/cloud-agent-os/overlay/packages/workshop-backend/src/cloud-agent-model.ts");
 await writeFile(join(work, "server.js"), `import {DurableObject,WorkerEntrypoint} from 'cloudflare:workers';
-export {CloudAgentInference} from ${JSON.stringify(source)};
+import {CloudAgentInference,terminalDiagnostic} from ${JSON.stringify(source)};
+export {CloudAgentInference};
 const originalWarn=console.warn.bind(console);
 console.warn=(...args)=>{if(args[0]==='inference_bridge_diagnostic'){globalThis.fixtureDiagnostics??=[];globalThis.fixtureDiagnostics.push(args);if(globalThis.fixtureObserverThrows)throw Error('PRIVATE observer failure');return;}originalWarn(...args);};
 const originalFetch=globalThis.fetch.bind(globalThis);
-globalThis.fetch=(...args)=>{if(globalThis.fixtureCredentialMode==='fetch_failure')throw Error('PRIVATE fetch failure');if(globalThis.fixtureCredentialMode==='fetch_html_failure')throw Error('<html><body>PRIVATE fetch failure</body></html>');return originalFetch(...args);};
+globalThis.fetch=async(...args)=>{globalThis.fixtureFetchAttempts=(globalThis.fixtureFetchAttempts??0)+1;if(globalThis.fixtureCredentialMode==='fetch_failure'||globalThis.fixtureCredentialMode==='retry_fetch_failure'&&globalThis.fixtureFetchAttempts>1)throw Error('PRIVATE fetch failure');if(globalThis.fixtureCredentialMode==='fetch_html_failure')throw Error('<html><body>PRIVATE fetch failure</body></html>');const response=await originalFetch(...args);for(const field of ['redirected','url'])if(Object.hasOwn(globalThis.fixtureResponseMetadata??{},field))Object.defineProperty(response,field,{value:globalThis.fixtureResponseMetadata[field]});return response;};
 export class Probe extends WorkerEntrypoint {
  signalCount(){return globalThis.fixtureProviderAborts??0;}
  diagnostics(){return globalThis.fixtureDiagnostics??[];}
- configure({mode='normal',observerThrows=false}={}){globalThis.fixtureCredentialMode=mode;globalThis.fixtureObserverThrows=observerThrows;globalThis.fixtureDiagnostics=[];}
+ projectDiagnostic(value){return terminalDiagnostic(value);}
+ fetchAttempts(){return globalThis.fixtureFetchAttempts??0;}
+ configure({mode='normal',observerThrows=false,responseMetadata={},retryLimit}={}){globalThis.fixtureCredentialMode=mode;globalThis.fixtureObserverThrows=observerThrows;globalThis.fixtureResponseMetadata=responseMetadata;globalThis.fixtureRetryLimit=retryLimit;globalThis.fixtureFetchAttempts=0;globalThis.fixtureDiagnostics=[];}
 }
 export default {fetch(){return new Response(null,{status:404});}};
 export class Faults extends WorkerEntrypoint {
@@ -40,6 +43,8 @@ export default {async fetch(request,env){
   const input=await request.json();
   if(input.signalCount)return Response.json({count:await env.PROBE.signalCount()});
   if(input.diagnostics)return Response.json(await env.PROBE.diagnostics());
+  if(input.projectDiagnostic)return Response.json(await env.PROBE.projectDiagnostic(input.projectDiagnostic));
+  if(input.fetchAttempts)return Response.json({count:await env.PROBE.fetchAttempts()});
   if(input.configure){await env.PROBE.configure(input.configure);return Response.json({ok:true});}
   const context=input.context??{messages:[{role:'user',content:input.prompt??'hello',timestamp:1}],tools:input.tools};
   if(input.direct){const call=await env.CODEX_BRIDGE.infer(input.direct);if(input.cancelBeforeHTTP)await call.cancellation.cancel();return new Response(call.stream);}
@@ -59,25 +64,29 @@ const bundle = async (file, piDirectory) => build({
       path: join(piDirectory, "dist", (args.path.slice("@earendil-works/pi-ai/".length) || "index") + ".js")
     }));
     builder.onLoad({ filter: /inference-entrypoint\.js$/ }, async args => ({
-      contents: (await readFile(args.path, "utf8")).replace("const iterator = models.streamSimple", "abort.signal.addEventListener('abort',()=>globalThis.fixtureProviderAborts=(globalThis.fixtureProviderAborts??0)+1,{once:true}); const iterator = models.streamSimple"), loader: "js"
+      contents: (await readFile(args.path, "utf8")).replace("function terminalDiagnostic(", "export function terminalDiagnostic(").replace("...input.options, maxTokens:", "...input.options, maxRetries: globalThis.fixtureRetryLimit, maxTokens:").replace("const iterator = models.streamSimple", "abort.signal.addEventListener('abort',()=>globalThis.fixtureProviderAborts=(globalThis.fixtureProviderAborts??0)+1,{once:true}); const iterator = models.streamSimple"), loader: "js"
     }));
   } }]
 });
 await bundle("server.js", join(root, "node_modules/@earendil-works/pi-ai"));
 await bundle("client.ts", upstream ? join(upstream, "packages/workshop-backend/node_modules/@earendil-works/pi-ai") : join(root, "node_modules/@earendil-works/pi-ai"));
-let calls = 0, seenToolOutput = false, lastNative;
+let calls = 0, seenToolOutput = false, lastNative, lastWire;
 const sse = (events) => new Response(events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
 const outbound = async request => {
   calls++;
   assert.equal(request.url, "https://chatgpt.com/backend-api/codex/responses");
   assert.equal(request.headers.get("authorization"), "Bearer " + access);
   const bytes = Buffer.from(await request.arrayBuffer());
+  lastWire = { encoding: request.headers.get("content-encoding") ?? "identity", byteLength: bytes.byteLength };
   const body = JSON.parse(request.headers.get("content-encoding") === "zstd" ? zstdDecompressSync(bytes).toString() : bytes.toString());
   lastNative = body;
   assert.equal(body.model, model);
   seenToolOutput ||= body.input.some(item => item.type === "function_call_output" && item.output.includes("READ_ONLY_OK"));
   if (JSON.stringify(body).includes("provider_denial")) return new Response("secret raw provider failure", { status: 403, headers: { "content-type": "application/json", "x-request-id": "PRIVATE-request-id", "cf-ray": "PRIVATE-ray-id" } });
   if (JSON.stringify(body).includes("provider_challenge")) return new Response("<!doctype html><html><title>Just a moment...</title><body>PRIVATE provider html fixture@example.invalid</body></html>", { status: 403, headers: { "content-type": "text/html", "cf-mitigated": "challenge", "x-request-id": "PRIVATE-request-id", "cf-ray": "PRIVATE-ray-id", "set-cookie": "PRIVATE-cookie" } });
+  if (JSON.stringify(body).includes("provider_cf_details")) return new Response('<!doctype html><html><title>Attention Required! | Cloudflare</title><body><div id="cf-error-details"><span class="cf-error-code">1020</span><span class="cf-error-code">1009</span><span class="cf-error-code">1015</span>Sorry, you have been blocked</div>PRIVATE https://PRIVATE.invalid/PRIVATE fixture@example.invalid</body></html>' + "x".repeat(66000), { status: 403, headers: { "content-type": "text/html", "cf-error-type": "1020", "cf-error-origin": "PRIVATE-origin", "x-request-id": "PRIVATE-request-id", "cf-ray": "PRIVATE-ray-id" } });
+  if (JSON.stringify(body).includes("provider_unknown_html")) return new Response('<html><title>PRIVATE unknown template</title><body><div id="PRIVATE-marker">PRIVATE body</div><!-- <title>Attention Required! | Cloudflare</title> --><script>"cf-error-details";"Sorry, you have been blocked"</script></body></html>', { status: 502, headers: { "content-type": "text/html", "cf-error-type": "PRIVATE-unknown-code", "cf-error-origin": "PRIVATE-origin" } });
+  if (JSON.stringify(body).includes("retry_fetch_failure")) return new Response("PRIVATE retryable service unavailable", { status: 503, headers: { "content-type": "application/json", "retry-after-ms": "0", "cf-error-type": "521", "cf-error-origin": "PRIVATE-origin" } });
   if (JSON.stringify(body).includes("sse_failure")) return sse([{ type: "response.failed", response: { error: { code: "PRIVATE-error-code", message: "PRIVATE SSE failure" } } }]);
   if (JSON.stringify(body).includes("hold_stream")) {
     const events = [
@@ -106,7 +115,8 @@ const client = { ...common, name: "bridge-client", modules: true, scriptPath: jo
 const mf = new Miniflare(convertV4MiniflareOptions({ workers: [client, server] }));
 const invoke = async input => { const response = await mf.dispatchFetch("https://fixture.invalid", { method: "POST", body: JSON.stringify(input) }); return { status: response.status, data: await response.json() }; };
 const wire = changes => ({ version: 1, requestId: crypto.randomUUID(), userId: user, context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] }, options: {}, ...changes });
-const diagnosticKeys = ["phase", "credentialAccessFailed", "fetchAttempted", "responseReceived", "status", "category", "contentType", "challenge", "requestEndpointExpected", "requestAuthorizationPresent", "requestAccountPresent", "requestContentTypePresent", "requestAcceptPresent", "payloadStoreFalse", "payloadStreamTrue", "payloadInputArray", "payloadToolSchemaValid"].sort();
+const htmlKeys = ["htmlAttentionRequired", "htmlJustAMoment", "htmlErrorDetails", "htmlErrorCode", "htmlCode1020", "htmlCode1009", "htmlCode1015", "htmlBlockedPhrase"];
+const diagnosticKeys = ["phase", "credentialAccessFailed", "fetchAttempted", "responseReceived", "status", "category", "contentType", "challenge", "requestEndpointExpected", "requestAuthorizationPresent", "requestAccountPresent", "requestContentTypePresent", "requestAcceptPresent", "payloadStoreFalse", "payloadStreamTrue", "payloadInputArray", "payloadToolSchemaValid", "responseRedirected", "responseFinalEndpointExpected", "requestWireEncoding", "requestWireKind", "requestWireByteLength", "cfErrorType", "cfErrorOriginPresent", ...htmlKeys, "htmlTruncated"].sort();
 const checkDiagnostic = async expected => {
   const logs = (await invoke({ diagnostics: true })).data;
   assert.equal(logs.length, 1, "one terminal diagnostic per provider failure");
@@ -117,7 +127,7 @@ const checkDiagnostic = async expected => {
   assert(Object.values(record).every(value => value === null || ["string", "boolean", "number"].includes(typeof value)), "fixed-schema primitive values only");
   for (const [key, value] of Object.entries(expected)) assert.equal(record[key], value, key);
   const serialized = JSON.stringify(logs);
-  for (const privateValue of [user, access, "fixture-account", "PRIVATE", "secret raw provider failure", "provider_denial", "provider_challenge", "fetch_failure", "sse_failure", "system-private", "tool-private", "hello", "requestId", "rayId", "errorMessage"])
+  for (const privateValue of [user, access, "fixture-account", "PRIVATE", "https://", "secret raw provider failure", "provider_denial", "provider_challenge", "fetch_failure", "sse_failure", "system-private", "tool-private", "hello", "requestId", "rayId", "errorMessage", "htmlMarkers"])
     assert(!serialized.includes(privateValue), `diagnostic excludes ${privateValue}`);
   return record;
 };
@@ -149,7 +159,7 @@ try {
   assert.equal(denied.data.result.stopReason, "error");
   assert.equal(denied.data.result.errorMessage, "inference_bridge_provider_error");
   assert(!JSON.stringify(denied.data).includes("secret raw provider failure"));
-  await checkDiagnostic({ phase: "response", credentialAccessFailed: false, fetchAttempted: true, responseReceived: true, status: 403, category: "permission_denied", contentType: "json", challenge: false, requestEndpointExpected: true, requestAuthorizationPresent: true, requestAccountPresent: true, requestContentTypePresent: true, requestAcceptPresent: true, payloadStoreFalse: true, payloadStreamTrue: true, payloadInputArray: true, payloadToolSchemaValid: true });
+  await checkDiagnostic({ phase: "response", credentialAccessFailed: false, fetchAttempted: true, responseReceived: true, status: 403, category: "permission_denied", contentType: "json", challenge: false, requestEndpointExpected: true, requestAuthorizationPresent: true, requestAccountPresent: true, requestContentTypePresent: true, requestAcceptPresent: true, payloadStoreFalse: true, payloadStreamTrue: true, payloadInputArray: true, payloadToolSchemaValid: true, requestWireEncoding: lastWire.encoding, requestWireKind: lastWire.encoding === "zstd" ? "bytes" : "string", requestWireByteLength: lastWire.byteLength, responseRedirected: false, responseFinalEndpointExpected: true, cfErrorType: null, cfErrorOriginPresent: false, ...Object.fromEntries(htmlKeys.map(key => [key, null])), htmlTruncated: null });
   for (const cancelBeforeHTTP of [false, true]) {
     await invoke({ configure: { mode: "held_credential_failure" } });
     const before = calls;
@@ -159,9 +169,11 @@ try {
     assert.deepEqual((await invoke({ diagnostics: true })).data, [], "credential failure after deadline or explicit cancellation emits no provider diagnostic");
   }
   for (const [prompt, expected] of [
-    ["provider_challenge", { phase: "response", status: 403, category: "upstream_blocked", contentType: "html", challenge: true }],
-    ["fetch_failure", { phase: "fetch", fetchAttempted: true, responseReceived: false, status: null, category: null, contentType: null, challenge: null, requestAuthorizationPresent: true, payloadStoreFalse: true }],
-    ["fetch_html_failure", { phase: "fetch", fetchAttempted: true, responseReceived: false, status: null, category: null, contentType: null, challenge: null }],
+    ["provider_challenge", { phase: "response", status: 403, category: "upstream_blocked", contentType: "html", challenge: true, cfErrorType: null, cfErrorOriginPresent: false, ...Object.fromEntries(htmlKeys.map(key => [key, key === "htmlJustAMoment"])), htmlTruncated: false }],
+    ["provider_cf_details", { phase: "response", status: 403, contentType: "html", cfErrorType: "1020", cfErrorOriginPresent: true, ...Object.fromEntries(htmlKeys.map(key => [key, key !== "htmlJustAMoment"])), htmlTruncated: true }],
+    ["provider_unknown_html", { phase: "response", status: 502, cfErrorType: "other", cfErrorOriginPresent: true, ...Object.fromEntries(htmlKeys.map(key => [key, false])), htmlTruncated: false }],
+    ["fetch_failure", { phase: "fetch", fetchAttempted: true, responseReceived: false, status: null, category: null, contentType: null, challenge: null, requestAuthorizationPresent: true, payloadStoreFalse: true, responseRedirected: null, responseFinalEndpointExpected: null, cfErrorType: null, cfErrorOriginPresent: null, htmlAttentionRequired: null, htmlTruncated: null }],
+    ["fetch_html_failure", { phase: "fetch", fetchAttempted: true, responseReceived: false, status: null, category: null, contentType: null, challenge: null, responseRedirected: null, responseFinalEndpointExpected: null, cfErrorType: null, cfErrorOriginPresent: null, htmlTruncated: null }],
     ["sse_failure", { phase: "response", fetchAttempted: true, responseReceived: true, status: 200, category: "success", contentType: "sse", challenge: false }]
   ]) {
     await invoke({ configure: { mode: prompt.startsWith("fetch_") ? prompt : "normal" } });
@@ -170,13 +182,38 @@ try {
     assert.equal(failure.data.result.errorMessage, "inference_bridge_provider_error", prompt);
     await checkDiagnostic(expected);
   }
+  for (const [responseMetadata, expected] of [
+    [{ redirected: true, url: "https://PRIVATE.invalid/PRIVATE?token=PRIVATE" }, { responseRedirected: true, responseFinalEndpointExpected: false }],
+    [{ redirected: false, url: "https://chatgpt.com/backend-api/codex/responses" }, { responseRedirected: false, responseFinalEndpointExpected: true }],
+    [{ redirected: "PRIVATE-invalid-boolean", url: "PRIVATE-invalid-url" }, { responseRedirected: null, responseFinalEndpointExpected: null }]
+  ]) {
+    await invoke({ configure: { responseMetadata } });
+    const failure = await invoke({ prompt: "provider_denial" });
+    assert.equal(failure.data.result.errorMessage, "inference_bridge_provider_error");
+    await checkDiagnostic(expected);
+  }
+  await invoke({ configure: { mode: "retry_fetch_failure", retryLimit: 1, responseMetadata: { redirected: true, url: "https://PRIVATE.invalid/PRIVATE" } } });
+  const retriedFailure = await invoke({ prompt: "retry_fetch_failure" });
+  assert.equal(retriedFailure.data.result.errorMessage, "inference_bridge_provider_error");
+  assert.equal((await invoke({ fetchAttempts: true })).data.count, 2, "real provider retry reaches a second fetch attempt");
+  await checkDiagnostic({ phase: "fetch", credentialAccessFailed: false, fetchAttempted: true, responseReceived: false, status: null, category: null, contentType: null, challenge: null, responseRedirected: null, responseFinalEndpointExpected: null, cfErrorType: null, cfErrorOriginPresent: null, ...Object.fromEntries(htmlKeys.map(key => [key, null])), htmlTruncated: null, requestEndpointExpected: true, requestAuthorizationPresent: true, requestWireEncoding: lastWire.encoding, requestWireKind: lastWire.encoding === "zstd" ? "bytes" : "string", requestWireByteLength: lastWire.byteLength });
+  const unobserved = Object.fromEntries(diagnosticKeys.filter(key => !["phase", "credentialAccessFailed", "fetchAttempted", "responseReceived"].includes(key)).map(key => [key, null]));
+  const baseObservation = { credentialAccessFailed: false, fetchAttempted: true, responseReceived: true };
+  const projected = (await invoke({ projectDiagnostic: { ...baseObservation, request: { wire: { encoding: "PRIVATE-encoding", kind: "PRIVATE-kind", byteLength: 16777217 }, attemptId: "PRIVATE-id" }, response: { category: "PRIVATE-category", contentType: "PRIVATE-type", status: 999, redirected: "PRIVATE-boolean", expectedFinalEndpoint: "PRIVATE-url", cfErrorType: "PRIVATE-code", cfErrorOriginPresent: "PRIVATE-origin", htmlTruncated: "PRIVATE-boolean", ...Object.fromEntries(htmlKeys.map(key => [key, "PRIVATE-marker"])) } } })).data;
+  assert.deepEqual(projected, { phase: "response", ...baseObservation, ...unobserved }, "untrusted diagnostic values collapse to fixed null fields");
+  for (const [byteLength, expected] of [[0, 0], [16777216, 16777216], [-1, null], [1.5, null], ["PRIVATE-bytes", null], [null, null]]) {
+    const record = (await invoke({ projectDiagnostic: { ...baseObservation, request: { wire: { encoding: "identity", kind: "string", byteLength } } } })).data;
+    assert.equal(record.requestWireByteLength, expected, "wire byte length has a fixed diagnostic bound");
+    assert.equal(record.requestWireEncoding, "identity");
+    assert.equal(record.requestWireKind, "string");
+  }
   for (const [mode, phase, credentialAccessFailed] of [["credential_failure", "credential", true], ["setup_failure", "provider_setup", false]]) {
     await invoke({ configure: { mode } });
     const before = calls;
     const failure = await invoke({});
     assert.equal(failure.data.result.errorMessage, "inference_bridge_provider_error", mode);
     assert.equal(calls, before, "pre-HTTP failure must not attempt HTTP");
-    await checkDiagnostic({ phase, credentialAccessFailed, fetchAttempted: false, responseReceived: false, status: null, category: null, contentType: null, challenge: null, requestAuthorizationPresent: null, payloadStoreFalse: null });
+    await checkDiagnostic({ phase, credentialAccessFailed, fetchAttempted: false, responseReceived: false, status: null, category: null, contentType: null, challenge: null, requestAuthorizationPresent: null, payloadStoreFalse: null, requestWireEncoding: null, requestWireKind: null, requestWireByteLength: null, responseRedirected: null, responseFinalEndpointExpected: null, cfErrorType: null, cfErrorOriginPresent: null, htmlAttentionRequired: null, htmlTruncated: null });
   }
   await invoke({ configure: { observerThrows: true } });
   const observerFailure = await invoke({ prompt: "provider_denial" });
@@ -202,5 +239,5 @@ try {
   assert(afterAbort >= beforeAbort + 2, "cancel and deadline reach the provider stream AbortSignal");
   assert.deepEqual((await invoke({ diagnostics: true })).data, [], "cancel, deadline and invalid bridge frames emit no provider diagnostic");
   assert.equal((await (await mf.getWorker("bridge-server")).fetch("https://public.invalid/infer")).status, 404);
-  console.log(`inference bridge native check passed (${upstream ? "pinned OS cross-version" : "installed Pi"}): text/tool roundtrip, private binding, allowlist, model/credential rejection, output sanitization, malformed/oversized frames, cancel/deadline, token accounting; 8 failure diagnostic scenarios, fixed-schema redaction, observer isolation and no success/cancellation diagnostics`);
+  console.log(`inference bridge native check passed (${upstream ? "pinned OS cross-version" : "installed Pi"}): text/tool roundtrip, private binding, allowlist, model/credential rejection, output sanitization, malformed/oversized frames, cancel/deadline, token accounting; 14 failure diagnostic scenarios, redirect/wire/Cloudflare/HTML classifications, latest retry attempt, fixed-schema redaction and unknowns, observer isolation and no success/cancellation diagnostics`);
 } finally { await mf.dispose(); await rm(work, { recursive: true, force: true }); }

@@ -6,6 +6,7 @@ import { codexPayloadShape, codexRequestShape } from "./codex-http.js";
 
 const encoder = new TextEncoder();
 const INPUT_LIMIT = 1048576, FRAME_LIMIT = 524288, OUTPUT_LIMIT = 8388608;
+const DIAGNOSTIC_WIRE_LIMIT = 16777216; // Observation bound only; this does not limit provider transport.
 const fail = code => { throw Error(code); };
 const text = z.string().max(262144);
 const jsonObject = z.record(z.string(), z.json());
@@ -63,6 +64,16 @@ function errorMessage(model, aborted) {
 }
 
 // Explicit projection: provider diagnostics can contain identifiers and must never be logged wholesale.
+function htmlDiagnostic(markers) {
+  const marker = value => Array.isArray(markers) ? markers.includes(value) : null;
+  return {
+    htmlAttentionRequired: marker("cf_attention_required"), htmlJustAMoment: marker("cf_just_a_moment"),
+    htmlErrorDetails: marker("cf_error_details"), htmlErrorCode: marker("cf_error_code"),
+    htmlCode1020: marker("cf_code_1020"), htmlCode1009: marker("cf_code_1009"), htmlCode1015: marker("cf_code_1015"),
+    htmlBlockedPhrase: marker("cf_blocked_phrase")
+  };
+}
+
 function terminalDiagnostic({ credentialAccessFailed, fetchAttempted, responseReceived, response, request, payload }) {
   const boolean = value => typeof value === "boolean" ? value : null;
   const category = ["upstream_blocked", "permission_denied", "invalid_response", "success", "auth_required", "rate_limited", "upstream_error"].includes(response?.category) ? response.category : null;
@@ -72,11 +83,21 @@ function terminalDiagnostic({ credentialAccessFailed, fetchAttempted, responseRe
     credentialAccessFailed, fetchAttempted, responseReceived,
     status: Number.isInteger(response?.status) && response.status >= 100 && response.status <= 599 ? response.status : null,
     category, contentType, challenge: boolean(response?.challenge),
+    responseRedirected: boolean(response?.redirected), responseFinalEndpointExpected: boolean(response?.expectedFinalEndpoint),
+    cfErrorType: ["1000", "1016", "1101", "1102", "521", "522", "523", "524", "525", "526", "1020", "1009", "1015", "other"].includes(response?.cfErrorType) ? response.cfErrorType : null,
+    cfErrorOriginPresent: boolean(response?.cfErrorOriginPresent),
+    htmlAttentionRequired: boolean(response?.htmlAttentionRequired), htmlJustAMoment: boolean(response?.htmlJustAMoment),
+    htmlErrorDetails: boolean(response?.htmlErrorDetails), htmlErrorCode: boolean(response?.htmlErrorCode),
+    htmlCode1020: boolean(response?.htmlCode1020), htmlCode1009: boolean(response?.htmlCode1009), htmlCode1015: boolean(response?.htmlCode1015),
+    htmlBlockedPhrase: boolean(response?.htmlBlockedPhrase), htmlTruncated: boolean(response?.htmlTruncated),
     requestEndpointExpected: boolean(request?.expectedEndpoint),
     requestAuthorizationPresent: boolean(request?.headers?.authorization),
     requestAccountPresent: boolean(request?.headers?.account),
     requestContentTypePresent: boolean(request?.headers?.contentType),
     requestAcceptPresent: boolean(request?.headers?.accept),
+    requestWireEncoding: ["identity", "zstd", "other"].includes(request?.wire?.encoding) ? request.wire.encoding : null,
+    requestWireKind: ["string", "bytes", "stream", "other"].includes(request?.wire?.kind) ? request.wire.kind : null,
+    requestWireByteLength: Number.isSafeInteger(request?.wire?.byteLength) && request.wire.byteLength >= 0 && request.wire.byteLength <= DIAGNOSTIC_WIRE_LIMIT ? request.wire.byteLength : null,
     payloadStoreFalse: boolean(payload?.storeFalse), payloadStreamTrue: boolean(payload?.streamTrue),
     payloadInputArray: boolean(payload?.inputArray), payloadToolSchemaValid: boolean(payload?.toolSchemaValid)
   };
@@ -110,7 +131,12 @@ export class CloudAgentInference extends WorkerEntrypoint {
     } };
     installSubscriptionModels(models, () => credentialFacade, undefined, diagnostic => {
       // Retain only observations used by the fixed terminal schema, never a raw error or response body.
-      if (observed.responseReceived) observed.response = { status: diagnostic.status, category: diagnostic.category, contentType: diagnostic.contentType, challenge: diagnostic.challenge };
+      if (observed.responseReceived) observed.response = {
+        status: diagnostic.status, category: diagnostic.category, contentType: diagnostic.contentType, challenge: diagnostic.challenge,
+        redirected: diagnostic.responseShape?.redirected, expectedFinalEndpoint: diagnostic.responseShape?.expectedFinalEndpoint,
+        cfErrorType: diagnostic.cfErrorType, cfErrorOriginPresent: diagnostic.cfErrorOriginPresent,
+        ...htmlDiagnostic(diagnostic.htmlMarkers), htmlTruncated: diagnostic.htmlTruncated
+      };
     });
     const model = models.getModel("openai-codex", configured.modelId);
     if (!model) fail("inference_bridge_model_unavailable");
@@ -120,6 +146,9 @@ export class CloudAgentInference extends WorkerEntrypoint {
       ...input.options, maxTokens: input.options.maxTokens ?? 4096, signal: abort.signal,
       fetch: async (...args) => {
         observed.fetchAttempted = true;
+        observed.responseReceived = false;
+        observed.response = undefined;
+        observed.request = undefined;
         try { observed.request = codexRequestShape(args[0], args[1], model.id); } catch { /* Observation cannot change transport. */ }
         const response = await globalThis.fetch(...args);
         observed.responseReceived = true;
