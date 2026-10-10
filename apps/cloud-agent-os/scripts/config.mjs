@@ -38,7 +38,7 @@ function emails(value, name) {
 
 /** Parse private deployment input before creating any files or running a build. */
 export function parseDeployment(value) {
-  object(value, ['accountId', 'origin', 'workers', 'resources', 'auth', 'admins', 'modelBridge', 'mcp', 'mcpScopes'], 'deployment');
+  object(value, ['accountId', 'origin', 'workers', 'resources', 'auth', 'admins', 'modelBridge', 'mcp', 'mcpScopes', 'siteLaunch'], 'deployment');
   text(value.accountId, 'accountId', /^[a-f0-9]{32}$/);
   const origin = https(value.origin, 'origin');
   assert(origin.origin === value.origin && !origin.port && !origin.hostname.endsWith('.workers.dev'),
@@ -93,6 +93,18 @@ export function parseDeployment(value) {
   emails(value.modelBridge.allowedUserIds, 'modelBridge.allowedUserIds');
   assert(value.modelBridge.allowedUserIds.every(email => allowed.includes(email)),
     'Every model user must be allowed to sign in');
+  if (value.siteLaunch !== undefined) {
+    object(value.siteLaunch, ['parentOrigins'], 'siteLaunch');
+    const parents = value.siteLaunch.parentOrigins;
+    assert(Array.isArray(parents) && parents.length >= 1 && parents.length <= 10,
+      'siteLaunch.parentOrigins must contain 1–10 origins');
+    for (const parent of parents) {
+      const url = https(parent, 'siteLaunch.parentOrigins[]');
+      assert(url.origin === parent && !url.port && url.hostname !== 'workers.dev' && !url.hostname.endsWith('.workers.dev'),
+        'siteLaunch parent must be a canonical custom-domain origin without a path or port');
+    }
+    assert(new Set(parents).size === parents.length, 'siteLaunch.parentOrigins contains duplicates');
+  }
   return structuredClone(value);
 }
 
@@ -127,6 +139,11 @@ export function generateConfigs(input, bases) {
     CODEX_BRIDGE_MODEL: config.modelBridge.model,
     CODEX_BRIDGE_MANAGEMENT: config.modelBridge.management ?? 'user',
     CODEX_BRIDGE_ALLOWED_USER_IDS: JSON.stringify(config.modelBridge.allowedUserIds),
+    ...(config.siteLaunch ? {
+      SITE_LAUNCH_ISSUER: config.auth.issuer,
+      SITE_LAUNCH_IDENTITIES: JSON.stringify(config.auth.allowedIdentities),
+      SITE_LAUNCH_PARENT_ORIGINS: JSON.stringify(config.siteLaunch.parentOrigins),
+    } : {}),
   };
   result.workshop.services = [
     ...vendors.map(key => ({
@@ -178,6 +195,7 @@ export function buildCommands(config) {
     task('@gadgets/workshop-frontend', 'build', {
       VITE_CF_ACCESS_MODE: 'false', VITE_CODEX_BRIDGE_MODEL: config.modelBridge.model,
       VITE_CODEX_BRIDGE_MANAGEMENT: config.modelBridge.management ?? 'user',
+      VITE_SITE_LAUNCH_PARENT_ORIGINS: JSON.stringify(config.siteLaunch?.parentOrigins ?? []),
     }),
     task('@gadgets/router'),
     task('@gadgets/workshop-backend'),

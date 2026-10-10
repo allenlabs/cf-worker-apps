@@ -17,6 +17,8 @@ export interface DeploymentConfig {
     loginSite?: string;
   };
   admins: string[];
+  /** Trusted host origins; identity policy derives from the existing OIDC allowlist. */
+  siteLaunch?: { parentOrigins: string[] };
   modelBridge: {
     service: string;
     model: string;

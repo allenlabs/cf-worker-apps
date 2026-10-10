@@ -56,15 +56,23 @@ import worker, { GatekeeperVendor, GatekeeperUserImpl, OidcLogin as BaseLogin } 
 import { WorkerEntrypoint, DurableObject } from 'cloudflare:workers';
 export { GatekeeperVendor, GatekeeperUserImpl };
 export class Probe extends DurableObject {
-  async save(email) { this.ctx.storage.kv.put('result', {email}); }
-  async fetch() { return Response.json(this.ctx.storage.kv.get('result') ?? null); }
+  async save(email, identity, account) {
+    this.ctx.storage.kv.put('result', {email, identity});
+    this.ctx.storage.kv.put('account', account);
+  }
+  async fetch() {
+    const result = this.ctx.storage.kv.get('result');
+    const account = this.ctx.storage.kv.get('account');
+    return Response.json(result ? {...result, remainingIdentity: await account.getAuthenticatedIdentity()} : null);
+  }
 }
 export class Callback extends WorkerEntrypoint {
   async complete(account) {
     if (this.env.TEST_CALLBACK_FAILURE) throw new Error(${JSON.stringify(privateFailure)});
     if (this.ctx.props.delay) await new Promise(resolve => setTimeout(resolve, this.ctx.props.delay));
     const email = await account.getAuthenticatedEmail();
-    await this.ctx.exports.Probe.get(this.ctx.exports.Probe.idFromName('result')).save(email);
+    const identity = await account.getAuthenticatedIdentity();
+    await this.ctx.exports.Probe.get(this.ctx.exports.Probe.idFromName('result')).save(email, identity, account);
     return {targetOrigin: ${JSON.stringify(origin)}, ticket: 'fixture-handoff-ticket'};
   }
 }
@@ -157,7 +165,9 @@ export default {
     assert.match(html,/fixture-handoff-ticket/);
     for(const value of ["fixture-access-token",secret,jwt(),email,subject]) assert.ok(!html.includes(value),"callback exposes no identity or provider credentials");
     const probe = await mf.getDurableObjectNamespace("Probe");
-    assert.deepEqual(await (await probe.get(probe.idFromName("result")).fetch("https://test.invalid")).json(),{email});
+    assert.deepEqual(await (await probe.get(probe.idFromName("result")).fetch("https://test.invalid")).json(),
+      {email,identity:{issuer,subject,email},remainingIdentity:null},
+      "the handoff reads the exact verified identity; the cleared capability cannot reconstruct it");
     assert.deepEqual(await inspect(attempt),{keys:[],email:null},"transient identity removed after handoff");
     const count = calls;
     await expectFailure(await complete(attempt),"sign_in_attempt_expired"); assert.equal(calls,count,"no repeated code exchange");
@@ -174,12 +184,15 @@ export default {
     claimsOverride={};
     attempt=await authorize(mf,2200); claimsOverride={exp:Math.floor(Date.now()/1000)+2};
     assert.equal((await complete(attempt)).status,200);
-    assert.deepEqual(await (await probe.get(probe.idFromName("result")).fetch("https://test.invalid")).json(),{email:null},"expired identity cannot authorize Workshop session creation");
+    assert.deepEqual(await (await probe.get(probe.idFromName("result")).fetch("https://test.invalid")).json(),
+      {email:null,identity:null,remainingIdentity:null},"expired identity cannot authorize Workshop session creation");
     assert.deepEqual(await inspect(attempt),{keys:[],email:null}); claimsOverride={};
     wrongSignature=true; attempt=await authorize(); await expectFailure(await complete(attempt),"invalid_identity_token"); wrongSignature=false;
     keyOverride=[{...jwk,alg:"RS256"}]; attempt=await authorize(); await expectFailure(await complete(attempt),"invalid_identity_keys"); keyOverride=null;
     malformedToken=true; attempt=await authorize(); await expectFailure(await complete(attempt),"invalid_identity_token"); malformedToken=false;
     fallback=true; attempt=await authorize(); assert.equal((await complete(attempt)).status,200,"verified userinfo fallback");
+    assert.deepEqual(await (await probe.get(probe.idFromName("result")).fetch("https://test.invalid")).json(),
+      {email,identity:{issuer,subject,email},remainingIdentity:null},"verified userinfo retains the signed subject and issuer");
     for(const profile of [{sub:"mismatch"},{email_verified:false},{email_verified:undefined}]) {
       userinfoOverride=profile; attempt=await authorize();
       await expectFailure(await complete(attempt), profile.sub ? "identity_subject_mismatch" : "verified_email_required", profile.sub ? 400 : 403);

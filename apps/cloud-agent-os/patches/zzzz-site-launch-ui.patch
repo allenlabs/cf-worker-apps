@@ -1,0 +1,285 @@
+diff --git a/packages/workshop-frontend/src/GadgetEditor.tsx b/packages/workshop-frontend/src/GadgetEditor.tsx
+index babc01a..d198a5c 100644
+--- a/packages/workshop-frontend/src/GadgetEditor.tsx
++++ b/packages/workshop-frontend/src/GadgetEditor.tsx
+@@ -1,5 +1,5 @@
+ import { useState, useEffect, useCallback, useMemo, useRef, type PointerEvent as ReactPointerEvent } from 'react'
+-import { useParams, useNavigate, useSearch, Link } from '@tanstack/react-router'
++import { useParams, useNavigate, useSearch } from '@tanstack/react-router'
+ import { DropdownMenu, useKumoToastManager } from '@cloudflare/kumo'
+ import {
+   ShareNetwork,
+@@ -20,6 +20,9 @@ import { useAuthenticatedApi } from './AuthContext'
+ import { useConnectionLost, useRpcStub } from './RpcContext'
+ import UserMenu from './components/UserMenu'
+ import SiteLogo from './components/SiteLogo'
++import { useSiteLaunchScope } from './features/site-launch/SiteLaunchScope'
++import { exitWorkspace } from './features/site-launch/workspaceExit'
++import { WorkspaceHomeLink } from './features/site-launch/WorkspaceHomeLink'
+ 
+ import {
+   GadgetClient,
+@@ -66,6 +69,7 @@ import DeleteConfirmationDialog from './components/DeleteConfirmationDialog'
+ import ReconnectingChip from './components/ReconnectingChip'
+ import WorkspaceOpenErrorPage from './components/WorkspaceOpenErrorPage'
+ import { useWorkspaceOpen } from './useWorkspaceOpen'
++import { WorkspaceSiteContext } from './features/site-launch/WorkspaceSiteContext'
+ import { reportIssue } from './errorReporting'
+ import GadgetExportMenu from './GadgetExportMenu'
+ import { MENU_CONTENT, MENU_ITEM, MENU_ITEM_DANGER, MENU_POSITIONER_STYLE } from './components/menuStyles'
+@@ -458,6 +462,7 @@ function NoGadgetPlaceholder({ height }: { height: string }) {
+ // ─── component ────────────────────────────────────────────────────────────────
+ 
+ export default function GadgetEditor() {
++  const siteLaunchScope = useSiteLaunchScope()
+   const params = useParams({ strict: false }) as { id?: string }
+   const id = params.id
+   const navigate = useNavigate()
+@@ -1392,9 +1397,11 @@ export default function GadgetEditor() {
+   }
+ 
+   // ── back ──────────────────────────────────────────────────────────────────────
+-  const handleGoToWorkspaces = () => {
+-    navigate({ to: '/workspaces' })
+-  }
++  const leaveWorkspace = (target: '/' | '/workspaces') => exitWorkspace(siteLaunchScope, target, {
++    reloadLaunch: () => window.location.assign('/launch'),
++    navigate: to => { void navigate({ to }) },
++  })
++  const handleGoToWorkspaces = () => leaveWorkspace('/workspaces')
+ 
+   // ── delete ────────────────────────────────────────────────────────────────────
+   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+@@ -1405,7 +1412,7 @@ export default function GadgetEditor() {
+     setIsDeleting(true)
+     try {
+       await overseer.stub.deleteSelf()
+-      navigate({ to: '/' })
++      leaveWorkspace('/')
+     } catch {
+       toasts.add({ title: 'Failed to delete workspace', variant: 'error' })
+       setIsDeleting(false)
+@@ -1423,6 +1430,7 @@ export default function GadgetEditor() {
+       <WorkspaceOpenErrorPage
+         kind={error.failure}
+         onGoToWorkspaces={handleGoToWorkspaces}
++        goToWorkspacesLabel={siteLaunchScope ? 'Reopen site workspace' : undefined}
+         onRetry={retryOpen}
+       />
+     )
+@@ -1437,7 +1445,7 @@ export default function GadgetEditor() {
+         </p>
+         <div className="flex items-center gap-2">
+           <WorkshopButton tone="secondary" onClick={handleGoToWorkspaces}>
+-            Go to workspaces
++            {siteLaunchScope ? 'Reopen site workspace' : 'Go to workspaces'}
+           </WorkshopButton>
+           <WorkshopButton tone="primary" onClick={retryOpen}>
+             Try again
+@@ -1508,15 +1516,11 @@ export default function GadgetEditor() {
+         <TopBarNotice />
+         {/* Left: logo / title */}
+         <div className="flex min-w-0 flex-1 items-center gap-2">
+-          <Link
+-            to="/"
+-            aria-label="Home"
+-            className="flex-shrink-0 hover:opacity-80 transition-opacity"
+-          >
++          <WorkspaceHomeLink>
+             <SiteLogo size={22}>
+               <Hexagon size={22} className="text-kumo-brand" weight="bold" />
+             </SiteLogo>
+-          </Link>
++          </WorkspaceHomeLink>
+ 
+           <span className="text-kumo-inactive flex-shrink-0">/</span>
+ 
+@@ -1666,6 +1670,8 @@ export default function GadgetEditor() {
+         </div>
+       </div>
+ 
++      <WorkspaceSiteContext overseer={overseer.stub} />
++
+       <div className="flex h-12 shrink-0 items-center gap-1 border-b border-kumo-line bg-kumo-base px-2 md:hidden">
+         <button
+           type="button"
+diff --git a/packages/workshop-frontend/src/components/WorkspaceOpenErrorPage.tsx b/packages/workshop-frontend/src/components/WorkspaceOpenErrorPage.tsx
+index ab8de0e..4b41008 100644
+--- a/packages/workshop-frontend/src/components/WorkspaceOpenErrorPage.tsx
++++ b/packages/workshop-frontend/src/components/WorkspaceOpenErrorPage.tsx
+@@ -53,9 +53,10 @@ type Props = {
+   kind: WorkspaceOpenFailureKind
+   onRetry: () => void
+   onGoToWorkspaces: () => void
++  goToWorkspacesLabel?: string
+ }
+ 
+-export default function WorkspaceOpenErrorPage({ kind, onRetry, onGoToWorkspaces }: Props) {
++export default function WorkspaceOpenErrorPage({ kind, onRetry, onGoToWorkspaces, goToWorkspacesLabel = 'Go to workspaces' }: Props) {
+   const { title, message, Icon, retryable } = CONTENT[kind]
+   const titleId = useId()
+   const descriptionId = useId()
+@@ -97,7 +98,7 @@ export default function WorkspaceOpenErrorPage({ kind, onRetry, onGoToWorkspaces
+             className="!h-9"
+             onClick={onGoToWorkspaces}
+           >
+-            Go to workspaces
++            {goToWorkspacesLabel}
+           </WorkshopButton>
+           {retryable && (
+             <WorkshopButton tone="primary" onClick={onRetry}>
+diff --git a/packages/workshop-frontend/src/rootRoute.test.tsx b/packages/workshop-frontend/src/rootRoute.test.tsx
+index 458e411..0e0746a 100644
+--- a/packages/workshop-frontend/src/rootRoute.test.tsx
++++ b/packages/workshop-frontend/src/rootRoute.test.tsx
+@@ -19,8 +19,8 @@ const testState = vi.hoisted(() => ({
+ // here, and the routed page is a marker so no real screen renders.
+ vi.mock('@tanstack/react-router', async (importOriginal) => ({
+   ...(await importOriginal<typeof import('@tanstack/react-router')>()),
+-  useRouterState: ({ select }: { select: (s: { location: { pathname: string } }) => unknown }) =>
+-    select({ location: { pathname: testState.pathname } }),
++  useRouterState: ({ select }: { select: (s: { location: { pathname: string }; matches: { pathname: string }[] }) => unknown }) =>
++    select({ location: { pathname: testState.pathname }, matches: [{ pathname: testState.pathname }] }),
+   Outlet: () => <div data-testid="outlet">routed page</div>,
+ }))
+ 
+diff --git a/packages/workshop-frontend/src/routes/__root.tsx b/packages/workshop-frontend/src/routes/__root.tsx
+index 9d59015..b9a7e47 100644
+--- a/packages/workshop-frontend/src/routes/__root.tsx
++++ b/packages/workshop-frontend/src/routes/__root.tsx
+@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react'
+ import { createRootRoute, Outlet, useRouterState } from '@tanstack/react-router'
+ import { TooltipProvider, Toasty } from '@cloudflare/kumo'
+ import { RpcStub } from 'capnweb'
+-import { AuthenticatedApi } from '@gadgets/workshop-shared/api'
++import { AuthenticatedApi, type SiteLaunchRedemption } from '@gadgets/workshop-shared/api'
+ import { useRpcStub, useConnectionLost } from '../RpcContext'
+ import { useAuth, CF_ACCESS_MODE } from '../useAuth'
+ import { AuthProvider } from '../AuthContext'
+@@ -14,16 +14,32 @@ import AppShell from '../components/AppShell/AppShell'
+ import LoginPage from '../LoginPage'
+ import OnboardingWizard from '../OnboardingWizard'
+ import AccountSelectionModal from '../components/billing/AccountSelectionModal'
++import { SiteLaunchRouteGuard, SiteLaunchScopeContext, useSiteLaunchSelection, useSiteLaunchScope } from '../features/site-launch/SiteLaunchScope'
++import { EmbeddedSiteShell } from '../features/site-launch/EmbeddedSiteShell'
++import { parseSiteLaunchParentOrigins } from '../features/site-launch/siteLaunch'
++import { SiteLaunchAuthContext } from '../features/site-launch/SiteLaunchAuthContext'
++
++const RootComponent = () => {
++  // Guard the committed route matches, so a pending redirect cannot mount the previous Outlet.
++  const pathname = useRouterState({ select: (s) => s.matches.at(-1)?.pathname ?? s.location.pathname })
++  const { selection, onLaunched, clearSelection } = useSiteLaunchSelection(pathname)
++  const embedded = window.parent !== window && parseSiteLaunchParentOrigins(import.meta.env.VITE_SITE_LAUNCH_PARENT_ORIGINS).length > 0
++  return (
++    <SiteLaunchRouteGuard pathname={pathname} selection={selection} embedded={embedded}>
++      <SiteLaunchScopeContext.Provider value={embedded ? selection : null}>
++        <RootContent onLaunched={onLaunched} clearSelection={clearSelection} embedded={embedded} />
++      </SiteLaunchScopeContext.Provider>
++    </SiteLaunchRouteGuard>
++  )
++}
+ 
+-export const Route = createRootRoute({
+-  component: RootComponent,
+-})
+-
+-function RootComponent() {
++const RootContent = ({ onLaunched, clearSelection, embedded }: {
++  onLaunched: (result: SiteLaunchRedemption) => void; clearSelection: () => void; embedded: boolean
++}) => {
+   const rpcStub = useRpcStub()
+   const connectionLost = useConnectionLost()
+   const { isAuthenticated, authenticatedApi, isLoading, error, logout, login } = useAuth(rpcStub)
+-  const pathname = useRouterState({ select: (s) => s.location.pathname })
++  const pathname = useRouterState({ select: (s) => s.matches.at(-1)?.pathname ?? s.location.pathname })
+ 
+   // Routes that don't require auth (public routes)
+   const isSignup = pathname === '/signup'
+@@ -48,6 +64,23 @@ function RootComponent() {
+     }
+   }
+ 
++  const handleLogout = () => {
++    clearSelection()
++    logout()
++    // A new document makes the host remount /launch and mint a fresh single-use ticket.
++    if (embedded) window.location.assign('/launch')
++  }
++
++  // Launch has its own waiting/sign-in screen and must not open onboarding or a previous workspace.
++  if (pathname === '/launch') return (
++    <SiteLaunchAuthContext.Provider value={{ authenticatedApi, isLoading,
++      onLoginSuccess: handleLoginSuccess, onReauthenticate: logout, onLaunched }}>
++      <TooltipProvider>
++        <Toasty><main className="h-full min-h-0"><Outlet /></main></Toasty>
++      </TooltipProvider>
++    </SiteLaunchAuthContext.Provider>
++  )
++
+   // Loading state
+   if (isLoading && !standalone) {
+     return (
+@@ -110,7 +143,7 @@ function RootComponent() {
+   // !isAuthenticated branches all return early above.
+   if (!authenticatedApi) return null
+   return (
+-    <AuthProvider authenticatedApi={authenticatedApi} onLogout={logout}>
++    <AuthProvider authenticatedApi={authenticatedApi} onLogout={handleLogout}>
+       <FeatureFlagsProvider>
+         <TooltipProvider>
+           <Toasty>
+@@ -137,6 +170,7 @@ function AuthenticatedShell({
+   authenticatedApi: RpcStub<AuthenticatedApi>
+   isWorkspaceEditor: boolean
+ }) {
++  const siteLaunchScope = useSiteLaunchScope()
+   // null = still checking, true = needs onboarding, false = onboarding done
+   const [onboardingNeeded, setOnboardingNeeded] = useState<boolean | null>(null)
+ 
+@@ -177,6 +211,8 @@ function AuthenticatedShell({
+         <main className="h-full min-h-0">
+           <Outlet />
+         </main>
++      ) : siteLaunchScope ? (
++        <EmbeddedSiteShell selection={siteLaunchScope}><Outlet /></EmbeddedSiteShell>
+       ) : (
+         <AppShell>
+           <Outlet />
+@@ -185,3 +221,5 @@ function AuthenticatedShell({
+     </>
+   )
+ }
++
++export const Route = createRootRoute({ component: RootComponent })
+diff --git a/packages/workshop-frontend/src/routes/workspace.$id.tsx b/packages/workshop-frontend/src/routes/workspace.$id.tsx
+index 1b4ed6e..d706f74 100644
+--- a/packages/workshop-frontend/src/routes/workspace.$id.tsx
++++ b/packages/workshop-frontend/src/routes/workspace.$id.tsx
+@@ -17,8 +17,13 @@ function parseIntParam(value: unknown): number | undefined {
+   return undefined
+ }
+ 
++const WorkspaceRoute = () => {
++  const { id } = Route.useParams()
++  return <GadgetEditor key={id} />
++}
++
+ export const Route = createFileRoute('/workspace/$id')({
+-  component: GadgetEditor,
++  component: WorkspaceRoute,
+   validateSearch: (search: Record<string, unknown>): GadgetSearch => ({
+     chat: typeof search.chat === 'number' ? search.chat
+       : typeof search.chat === 'string' ? Number(search.chat) || undefined
+diff --git a/packages/workshop-frontend/src/vite-env.d.ts b/packages/workshop-frontend/src/vite-env.d.ts
+index 8475f41..878a244 100644
+--- a/packages/workshop-frontend/src/vite-env.d.ts
++++ b/packages/workshop-frontend/src/vite-env.d.ts
+@@ -13,6 +13,8 @@ interface ImportMetaEnv {
+   readonly VITE_CODEX_BRIDGE_MODEL?: string;
+   // Set to "admin" when the deployment centrally manages its subscription provider.
+   readonly VITE_CODEX_BRIDGE_MANAGEMENT?: string;
++  // JSON array of exact parent origins allowed to initialize the embedded /launch page.
++  readonly VITE_SITE_LAUNCH_PARENT_ORIGINS?: string;
+ }
+ 
+ interface ImportMeta {

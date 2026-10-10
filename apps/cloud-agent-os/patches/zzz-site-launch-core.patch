@@ -1,0 +1,560 @@
+diff --git a/packages/workshop-backend/src/agent.ts b/packages/workshop-backend/src/agent.ts
+index ae8a22e..438c173 100644
+--- a/packages/workshop-backend/src/agent.ts
++++ b/packages/workshop-backend/src/agent.ts
+@@ -18,6 +18,7 @@ import { createTwoFilesPatch, FILE_HEADERS_ONLY } from "diff";
+ import { webFetch as webFetchImpl, WebFetchEnv, formatWebFetchResult } from "./web-fetch";
+ import { formatAlwaysAvailableResourcesPrompt } from "./agent-catalog";
+ import { formatInstanceInstructions } from "./admin-config";
++import type { SiteContext } from '@gadgets/workshop-shared/api';
+ import type { AiGatewayLogRoute } from "./ai-gateway";
+ import type { SpawnCallableOptions } from "./agent-spawner-binding";
+ import { traceRejectedToolCall, traceTool } from "./agent-tracing";
+@@ -549,6 +550,9 @@ export interface AgentHooks {
+    */
+   getInstanceInstructions(): Promise<string>;
+ 
++  /** Verified workspace selection; contextual metadata, not a resource-access capability. */
++  getSiteContext?(): Promise<SiteContext | null>;
++
+   /** A random string that belongs to this workspace and never changes. */
+   getPromptCacheSalt(): string;
+ 
+@@ -3004,6 +3008,15 @@ async function runAgentPass(
+   }
+ 
+   // Shared guidance precedes deployment instructions for both agent types.
++  const siteContext = await hooks.getSiteContext?.();
++  if (siteContext) {
++    // Kept in the dynamic slot for regular and spawned agents, outside the global prompt cache.
++    // Site labels are bounded data, never instructions or an authorization to access another site.
++    systemPromptSlots[1] += `\n\n# Verified site context\n` +
++      `The server verified this workspace's selected site. This selection grants no resource ` +
++      `access; use only explicitly connected capabilities and their existing approvals.\n` +
++      JSON.stringify(siteContext);
++  }
+   systemPromptSlots[0] += `\n\n${COMMUNICATION_GUIDANCE}`;
+   if (instanceInstructions) {
+     systemPromptSlots[0] += `\n\n${instanceInstructions}`;
+diff --git a/packages/workshop-backend/src/auth/login-flow.ts b/packages/workshop-backend/src/auth/login-flow.ts
+index 843b800..dcbb925 100644
+--- a/packages/workshop-backend/src/auth/login-flow.ts
++++ b/packages/workshop-backend/src/auth/login-flow.ts
+@@ -219,7 +219,15 @@ export class LoginConnectCallbackImpl
+       // Closed signups block first-time account creation here too (not just password signup); an
+       // existing user signing in is unaffected.
+       const signupsEnabled = (await readAdminConfig(this.env)).signupsEnabled;
+-      const secret = await userStub.loginOrCreateViaGatekeeper(email, signupsEnabled);
++      // Only the trusted OIDC vendor's verified getter establishes subject provenance. Browser
++      // fields and transient launch tickets never establish the identity of a login session.
++      let principal;
++      if (this.ctx.props.vendorId === 'oidc') {
++        const identityAccount = account as Required<Pick<GatekeeperUser, 'getAuthenticatedIdentity'>>;
++        principal = await identityAccount.getAuthenticatedIdentity();
++        if (!principal || principal.email !== email) throw new Error('OIDC identity unavailable');
++      }
++      const secret = await userStub.loginOrCreateViaGatekeeper(email, signupsEnabled, principal);
+       if (secret === null) {
+         loginLogger.info("gatekeeper login finished", {
+           event: "gatekeeper.login.finished", outcome: "signups_disabled",
+diff --git a/packages/workshop-backend/src/overseer.ts b/packages/workshop-backend/src/overseer.ts
+index 62d0de8..d18e772 100644
+--- a/packages/workshop-backend/src/overseer.ts
++++ b/packages/workshop-backend/src/overseer.ts
+@@ -52,6 +52,8 @@ import WORKTREE_BINDING_TYPES from "./worktree-binding.txt";
+ import { deploymentOutputForBlueprint, FormatOffer, listFormatOffers, readAdminConfig } from "./admin-config";
+ import { chatChangeStatuses } from "./agent-compaction";
+ import { ambientGatekeeperMode } from "./provisioning-policy";
++import { createSiteLaunchError, type SiteContext } from '@gadgets/workshop-shared/api';
++import { sameSiteContext, validateSiteContext } from './site-launch.js';
+ import {
+   blueprintContentKey, deleteBlueprintContent, readBlueprintRelease, sanitizeBlueprintOutput,
+ } from "./blueprint-archive";
+@@ -6912,6 +6914,9 @@ class OverseerImpl implements AgentHooks {
+   // The session is reached through the owner's stored connected account, not by asserting the owner's
+   // identity to the vendor — so the capability is the account the user actually holds.
+   async ensureAmbientCapsules(): Promise<void> {
++    // Site workspaces start with explicit, site-scoped resources only. Personal and deployment-
++    // public Context collections must not silently appear in a different site's chat.
++    if (this.storage.siteContext.get()) return;
+     let ownerId = this.ownerId;
+     if (!ownerId) return;
+     let ownerDo = this.ownerUserDo();
+@@ -8300,6 +8305,10 @@ class OverseerImpl implements AgentHooks {
+     }
+   }
+ 
++  async getSiteContext(): Promise<SiteContext | null> {
++    return this.storage.siteContext.get() ?? null;
++  }
++
+   getPromptCacheSalt(): string {
+     let salt = this.storage.promptCacheSalt.get();
+     if (salt === undefined) {
+@@ -8844,6 +8853,7 @@ class OverseerImpl implements AgentHooks {
+         configureCb?: RpcStub<ObserverConfigCallback>;
+         requireRole?: CollaboratorRole;
+       } = {}): Promise<CollaboratorRole | null> {
++    if (this.storage.siteContext.get()) return null;
+     let sharing = await this.getSharingManager();
+     let role = sharing.getEffectiveRole(profileId);
+     if (!role || (opts.requireRole && roleRank(role) < roleRank(opts.requireRole))) return null;
+@@ -9311,6 +9321,36 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
+     this.impl.storage.version.put(OVERSEER_STORAGE_VERSION);
+   }
+ 
++  /** Private native RPC; the public Overseer capability deliberately exposes no setter. */
++  async initializeSiteWorkspace(ownerId: string, descriptor: SiteContext): Promise<void> {
++    const site = validateSiteContext(descriptor);
++    if (this.impl.ownerId && this.impl.ownerId !== ownerId) throw createSiteLaunchError('site_launch_invalid');
++    let owner;
++    try { owner = this.impl.users.get(this.impl.users.idFromString(ownerId)); }
++    catch { throw createSiteLaunchError('site_launch_invalid'); }
++    const registered = await owner.getSiteWorkspaceContext(this.ctx.id.toString());
++    if (!registered || !sameSiteContext(registered, site)) throw createSiteLaunchError('site_launch_invalid');
++    // Re-check after the last await. Synchronous storage writes serialize competing initializers,
++    // and an expected denial does not abort the DO as blockConcurrencyWhile would.
++    this.impl.storage.transaction(() => {
++      if (this.impl.ownerId && this.impl.ownerId !== ownerId) throw createSiteLaunchError('site_launch_invalid');
++      const previous = this.impl.storage.siteContext.get();
++      if (previous && !sameSiteContext(previous, site)) throw createSiteLaunchError('site_launch_invalid');
++      if (this.impl.ownerId && !previous) throw createSiteLaunchError('site_launch_invalid');
++      if (!this.impl.ownerId) {
++        this.impl.storage.ownerId.put(ownerId);
++        this.impl.storage.title.put(site.displayName);
++        this.#initializeNewWorkspace();
++      }
++      this.impl.storage.siteContext.put(site);
++    });
++    this.impl.ownerId = ownerId;
++  }
++
++  async getSiteContext(): Promise<SiteContext | null> {
++    return this.impl.storage.siteContext.get() ?? null;
++  }
++
+   /**
+    * This workspace's outputs, for the owner to fold into their index. Every registry change and
+    * every owner open already pushes, so this exists only to catch up workspaces that predate the
+@@ -9354,11 +9394,19 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
+ 
+         this.impl.storage.ownerId.put(userId);
+ 
++        // A reservation can be visible before the initializing cross-DO call completes. The
++        // owner's authoritative map makes even a racing first browser open site-scoped.
++        const siteContext = await owner.getSiteWorkspaceContext(this.ctx.id.toString());
++        if (siteContext) this.impl.storage.siteContext.put(siteContext);
++
+         this.#initializeNewWorkspace();
+       });
+     }
+ 
+     let isOwner = (userId == this.impl.ownerId);
++    if (!isOwner && this.impl.storage.siteContext.get()) {
++      throw createOpenGadgetError(OPEN_GADGET_ERROR_CODES.workspaceAccessDenied);
++    }
+ 
+     // Cache the owner's profileId in memory when the owner opens.
+     if (isOwner) {
+@@ -10250,6 +10298,10 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
+     return profilePromise;
+   }
+ 
++  async getSiteContext(): Promise<SiteContext | null> {
++    return this.impl.storage.siteContext.get() ?? null;
++  }
++
+   async getMetadata(): Promise<GadgetMetadata> {
+     let result: GadgetMetadata = {
+       id: this.impl.ctx.id.toString(),
+@@ -11646,6 +11698,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
+ 
+   async addCollaborator(username: string, role: CollaboratorRole, note?: string)
+       : Promise<CollaboratorInfo | null> {
++    if (this.impl.storage.siteContext.get()) throw createSiteLaunchError('site_launch_invalid');
+     // Look up the user DO to check if the account exists.
+     let userDoId = this.impl.users.idFromName(username);
+     let userDo = this.impl.users.get(userDoId);
+@@ -11711,11 +11764,13 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
+ 
+   async createShareLink(role: CollaboratorRole, note?: string)
+       : Promise<{ key: string; linkId: string }> {
++    if (this.impl.storage.siteContext.get()) throw createSiteLaunchError('site_launch_invalid');
+     return (await this.impl.getSharingManager())
+         .createShareLink({ caller: this.#sharingCaller(), role, note });
+   }
+ 
+   async newShareLinkKey(linkId: string): Promise<{ key: string }> {
++    if (this.impl.storage.siteContext.get()) throw createSiteLaunchError('site_launch_invalid');
+     return (await this.impl.getSharingManager())
+         .newShareLinkKey({ caller: this.#sharingCaller(), linkId });
+   }
+@@ -11844,6 +11899,10 @@ class UseOverseerInterface extends RpcTarget implements Overseer {
+ 
+   // --- Allowed methods ---
+ 
++  async getSiteContext(): Promise<SiteContext | null> {
++    return this.impl.storage.siteContext.get() ?? null;
++  }
++
+   async getMetadata(): Promise<GadgetMetadata> {
+     return {
+       id: this.impl.ctx.id.toString(),
+diff --git a/packages/workshop-backend/src/server.ts b/packages/workshop-backend/src/server.ts
+index 4fa460f..4ec0f08 100644
+--- a/packages/workshop-backend/src/server.ts
++++ b/packages/workshop-backend/src/server.ts
+@@ -25,6 +25,8 @@ import { GatekeeperConnectCallbackImpl, normalizeUsername, UserDurableObject, CL
+ import { OverseerDurableObject, GatekeeperLoopback, CodeModeTailLoopback, AgentSpawnerGatekeeper, GatekeeperHookLoopback, GadgetTailLoopback, AgentSelfLoopback } from "./overseer";
+ import { UserDirectoryDurableObject } from "./user-directory.js";
+ import { ExternalMessageGateway } from "./external-message-gateway";
++import type { VerifiedAuthIdentity } from '@gadgets/workshop-shared/gatekeeper';
++import type { SiteLaunchRedemption } from '@gadgets/workshop-shared/api';
+ import { RpcStub as NativeRpcStub } from "cloudflare:workers";
+ import { recordAnalytics } from "./analytics";
+ import { handleClientErrorRequest } from "./client-errors.js";
+@@ -69,6 +71,7 @@ export { OverseerDurableObject, GatekeeperLoopback, GatekeeperHookLoopback,
+ 
+ // Re-export service-binding entrypoint for external channel integrations.
+ export { ExternalMessageGateway };
++export { SiteLaunchGateway } from './site-launch.js';
+ 
+ // Declare optional environment variables here since they may be omitted from wrangler.jsonc.
+ type Env = Cloudflare.Env & {
+@@ -85,7 +88,8 @@ type Env = Cloudflare.Env & {
+ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
+   constructor(private ctx: ExecutionContext, private env: Env,
+       userId: DurableObjectId,
+-      private abortSession: (reason: Error) => void) {
++      private abortSession: (reason: Error) => void,
++      private principal?: VerifiedAuthIdentity) {
+     super();
+ 
+     this.#userId = userId;
+@@ -98,6 +102,10 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
+   private adminSettings: DurableObjectNamespace<AdminSettings>;
+   private users: DurableObjectNamespace<UserDurableObject>;
+ 
++  redeemSiteLaunch(ticket: string): Promise<SiteLaunchRedemption> {
++    return this.#user.redeemSiteLaunch(ticket, this.principal);
++  }
++
+   #userId: DurableObjectId;
+   #userSearchPolicyCache?: { expiresAt: number; promise: Promise<boolean> };
+ 
+@@ -738,13 +746,13 @@ class PublicApiImpl extends RpcTarget implements PublicApi {
+     }
+ 
+     let userId = this.users.idFromName(split[0]);
+-    await this.users.get(userId).authenticate(split[1]);
++    const principal = await this.users.get(userId).authenticate(split[1]);
+     recordAnalytics(this.ctx, this.env, {
+       event_name: "user_authenticated",
+       user_id: userId.toString(),
+       source: "session_token",
+     });
+-    return new AuthenticatedApiImpl(this.ctx, this.env, userId, this.abortSession);
++    return new AuthenticatedApiImpl(this.ctx, this.env, userId, this.abortSession, principal);
+   }
+ 
+   async authenticateFromCfAccess(): Promise<AuthenticatedApi> {
+diff --git a/packages/workshop-backend/src/storage-schema/overseer-storage.ts b/packages/workshop-backend/src/storage-schema/overseer-storage.ts
+index b6e6f7f..d48fd6f 100644
+--- a/packages/workshop-backend/src/storage-schema/overseer-storage.ts
++++ b/packages/workshop-backend/src/storage-schema/overseer-storage.ts
+@@ -14,6 +14,7 @@
+ // without creating a cycle.
+ 
+ import type { RpcTarget } from "capnweb";
++import type { SiteContext } from "@gadgets/workshop-shared/api";
+ import type { RpcStub as NativeRpcStub } from "cloudflare:workers";
+ import type {
+   AssistantMessage, TextContent, ThinkingContent, ToolCall,
+@@ -1064,6 +1065,8 @@ export function makeOverseerStorage(storage: DurableObjectStorage) {
+     singletons: {
+       // Initialized on first startup.
+       ownerId: <string | undefined>undefined,
++      // Private server initialization only. Undefined keeps ordinary workspaces unchanged.
++      siteContext: <SiteContext | undefined>undefined,
+ 
+       // Version of this DO's storage schema, gating lazy migrations. Used to trigger migrations
+       // at construction time.
+diff --git a/packages/workshop-backend/src/storage-schema/user-storage.ts b/packages/workshop-backend/src/storage-schema/user-storage.ts
+index a44508a..d46b62f 100644
+--- a/packages/workshop-backend/src/storage-schema/user-storage.ts
++++ b/packages/workshop-backend/src/storage-schema/user-storage.ts
+@@ -8,7 +8,14 @@ import { createTypedStorage, collection } from "@gadgets/typed-storage";
+ import type {
+   AiChatAuthorInfo, AiModelConfig, BlueprintMetadata, BlueprintOutput, GadgetMetadata, WorkpieceId,
+ } from "@gadgets/workshop-shared/api";
+-import type { AccountDescription, GatekeeperUser } from "@gadgets/workshop-shared/gatekeeper";
++import type { AccountDescription, GatekeeperUser, VerifiedAuthIdentity } from "@gadgets/workshop-shared/gatekeeper";
++import type { SiteContext } from "@gadgets/workshop-shared/api";
++
++export type PendingSiteLaunch = {
++  ticketHash: string; expiresAt: number; principal: VerifiedAuthIdentity;
++  siteContext: SiteContext; parentOrigin: string;
++};
++export type SiteWorkspaceRecord = { key: string; workspaceId: string; siteContext: SiteContext };
+ 
+ export type ConnectedAccountRecord = {
+   id: number;
+@@ -62,6 +69,7 @@ export type UserAiModelRecord = {
+ type LoginSessionRecord = {
+   tokenId: string,  // sha256 hash of token, hex-formatted
+   created: Date,
++  principal?: VerifiedAuthIdentity,
+ }
+ 
+ /** Blueprint record stored in the user's `blueprints` collection. */
+@@ -136,6 +144,8 @@ export function makeUserStorage(storage: DurableObjectStorage) {
+       sessions: collection<LoginSessionRecord>()({
+         primaryKey: "tokenId",
+       }),
++      pendingSiteLaunches: collection<PendingSiteLaunch>()({ primaryKey: "ticketHash" }),
++      siteWorkspaces: collection<SiteWorkspaceRecord>()({ primaryKey: "key" }),
+       pendingHandoffs: collection<PendingHandoffRecord>()({
+         primaryKey: "ticketHash",
+       }),
+diff --git a/packages/workshop-backend/src/user.ts b/packages/workshop-backend/src/user.ts
+index 9e24fbc..e858d61 100644
+--- a/packages/workshop-backend/src/user.ts
++++ b/packages/workshop-backend/src/user.ts
+@@ -20,6 +20,9 @@ import { isReservedBlueprintKey, readBlueprintKvRecord } from "./storage-schema/
+ import { filterEnabledResources, isResourceDisabled, readAdminConfig } from "./admin-config.js";
+ import { buildGatekeeperVendorMap } from "./auth/auth-vendors.js";
+ import { CONNECT_FLOW_LIFETIME_MS, handoffTargetOrigin, hashPresentedSecret, newSecretToken, PENDING_HANDOFF_LIFETIME_MS } from "./connect-handoff.js";
++import { createSiteLaunchError, type SiteContext, type SiteLaunchInput, type SiteLaunchTicket, type SiteLaunchRedemption } from '@gadgets/workshop-shared/api';
++import type { VerifiedAuthIdentity } from '@gadgets/workshop-shared/gatekeeper';
++import { checkSiteLaunchPrincipal, samePrincipal, siteLaunchPolicy, siteWorkspaceKey, validatePrincipal, validateSiteLaunch, SITE_LAUNCH_LIFETIME_MS } from './site-launch.js';
+ 
+ const logger = createWorkshopLogger("workshop.user");
+ 
+@@ -220,7 +223,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
+         });
+   }
+ 
+-  async authenticate(token: string): Promise<void> {
++  async authenticate(token: string): Promise<VerifiedAuthIdentity | undefined> {
+     let tokenBytes: Uint8Array;
+     try {
+       tokenBytes = Uint8Array.fromBase64(token);
+@@ -236,6 +239,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
+       throw createAuthError(AUTH_ERROR_CODES.invalidSessionToken);
+     }
+     this.#syncDirectory();
++    return session.principal;
+   }
+ 
+   /**
+@@ -261,9 +265,9 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
+     return isNew;
+   }
+ 
+-  async #newSessionToken(): Promise<string> {
++  async #newSessionToken(principal?: VerifiedAuthIdentity): Promise<string> {
+     let { secret, hash: tokenId } = await newSecretToken();
+-    this.storage.sessions.put({ tokenId, created: new Date() });
++    this.storage.sessions.put({ tokenId, created: new Date(), ...(principal && { principal }) });
+     return secret.toBase64();
+   }
+ 
+@@ -315,7 +319,11 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
+    * When the account doesn't yet exist and `allowCreate` is false (deployment signups are closed),
+    * returns null instead of creating one — existing users can still sign in.
+    */
+-  async loginOrCreateViaGatekeeper(email: string, allowCreate: boolean): Promise<string | null> {
++  async loginOrCreateViaGatekeeper(email: string, allowCreate: boolean, principal?: VerifiedAuthIdentity): Promise<string | null> {
++    if (principal) {
++      principal = validatePrincipal(principal);
++      if (principal.email !== email) throw createSiteLaunchError('site_launch_invalid');
++    }
+     if (!this.storage.created.get()) {
+       if (!allowCreate) return null;
+       this.storage.created.put(true);
+@@ -335,7 +343,65 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
+       user_id: this.ctx.id.toString(),
+       source: "gatekeeper",
+     });
+-    return this.#newSessionToken();
++    return this.#newSessionToken(principal);
++  }
++
++  /** Private native RPC, called only by SiteLaunchGateway after server membership verification. */
++  async issueSiteLaunch(input: SiteLaunchInput): Promise<SiteLaunchTicket> {
++    const verified = validateSiteLaunch(this.env, input);
++    const { secret, hash } = await newSecretToken();
++    const expiresAt = Date.now() + SITE_LAUNCH_LIFETIME_MS;
++    this.storage.pendingSiteLaunches.put({ ticketHash: hash, expiresAt,
++      principal: verified.principal, siteContext: verified.site, parentOrigin: verified.parentOrigin });
++    await this.#armHandoffSweep();
++    return { ticket: secret.toHex(), expiresAt };
++  }
++
++  /** A principal is supplied only by AuthenticatedApi's authenticated session provenance. */
++  async redeemSiteLaunch(ticket: string, principal?: VerifiedAuthIdentity): Promise<SiteLaunchRedemption> {
++    if (!principal) throw createSiteLaunchError('site_launch_sign_in_required');
++    const policy = siteLaunchPolicy(this.env);
++    checkSiteLaunchPrincipal(this.env, principal);
++    if (!this.storage.created.get() || this.storage.profile.get().id !== principal.email) throw createSiteLaunchError('site_launch_invalid');
++    const ticketHash = await hashPresentedSecret(ticket);
++    if (!ticketHash) throw createSiteLaunchError('site_launch_invalid');
++    const selected = this.storage.transaction(() => {
++      const pending = this.storage.pendingSiteLaunches.get(ticketHash);
++      if (!pending || !samePrincipal(pending.principal, principal) || !policy.parentOrigins.includes(pending.parentOrigin)) throw createSiteLaunchError('site_launch_invalid');
++      if (pending.expiresAt <= Date.now()) {
++        // Do not roll this deletion back by throwing within the transaction.
++        this.storage.pendingSiteLaunches.delete(ticketHash);
++        return undefined;
++      }
++      this.storage.pendingSiteLaunches.delete(ticketHash);
++      const key = siteWorkspaceKey(principal, pending.siteContext);
++      let reserved = this.storage.siteWorkspaces.get(key);
++      if (reserved && !this.storage.gadgets.get(reserved.workspaceId)) {
++        this.storage.siteWorkspaces.delete(key);
++        reserved = undefined;
++      }
++      if (!reserved) {
++        const workspaceId = this.ctx.exports.OverseerDurableObject.newUniqueId().toString();
++        reserved = { key, workspaceId, siteContext: pending.siteContext };
++        this.storage.gadgets.put({ id: workspaceId, title: pending.siteContext.displayName, created: new Date() });
++        this.storage.siteWorkspaces.put(reserved);
++      }
++      return reserved;
++    });
++    if (!selected) throw createSiteLaunchError('site_launch_expired');
++    const workspace = this.ctx.exports.OverseerDurableObject.get(
++      this.ctx.exports.OverseerDurableObject.idFromString(selected.workspaceId));
++    await workspace.initializeSiteWorkspace(this.ctx.id.toString(), selected.siteContext);
++    return { workspaceId: selected.workspaceId, siteContext: selected.siteContext };
++  }
++
++  /** Only a reservation written by the verified launch flow may initialize a site workspace. */
++  async getSiteWorkspaceContext(workspaceId: string): Promise<SiteContext | null> {
++    if (!this.storage.created.get() || !this.storage.gadgets.get(workspaceId)) return null;
++    for (const entry of this.storage.siteWorkspaces.list()) {
++      if (entry.workspaceId === workspaceId) return entry.siteContext;
++    }
++    return null;
+   }
+ 
+   /** Whether this account has a password set (false for gatekeeper sign-in accounts). */
+@@ -806,6 +872,9 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
+   async deleteGadget(id: string): Promise<void> {
+     this.storage.gadgets.delete(id);
+     this.storage.outputs.byWorkspace.delete(id);
++    for (const entry of this.storage.siteWorkspaces.list()) {
++      if (entry.workspaceId === id) this.storage.siteWorkspaces.delete(entry.key);
++    }
+   }
+ 
+   /**
+@@ -1823,6 +1892,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
+     let next: number | undefined;
+     let consider = (at: number) => { if (next === undefined || at < next) next = at; };
+     for (let flow of this.storage.pendingConnectFlows.list()) consider(flow.expiresAt.getTime());
++    for (let launch of this.storage.pendingSiteLaunches.list()) consider(launch.expiresAt);
+     try {
+       for (let pending of this.storage.pendingHandoffs.list()) consider(pending.expiresAt.getTime());
+     } catch (err) {
+@@ -1848,6 +1918,9 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
+    */
+   async alarm(): Promise<void> {
+     let now = Date.now();
++    for (let launch of this.storage.pendingSiteLaunches.list()) {
++      if (launch.expiresAt <= now) this.storage.pendingSiteLaunches.delete(launch.ticketHash);
++    }
+     let expiredFlows = Array.from(this.storage.pendingConnectFlows.list())
+         .filter(flow => flow.expiresAt.getTime() <= now);
+     for (let flow of expiredFlows) this.storage.pendingConnectFlows.delete(flow.nonceHash);
+diff --git a/packages/workshop-shared/src/api.ts b/packages/workshop-shared/src/api.ts
+index ffbc951..b4cbd69 100644
+--- a/packages/workshop-shared/src/api.ts
++++ b/packages/workshop-shared/src/api.ts
+@@ -27,6 +27,44 @@ import { RpcCompatible, RpcStub, RpcTarget } from "capnweb";
+ import { AccountDescription, ActionKind, ActionDescription, AvatarImage, GatekeeperUiFrame, ObservationDescription, ResourceDescription, ResourceConfiguratorFrame, SupportedResource, VendorDescription, HookDescription } from "./gatekeeper.js";
+ import type { CodeChange } from "./code-change.js";
+ import type { UiFeatureFlags } from "./feature-flags.js";
++import type { VerifiedAuthIdentity } from "./gatekeeper.js";
++
++/** Server-verified site selection. Describes context, never grants resource access. */
++export type SiteContext = {
++  id: string;
++  environment: "production" | "stg" | "dev" | "preview";
++  displayName: string;
++  timezone: string;
++};
++export type SiteLaunchInput = {
++  principal: VerifiedAuthIdentity;
++  site: SiteContext;
++  parentOrigin: string;
++};
++export type SiteLaunchTicket = { ticket: string; expiresAt: number };
++export type SiteLaunchRedemption = { workspaceId: string; siteContext: SiteContext };
++/** Private service-binding contract; never exposed by PublicApi. */
++export interface SiteLaunchGateway {
++  issueSiteLaunch(input: SiteLaunchInput): Promise<SiteLaunchTicket>;
++}
++export type SiteLaunchErrorCode = "site_launch_sign_in_required" | "site_launch_invalid" |
++    "site_launch_expired" | "site_launch_disabled";
++const SITE_LAUNCH_ERROR_CODES = new Set<unknown>([
++  "site_launch_sign_in_required", "site_launch_invalid", "site_launch_expired", "site_launch_disabled",
++]);
++export function createSiteLaunchError(code: SiteLaunchErrorCode): Error & {code: SiteLaunchErrorCode} {
++  return Object.assign(new Error(code), {code});
++}
++/** Exact messages also survive transports which do not preserve custom Error properties. */
++export function getSiteLaunchErrorCode(error: unknown): SiteLaunchErrorCode | undefined {
++  if (typeof error !== "object" || error === null) return undefined;
++  const candidate = error as {code?: unknown; message?: unknown};
++  for (const key of ["code", "message"] as const) {
++    const value = candidate[key];
++    if (SITE_LAUNCH_ERROR_CODES.has(value)) return value as SiteLaunchErrorCode;
++  }
++  return undefined;
++}
+ 
+ export const SERVICE_SALT = new Uint8Array([
+   0xd9, 0x4e, 0x54, 0x1d, 0x29, 0xc1, 0x03, 0x74, 0x73, 0x7e, 0xb3, 0xe3, 0x34, 0x6d, 0x8f, 0x21
+@@ -420,6 +458,8 @@ export type UserDirectoryRecord = {
+ 
+ /** Top-level API exposed to the user after they have authenticated. */
+ export interface AuthenticatedApi extends RpcTarget {
++  /** Redeem a one-use, identity-bound site-context ticket; does not log in or grant MCP access. */
++  redeemSiteLaunch(ticket: string): Promise<SiteLaunchRedemption>;
+   /** Get profile info for the user who is logged in. */
+   whoami(): Promise<AiChatAuthorInfo>;
+ 
+@@ -2344,6 +2384,8 @@ export type AgentSpawnerConfig = {
+  * createGadget()/getGadget()).
+  */
+ export interface Overseer extends RpcTarget {
++  /** Immutable site selection, or null for an ordinary workspace. */
++  getSiteContext(): Promise<SiteContext | null>;
+   /** Get metadata describing this workspace. */
+   getMetadata(): Promise<GadgetMetadata>;
+ 
+diff --git a/packages/workshop-shared/src/gatekeeper.ts b/packages/workshop-shared/src/gatekeeper.ts
+index 148c7b9..8625eea 100644
+--- a/packages/workshop-shared/src/gatekeeper.ts
++++ b/packages/workshop-shared/src/gatekeeper.ts
+@@ -79,6 +79,9 @@ export type VendorDescription = {
+   autoProvisionsAccount?: boolean;
+ }
+ 
++/** Immutable identity verified by the authentication provider, never supplied by a browser. */
++export type VerifiedAuthIdentity = { issuer: string; subject: string; email: string };
++
+ /**
+  * Per-open context the Workshop passes to GatekeeperUser.startAppUi(). `isAdmin` is supplied fresh
+  * each time rather than baked into the account, since a user's admin status can change over time.
+@@ -701,6 +704,9 @@ export interface GatekeeperUser extends WorkerEntrypoint {
+    */
+   getAuthenticatedEmail(): Promise<string | null>;
+ 
++  /** Provider-verified session identity; absent for vendors that authenticate by email only. */
++  getAuthenticatedIdentity?(): Promise<VerifiedAuthIdentity | null>;
++
+   /** Get a `GatekeeperUserVerifier` representing this user. */
+   getVerifier(): Promise<Fetcher<GatekeeperUserVerifier>>;
+ 

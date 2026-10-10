@@ -51,6 +51,39 @@ service binding and the existing runtime's account/model/actor policy remain aut
 Omitting `management`, or setting it to `"user"`, preserves the original per-user setup flow.
 This subscription catalog does not require or emulate a Cloudflare AI Gateway.
 
+## Internal site-aware launch
+
+An authenticated host can embed `/launch` inside its existing site route. Set optional
+`siteLaunch.parentOrigins` to the exact HTTPS host origins, for example
+`{ "parentOrigins": ["https://portal.example.com"] }`. Keep the OS origin unchanged: its
+OAuth callbacks and Context sharing domain continue to use the existing router origin.
+Only the parent origin list reaches the frontend; the issuer and pinned subjects remain server-side.
+
+Bind the host's server to the Workshop's `SiteLaunchGateway` Worker entrypoint. The host must
+authenticate its own user, verify current site membership and administration policy, and issue a
+short-lived context ticket through that private binding. There is no HTTP endpoint for issuing
+tickets. The issuance payload is `{principal: {issuer, subject, email}, site: {id, environment,
+displayName, timezone}, parentOrigin}`. The browser receives an opaque one-use handle to this
+server-side context, not identity claims or a login token.
+The OS redeems it only after its own OIDC login verifies the exact same principal.
+
+The iframe bridge exchanges protocol version 1 messages using exact origins and the parent/iframe
+window identity. `cloud-agent-os:host-init` starts the handshake, `cloud-agent-os:ready` lets the
+host mint a fresh ticket, and `cloud-agent-os:site-launch` carries it in memory. Tickets never belong
+in URLs or browser storage. Each owner receives a separate workspace for each environment/site;
+returning to a site resumes that workspace and preserves existing standalone history. The trusted
+site name, ID, environment and timezone become workspace context for ordinary and spawned agents.
+Site workspaces omit automatic deployment-wide Context attachments and reject sharing/invites.
+The launched iframe keeps its verified workspace selection in memory and prevents Home/history or
+other workspace routes from replacing that site. Account-wide settings have an explicit return to
+the site; standalone OS navigation is preserved. A document reload starts a fresh launch handshake.
+
+This establishes site awareness and conversation separation. It does not grant an MCP connection,
+authorize business data or prevent the owner from opening their other saved workspaces. Each data
+service must still check current membership and tool grants. Existing OS sessions made before
+verified subjects were stored continue to work, but the first internal site launch requires ordinary
+OIDC sign-in again. Omitting `siteLaunch` keeps the launch feature disabled.
+
 MCP is opt-in deployment configuration. It installs the upstream connector; it does not
 automatically connect a server or grant tools. For a read-only pilot, authorize only the intended
 server/scopes and bind specific read tools. Do not assume an MCP server's full catalog is read-only.
@@ -102,7 +135,9 @@ locked dependencies. It runs upstream's uncached Context, frontend, router and b
 and the MCP library/configurator builds when enabled. `--check` also drives the OIDC Worker/DO flow
 under Miniflare, runs the MCP account OAuth regression suite, and tests model configuration,
 admin-managed subscription authorization, restored-user identity, model preferences and the
-selection-only UI alongside the existing Gateway behavior.
+selection-only UI alongside the existing Gateway behavior. Site launch checks cover one-use
+identity-bound tickets, workspace ownership and agent context, iframe handshakes, scoped
+navigation, reload and workspace recovery.
 Generated Wrangler files preserve upstream build
 rules and DO migrations, and are deleted when the build or deployment exits. `--check` packages
 Workers with Wrangler `--dry-run`; it does not create cloud resources or verify a real login.

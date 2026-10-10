@@ -83,6 +83,40 @@ test('cold builds produce typed-storage runtime exports before checking consumer
   }
 });
 
+test('site launch is opt-in and leaves existing storage, auth and connector policy unchanged', () => {
+  const baseline = generateConfigs(example, bases);
+  assert.equal(baseline.workshop.vars.SITE_LAUNCH_ISSUER, undefined);
+  const enabled = structuredClone(example);
+  enabled.siteLaunch = { parentOrigins: ['https://portal.example.com'] };
+  const generated = generateConfigs(enabled, bases);
+  assert.equal(generated.workshop.vars.SITE_LAUNCH_ISSUER, example.auth.issuer);
+  assert.deepEqual(JSON.parse(generated.workshop.vars.SITE_LAUNCH_IDENTITIES), example.auth.allowedIdentities);
+  assert.deepEqual(JSON.parse(generated.workshop.vars.SITE_LAUNCH_PARENT_ORIGINS), enabled.siteLaunch.parentOrigins);
+  for (const key of ['SITE_LAUNCH_ISSUER', 'SITE_LAUNCH_IDENTITIES', 'SITE_LAUNCH_PARENT_ORIGINS']) {
+    delete generated.workshop.vars[key];
+  }
+  assert.deepEqual(generated, baseline);
+  const frontendEnv = buildCommands(enabled).find(step => step.env.VITE_CF_ACCESS_MODE).env;
+  assert.deepEqual(JSON.parse(frontendEnv.VITE_SITE_LAUNCH_PARENT_ORIGINS), enabled.siteLaunch.parentOrigins);
+  assert(!JSON.stringify(frontendEnv).includes(example.auth.allowedIdentities[0].subject));
+  assert(!JSON.stringify(frontendEnv).includes(example.auth.allowedIdentities[0].email));
+  assert.equal(buildCommands(example).find(step => step.env.VITE_CF_ACCESS_MODE).env.VITE_SITE_LAUNCH_PARENT_ORIGINS, '[]');
+});
+
+test('site launch accepts only a bounded unique list of canonical HTTPS parent origins', () => {
+  for (const parentOrigins of [[], Array(11).fill('https://portal.example.com'),
+    ['https://portal.example.com', 'https://portal.example.com'], ['http://portal.example.com'],
+    ['https://portal.example.com/'], ['https://portal.example.com/site'], ['https://portal.example.com?x=1'],
+    ['https://portal.example.com#fragment'], ['https://user:pass@portal.example.com'],
+    ['https://portal.example.com:443'], ['https://portal.example.com:8443'],
+    ['https://portal.example.workers.dev'], ['https://workers.dev'], ['https://PORTAL.example.com'], '*', null]) {
+    assert.throws(() => parseDeployment({ ...example, siteLaunch: { parentOrigins } }));
+  }
+  assert.throws(() => parseDeployment({ ...example, siteLaunch: { parentOrigins: ['https://portal.example.com'], issuer: example.auth.issuer } }));
+  assert.deepEqual(parseDeployment({ ...example, siteLaunch: { parentOrigins: ['https://portal.example.com', 'https://admin.example.com'] } }).siteLaunch.parentOrigins,
+    ['https://portal.example.com', 'https://admin.example.com']);
+});
+
 test('connect links and OAuth callbacks stay on the router origin for every deployment', () => {
   const candidate = structuredClone(example);
   candidate.origin = 'https://pilot.example.net';

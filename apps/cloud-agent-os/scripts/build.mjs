@@ -56,7 +56,8 @@ try {
           cwd: join(checkout, 'packages/mcp-shared'),
         });
         run('pnpm', ['exec', 'vitest', 'run', '__tests__/subscription-models.test.ts',
-          '__tests__/user-models.test.ts', '__tests__/admin-settings-models.test.ts'], {
+          '__tests__/user-models.test.ts', '__tests__/admin-settings-models.test.ts',
+          '__tests__/site-launch.test.ts', '__tests__/site-launch-agent.test.ts'], {
           cwd: join(checkout, packages.workshop),
         });
         run('pnpm', ['exec', 'vitest', 'run', 'src/AddModelModal.test.tsx',
@@ -64,7 +65,15 @@ try {
           'src/features/ai-models/AdminModelsPanel.subscription.test.tsx',
           'src/routes/-providers.test.tsx', 'src/OnboardingWizard.test.tsx',
           'src/BlueprintLandingPage.test.tsx',
-          'src/features/chat/composer/ComposerModelSelector.test.tsx', 'src/homePromptFlow.test.tsx'], {
+          'src/features/chat/composer/ComposerModelSelector.test.tsx', 'src/homePromptFlow.test.tsx',
+          'src/features/site-launch/siteLaunch.test.ts',
+          'src/features/site-launch/SiteLaunchPage.test.tsx',
+          'src/features/site-launch/WorkspaceSiteContext.test.tsx',
+          'src/features/site-launch/SiteLaunchScope.test.tsx',
+          'src/features/site-launch/SiteLaunchRoot.test.tsx',
+          'src/features/site-launch/workspaceExit.test.ts',
+          'src/rootRoute.test.tsx', 'src/components/WorkspaceOpenErrorPage.test.tsx',
+          'src/GadgetEditor.blueprintUpdate.test.tsx'], {
           cwd: join(checkout, 'packages/workshop-frontend'),
         });
       }

@@ -4,7 +4,8 @@ import { generateNonce, OAUTH_NONCE_LIFETIME_MS } from "@gadgets/gatekeeper-kit/
 import { createPkce, OAuthResponseError } from "@gadgets/gatekeeper-kit/oauth-client";
 import { connectHandoffPageHtml, htmlResponse } from "@gadgets/gatekeeper-kit/connect-pages";
 import type { AccountDescription, ConnectHandoff, GatekeeperConnectCallback, GatekeeperConnectOptions,
-  GatekeeperUser, GatekeeperVendor as Vendor, SupportedResource, VendorDescription } from "@gadgets/workshop-shared/gatekeeper";
+  GatekeeperUser, GatekeeperVendor as Vendor, SupportedResource, VendorDescription,
+  VerifiedAuthIdentity } from "@gadgets/workshop-shared/gatekeeper";
 import { allowedIdentity, configuration, discover, oauthClient, signInFailure, SignInError, verifyIdentity,
   type Env, type SignInCode, type SignInFailure, type SignInResult, type VerifiedIdentity } from "./oidc";
 
@@ -108,6 +109,14 @@ export class OidcLogin extends DurableObject<Env> {
     const identity = this.ctx.storage.kv.get<VerifiedIdentity>("identity");
     return identity && allowedIdentity(configuration(this.env), identity) ? identity.email : null;
   }
+  /** The verified login identity exists only until handoff cleanup and remains subject to its pins and expiry. */
+  async authenticatedIdentity(): Promise<VerifiedAuthIdentity | null> {
+    const identity = this.ctx.storage.kv.get<VerifiedIdentity>("identity");
+    if (!identity) return null;
+    const config = configuration(this.env);
+    return allowedIdentity(config, identity)
+      ? { issuer: config.issuer, subject: identity.subject, email: identity.email } : null;
+  }
   async clear(): Promise<void> { await this.ctx.storage.deleteAll(); await this.ctx.storage.deleteAlarm(); }
   async alarm(): Promise<void> { await this.clear(); }
 }
@@ -116,6 +125,10 @@ export class GatekeeperUserImpl extends WorkerEntrypoint<Env, { loginId: string 
   private account() { return this.ctx.exports.OidcLogin.get(this.ctx.exports.OidcLogin.idFromString(this.ctx.props.loginId)); }
   async getAuthenticatedEmail(): Promise<string | null> {
     try { return await this.account().email(); } catch { return null; }
+  }
+  /** Read the current verified login identity before handoff clears the transient account. */
+  async getAuthenticatedIdentity(): Promise<VerifiedAuthIdentity | null> {
+    try { return await this.account().authenticatedIdentity(); } catch { return null; }
   }
   async describe(): Promise<AccountDescription> {
     return { displayName: "Temporary sign-in", avatar: { url: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E" } };
