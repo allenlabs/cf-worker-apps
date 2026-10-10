@@ -66,6 +66,17 @@ function errorMessage(model, aborted) {
 }
 
 // Explicit projection: provider diagnostics can contain identifiers and must never be logged wholesale.
+function credentialExpiry(token, now = Date.now()) {
+  try {
+    if (typeof token !== "string" || token.length > 32768) return "unavailable";
+    const parts = token.split(".");
+    if (parts.length !== 3) return "unavailable";
+    const claims = JSON.parse(atob(parts[1].replaceAll("-", "+").replaceAll("_", "/")));
+    const expiry = claims?.exp;
+    return typeof expiry === "number" && Number.isFinite(expiry * 1000) ? expiry * 1000 > now ? "future" : "expired" : "unavailable";
+  } catch { return "unavailable"; }
+}
+
 function htmlDiagnostic(markers) {
   const marker = value => Array.isArray(markers) ? markers.includes(value) : null;
   return {
@@ -76,13 +87,16 @@ function htmlDiagnostic(markers) {
   };
 }
 
-function terminalDiagnostic({ credentialAccessFailed, fetchAttempted, responseReceived, response, request, payload }) {
+function terminalDiagnostic({ credentialAccessFailed, fetchAttempted, responseReceived, response, request, payload, credentialExpiry, responseMetadata }) {
   const boolean = value => typeof value === "boolean" ? value : null;
   const category = ["upstream_blocked", "permission_denied", "invalid_response", "success", "auth_required", "rate_limited", "upstream_error"].includes(response?.category) ? response.category : null;
   const contentType = ["json", "html", "sse", "other", "missing"].includes(response?.contentType) ? response.contentType : null;
   return {
     phase: credentialAccessFailed ? "credential" : !fetchAttempted ? "provider_setup" : responseReceived ? "response" : "fetch",
     credentialAccessFailed, fetchAttempted, responseReceived,
+    credentialExpiry: ["future", "expired", "unavailable"].includes(credentialExpiry) ? credentialExpiry : null,
+    responseEdgeColo: typeof responseMetadata?.edgeColo === "string" && /^[A-Z]{3}$/.test(responseMetadata.edgeColo) ? responseMetadata.edgeColo : null,
+    responseServer: ["cloudflare", "nginx", "envoy", "other", "missing"].includes(responseMetadata?.server) ? responseMetadata.server : null,
     status: Number.isInteger(response?.status) && response.status >= 100 && response.status <= 599 ? response.status : null,
     category, contentType, challenge: boolean(response?.challenge),
     responseRedirected: boolean(response?.redirected), responseFinalEndpointExpected: boolean(response?.expectedFinalEndpoint),
@@ -128,7 +142,11 @@ export class CloudAgentInference extends WorkerEntrypoint {
     const models = createModels();
     const observed = { credentialAccessFailed: false, fetchAttempted: false, responseReceived: false };
     const credentialFacade = { async codexAccess() {
-      try { return await credentials.codexAccess(); }
+      try {
+        const credential = await credentials.codexAccess();
+        observed.credentialExpiry = credentialExpiry(credential?.access);
+        return credential;
+      }
       catch (error) { observed.credentialAccessFailed = true; throw error; }
     } };
     installSubscriptionModels(models, () => credentialFacade, undefined, diagnostic => {
@@ -151,6 +169,7 @@ export class CloudAgentInference extends WorkerEntrypoint {
         observed.fetchAttempted = true;
         observed.responseReceived = false;
         observed.response = undefined;
+        observed.responseMetadata = undefined;
         observed.request = undefined;
         if (configured.requestEncoding === "identity") {
           if (typeof identityBody !== "string") fail("inference_bridge_payload_unavailable");
@@ -161,6 +180,11 @@ export class CloudAgentInference extends WorkerEntrypoint {
         try { observed.request = codexRequestShape(args[0], args[1], model.id); } catch { /* Observation cannot change transport. */ }
         const response = await globalThis.fetch(...args);
         observed.responseReceived = true;
+        try {
+          const edgeColo = response.headers.get("cf-ray")?.match(/-([A-Z]{3})$/)?.[1] ?? null;
+          const server = response.headers.get("server")?.trim().toLowerCase();
+          observed.responseMetadata = { edgeColo, server: server == null ? "missing" : ["cloudflare", "nginx", "envoy"].includes(server) ? server : "other" };
+        } catch { /* Observation cannot change provider behavior. */ }
         return response;
       },
       onPayload: body => {

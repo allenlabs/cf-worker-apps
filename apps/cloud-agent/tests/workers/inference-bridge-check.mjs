@@ -16,7 +16,7 @@ const access = "e30." + Buffer.from(JSON.stringify({ "https://api.openai.com/aut
 const source = join(app, "workers/pi/inference-entrypoint.js");
 const adapter = join(root, "apps/cloud-agent-os/overlay/packages/workshop-backend/src/cloud-agent-model.ts");
 await writeFile(join(work, "server.js"), `import {DurableObject,WorkerEntrypoint} from 'cloudflare:workers';
-import {CloudAgentInference,terminalDiagnostic} from ${JSON.stringify(source)};
+import {CloudAgentInference,terminalDiagnostic,credentialExpiry} from ${JSON.stringify(source)};
 import {createModels} from '@earendil-works/pi-ai/models';
 import {installSubscriptionModels} from ${JSON.stringify(join(app, "workers/pi/subscription-models.js"))};
 export {CloudAgentInference};
@@ -32,6 +32,7 @@ export class Probe extends WorkerEntrypoint {
  credentialCalls(){return globalThis.fixtureCredentialCalls??0;}
  async native(context){const models=createModels();installSubscriptionModels(models,async()=>({async codexAccess(){return {access:${JSON.stringify(access)}};}}));const events=models.streamSimple(models.getModel('openai-codex',${JSON.stringify(model)}),context,{reasoning:'low',signal:AbortSignal.timeout(3000)});for await(const event of events){}return events.result();}
  projectDiagnostic(value){return terminalDiagnostic(value);}
+ checkExpiry(value){return credentialExpiry(value,1000000);}
  fetchAttempts(){return globalThis.fixtureFetchAttempts??0;}
  configure({mode='normal',observerThrows=false,responseMetadata={},retryLimit}={}){globalThis.fixtureCredentialMode=mode;globalThis.fixtureObserverThrows=observerThrows;globalThis.fixtureResponseMetadata=responseMetadata;globalThis.fixtureRetryLimit=retryLimit;globalThis.fixtureFetchAttempts=0;globalThis.fixtureDiagnostics=[];}
 }
@@ -54,6 +55,7 @@ export default {async fetch(request,env){
   if(input.credentialCalls)return Response.json({count:await env.PROBE.credentialCalls()});
   if(input.nativeProvider)return Response.json(await env.PROBE.native(input.context));
   if(input.projectDiagnostic)return Response.json(await env.PROBE.projectDiagnostic(input.projectDiagnostic));
+  if(input.checkExpiry)return Response.json({expiry:await env.PROBE.checkExpiry(input.checkExpiry.token)});
   if(input.fetchAttempts)return Response.json({count:await env.PROBE.fetchAttempts()});
   if(input.configure){await env.PROBE.configure(input.configure);return Response.json({ok:true});}
   const context=input.context??{messages:[{role:'user',content:input.prompt??'hello',timestamp:1}],tools:input.tools};
@@ -74,7 +76,7 @@ const bundle = async (file, piDirectory) => build({
       path: join(piDirectory, "dist", (args.path.slice("@earendil-works/pi-ai/".length) || "index") + ".js")
     }));
     builder.onLoad({ filter: /inference-entrypoint\.js$/ }, async args => ({
-      contents: (await readFile(args.path, "utf8")).replace("function terminalDiagnostic(", "export function terminalDiagnostic(").replace("...input.options, maxTokens:", "...input.options, maxRetries: globalThis.fixtureRetryLimit, maxTokens:").replace("onPayload: body => {", "onPayload: body => { globalThis.fixturePayload=JSON.stringify(body);").replace("const iterator = models.streamSimple", "abort.signal.addEventListener('abort',()=>globalThis.fixtureProviderAborts=(globalThis.fixtureProviderAborts??0)+1,{once:true}); const iterator = models.streamSimple"), loader: "js"
+      contents: (await readFile(args.path, "utf8")).replace("function terminalDiagnostic(", "export function terminalDiagnostic(").replace("function credentialExpiry(", "export function credentialExpiry(").replace("...input.options, maxTokens:", "...input.options, maxRetries: globalThis.fixtureRetryLimit, maxTokens:").replace("onPayload: body => {", "onPayload: body => { globalThis.fixturePayload=JSON.stringify(body);").replace("const iterator = models.streamSimple", "abort.signal.addEventListener('abort',()=>globalThis.fixtureProviderAborts=(globalThis.fixtureProviderAborts??0)+1,{once:true}); const iterator = models.streamSimple"), loader: "js"
     }));
   } }]
 });
@@ -92,7 +94,7 @@ const outbound = async request => {
   lastNative = body;
   assert.equal(body.model, model);
   seenToolOutput ||= body.input.some(item => item.type === "function_call_output" && item.output.includes("READ_ONLY_OK"));
-  if (JSON.stringify(body).includes("provider_denial")) return new Response("secret raw provider failure", { status: 403, headers: { "content-type": "application/json", "x-request-id": "PRIVATE-request-id", "cf-ray": "PRIVATE-ray-id" } });
+  if (JSON.stringify(body).includes("provider_denial")) return new Response("secret raw provider failure", { status: 403, headers: { "content-type": "application/json", "x-request-id": "PRIVATE-request-id", "cf-ray": "PRIVATE-ray-id-HKG", "server":"cloudflare" } });
   if (JSON.stringify(body).includes("provider_challenge")) return new Response("<!doctype html><html><title>Just a moment...</title><body>PRIVATE provider html fixture@example.invalid</body></html>", { status: 403, headers: { "content-type": "text/html", "cf-mitigated": "challenge", "x-request-id": "PRIVATE-request-id", "cf-ray": "PRIVATE-ray-id", "set-cookie": "PRIVATE-cookie" } });
   if (JSON.stringify(body).includes("provider_cf_details")) return new Response('<!doctype html><html><title>Attention Required! | Cloudflare</title><body><div id="cf-error-details"><span class="cf-error-code">1020</span><span class="cf-error-code">1009</span><span class="cf-error-code">1015</span>Sorry, you have been blocked</div>PRIVATE https://PRIVATE.invalid/PRIVATE fixture@example.invalid</body></html>' + "x".repeat(66000), { status: 403, headers: { "content-type": "text/html", "cf-error-type": "1020", "cf-error-origin": "PRIVATE-origin", "x-request-id": "PRIVATE-request-id", "cf-ray": "PRIVATE-ray-id" } });
   if (JSON.stringify(body).includes("provider_unknown_html")) return new Response('<html><title>PRIVATE unknown template</title><body><div id="PRIVATE-marker">PRIVATE body</div><!-- <title>Attention Required! | Cloudflare</title> --><script>"cf-error-details";"Sorry, you have been blocked"</script></body></html>', { status: 502, headers: { "content-type": "text/html", "cf-error-type": "PRIVATE-unknown-code", "cf-error-origin": "PRIVATE-origin" } });
@@ -126,7 +128,7 @@ const mf = new Miniflare(convertV4MiniflareOptions({ workers: [client, server] }
 const invoke = async input => { const response = await mf.dispatchFetch("https://fixture.invalid", { method: "POST", body: JSON.stringify(input) }); return { status: response.status, data: await response.json() }; };
 const wire = changes => ({ version: 1, requestId: crypto.randomUUID(), userId: user, context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] }, options: {}, ...changes });
 const htmlKeys = ["htmlAttentionRequired", "htmlJustAMoment", "htmlErrorDetails", "htmlErrorCode", "htmlCode1020", "htmlCode1009", "htmlCode1015", "htmlBlockedPhrase"];
-const diagnosticKeys = ["phase", "credentialAccessFailed", "fetchAttempted", "responseReceived", "status", "category", "contentType", "challenge", "requestEndpointExpected", "requestAuthorizationPresent", "requestAccountPresent", "requestContentTypePresent", "requestAcceptPresent", "payloadStoreFalse", "payloadStreamTrue", "payloadInputArray", "payloadToolSchemaValid", "responseRedirected", "responseFinalEndpointExpected", "requestWireEncoding", "requestWireKind", "requestWireByteLength", "cfErrorType", "cfErrorOriginPresent", ...htmlKeys, "htmlTruncated"].sort();
+const diagnosticKeys = ["phase", "credentialAccessFailed", "fetchAttempted", "responseReceived", "status", "category", "contentType", "challenge", "requestEndpointExpected", "requestAuthorizationPresent", "requestAccountPresent", "requestContentTypePresent", "requestAcceptPresent", "payloadStoreFalse", "payloadStreamTrue", "payloadInputArray", "payloadToolSchemaValid", "responseRedirected", "responseFinalEndpointExpected", "requestWireEncoding", "requestWireKind", "requestWireByteLength", "credentialExpiry", "responseEdgeColo", "responseServer", "cfErrorType", "cfErrorOriginPresent", ...htmlKeys, "htmlTruncated"].sort();
 const checkDiagnostic = async expected => {
   const logs = (await invoke({ diagnostics: true })).data;
   assert.equal(logs.length, 1, "one terminal diagnostic per provider failure");
@@ -192,7 +194,7 @@ try {
   assert.equal(denied.data.result.errorMessage, "inference_bridge_provider_error");
   assert(!JSON.stringify(denied.data).includes("secret raw provider failure"));
   assert.equal(calls, beforeProviderDenial + 1, "403 is not retried under either encoding");
-  await checkDiagnostic({ phase: "response", credentialAccessFailed: false, fetchAttempted: true, responseReceived: true, status: 403, category: "permission_denied", contentType: "json", challenge: false, requestEndpointExpected: true, requestAuthorizationPresent: true, requestAccountPresent: true, requestContentTypePresent: true, requestAcceptPresent: true, payloadStoreFalse: true, payloadStreamTrue: true, payloadInputArray: true, payloadToolSchemaValid: true, requestWireEncoding: lastWire.encoding, requestWireKind: lastWire.encoding === "zstd" ? "bytes" : "string", requestWireByteLength: lastWire.byteLength, responseRedirected: false, responseFinalEndpointExpected: true, cfErrorType: null, cfErrorOriginPresent: false, ...Object.fromEntries(htmlKeys.map(key => [key, null])), htmlTruncated: null });
+  await checkDiagnostic({ credentialExpiry:"unavailable",responseEdgeColo:"HKG",responseServer:"cloudflare",phase: "response", credentialAccessFailed: false, fetchAttempted: true, responseReceived: true, status: 403, category: "permission_denied", contentType: "json", challenge: false, requestEndpointExpected: true, requestAuthorizationPresent: true, requestAccountPresent: true, requestContentTypePresent: true, requestAcceptPresent: true, payloadStoreFalse: true, payloadStreamTrue: true, payloadInputArray: true, payloadToolSchemaValid: true, requestWireEncoding: lastWire.encoding, requestWireKind: lastWire.encoding === "zstd" ? "bytes" : "string", requestWireByteLength: lastWire.byteLength, responseRedirected: false, responseFinalEndpointExpected: true, cfErrorType: null, cfErrorOriginPresent: false, ...Object.fromEntries(htmlKeys.map(key => [key, null])), htmlTruncated: null });
   for (const cancelBeforeHTTP of [false, true]) {
     await invoke({ configure: { mode: "held_credential_failure" } });
     const before = calls;
@@ -234,6 +236,16 @@ try {
   const baseObservation = { credentialAccessFailed: false, fetchAttempted: true, responseReceived: true };
   const projected = (await invoke({ projectDiagnostic: { ...baseObservation, request: { wire: { encoding: "PRIVATE-encoding", kind: "PRIVATE-kind", byteLength: 16777217 }, attemptId: "PRIVATE-id" }, response: { category: "PRIVATE-category", contentType: "PRIVATE-type", status: 999, redirected: "PRIVATE-boolean", expectedFinalEndpoint: "PRIVATE-url", cfErrorType: "PRIVATE-code", cfErrorOriginPresent: "PRIVATE-origin", htmlTruncated: "PRIVATE-boolean", ...Object.fromEntries(htmlKeys.map(key => [key, "PRIVATE-marker"])) } } })).data;
   assert.deepEqual(projected, { phase: "response", ...baseObservation, ...unobserved }, "untrusted diagnostic values collapse to fixed null fields");
+  for (const [claim, expected] of [[1001,"future"],[1000,"expired"],[999,"expired"],["PRIVATE-expiry","unavailable"],[null,"unavailable"],[Number.MAX_VALUE,"unavailable"]]) {
+    const token="e30."+Buffer.from(JSON.stringify({exp:claim,sub:"PRIVATE-subject"})).toString("base64url")+".PRIVATE-signature";
+    assert.equal((await invoke({checkExpiry:{token}})).data.expiry,expected);
+  }
+  for (const token of ["PRIVATE-token","a.b.c.d","e30.bm90LWpzb24.signature"]) assert.equal((await invoke({checkExpiry:{token}})).data.expiry,"unavailable");
+  for (const [edgeColo,server,expectedColo,expectedServer] of [["HKG","cloudflare","HKG","cloudflare"],["LAX","nginx","LAX","nginx"],["NRT","envoy","NRT","envoy"],["PRIVATE-colo","nginx/PRIVATE-version",null,null],["HK","PRIVATE-server",null,null],["hkG","other",null,"other"],["HKG PRIVATE","missing",null,"missing"]]) {
+    const record=(await invoke({projectDiagnostic:{...baseObservation,responseMetadata:{edgeColo,server},credentialExpiry:"future"}})).data;
+    assert.equal(record.responseEdgeColo,expectedColo);assert.equal(record.responseServer,expectedServer);assert.equal(record.credentialExpiry,"future");
+    assert(!JSON.stringify(record).includes("PRIVATE"));
+  }
   for (const [byteLength, expected] of [[0, 0], [16777216, 16777216], [-1, null], [1.5, null], ["PRIVATE-bytes", null], [null, null]]) {
     const record = (await invoke({ projectDiagnostic: { ...baseObservation, request: { wire: { encoding: "identity", kind: "string", byteLength } } } })).data;
     assert.equal(record.requestWireByteLength, expected, "wire byte length has a fixed diagnostic bound");

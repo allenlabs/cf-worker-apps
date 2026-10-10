@@ -50,6 +50,9 @@ For a non-aborted provider error, the bridge emits one `console.warn` with the f
 | --- | --- |
 | `phase` | `credential`, `provider_setup`, `fetch`, or `response` |
 | `credentialAccessFailed`, `fetchAttempted`, `responseReceived` | Booleans |
+| `credentialExpiry` | `future`, `expired`, `unavailable`, or `null` before lookup; an unverified JWT expiry claim compared only with Worker time |
+| `responseEdgeColo` | Only a three-uppercase-letter terminal `cf-ray` suffix, or `null`; never the ray identifier |
+| `responseServer` | `cloudflare`, `nginx`, `envoy`, `other`, `missing`, or `null`; server versions and raw header values are excluded |
 | `status` | Observed HTTP status (100–599), or `null` |
 | `category` | `upstream_blocked`, `permission_denied`, `invalid_response`, `success`, `auth_required`, `rate_limited`, `upstream_error`, or `null` |
 | `contentType` | `json`, `html`, `sse`, `other`, `missing`, or `null` |
@@ -64,6 +67,8 @@ For a non-aborted provider error, the bridge emits one `console.warn` with the f
 | `requestWireKind` | `string`, `bytes`, `stream`, `other`, or `null` |
 | `requestWireByteLength` | Observed safe integer byte length from 0 through 16 MiB, or `null` when unavailable or outside that diagnostic bound |
 | `payloadStoreFalse`, `payloadStreamTrue`, `payloadInputArray`, `payloadToolSchemaValid` | Shape booleans, or `null` when unobserved |
+
+The added expiry projection reads only the exact credential already returned by the normal credential accessor; it performs no extra lookup or refresh. A future expiry claim does not verify signature, audience, revocation or model entitlement. The upstream edge suffix identifies an observed response edge, not a proven Worker execution region or geographic block.
 
 The record excludes identities, account IDs, request IDs, tokens, header values, prompts, tool definitions, response bodies, and raw error messages. It is projected from existing provider observations rather than serializing provider diagnostics. Successful calls, cancellation, input rejection, and bridge framing failures do not emit this provider diagnostic. A logging failure cannot change the stream or its public error codes.
 
