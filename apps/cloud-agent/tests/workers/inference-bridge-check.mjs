@@ -17,14 +17,20 @@ const source = join(app, "workers/pi/inference-entrypoint.js");
 const adapter = join(root, "apps/cloud-agent-os/overlay/packages/workshop-backend/src/cloud-agent-model.ts");
 await writeFile(join(work, "server.js"), `import {DurableObject,WorkerEntrypoint} from 'cloudflare:workers';
 import {CloudAgentInference,terminalDiagnostic} from ${JSON.stringify(source)};
+import {createModels} from '@earendil-works/pi-ai/models';
+import {installSubscriptionModels} from ${JSON.stringify(join(app, "workers/pi/subscription-models.js"))};
 export {CloudAgentInference};
 const originalWarn=console.warn.bind(console);
 console.warn=(...args)=>{if(args[0]==='inference_bridge_diagnostic'){globalThis.fixtureDiagnostics??=[];globalThis.fixtureDiagnostics.push(args);if(globalThis.fixtureObserverThrows)throw Error('PRIVATE observer failure');return;}originalWarn(...args);};
 const originalFetch=globalThis.fetch.bind(globalThis);
-globalThis.fetch=async(...args)=>{globalThis.fixtureFetchAttempts=(globalThis.fixtureFetchAttempts??0)+1;if(globalThis.fixtureCredentialMode==='fetch_failure'||globalThis.fixtureCredentialMode==='retry_fetch_failure'&&globalThis.fixtureFetchAttempts>1)throw Error('PRIVATE fetch failure');if(globalThis.fixtureCredentialMode==='fetch_html_failure')throw Error('<html><body>PRIVATE fetch failure</body></html>');const response=await originalFetch(...args);for(const field of ['redirected','url'])if(Object.hasOwn(globalThis.fixtureResponseMetadata??{},field))Object.defineProperty(response,field,{value:globalThis.fixtureResponseMetadata[field]});return response;};
+globalThis.fetch=async(...args)=>{globalThis.fixtureFetchAttempts=(globalThis.fixtureFetchAttempts??0)+1;globalThis.fixtureFetchHeaders=Object.fromEntries(new Headers(args[1]?.headers));if(globalThis.fixtureCredentialMode==='fetch_failure'||globalThis.fixtureCredentialMode==='retry_fetch_failure'&&globalThis.fixtureFetchAttempts>1)throw Error('PRIVATE fetch failure');if(globalThis.fixtureCredentialMode==='fetch_html_failure')throw Error('<html><body>PRIVATE fetch failure</body></html>');const response=await originalFetch(...args);for(const field of ['redirected','url'])if(Object.hasOwn(globalThis.fixtureResponseMetadata??{},field))Object.defineProperty(response,field,{value:globalThis.fixtureResponseMetadata[field]});return response;};
 export class Probe extends WorkerEntrypoint {
  signalCount(){return globalThis.fixtureProviderAborts??0;}
  diagnostics(){return globalThis.fixtureDiagnostics??[];}
+ payload(){return globalThis.fixturePayload;}
+ requestHeaders(){return globalThis.fixtureFetchHeaders;}
+ credentialCalls(){return globalThis.fixtureCredentialCalls??0;}
+ async native(context){const models=createModels();installSubscriptionModels(models,async()=>({async codexAccess(){return {access:${JSON.stringify(access)}};}}));const events=models.streamSimple(models.getModel('openai-codex',${JSON.stringify(model)}),context,{reasoning:'low',signal:AbortSignal.timeout(3000)});for await(const event of events){}return events.result();}
  projectDiagnostic(value){return terminalDiagnostic(value);}
  fetchAttempts(){return globalThis.fixtureFetchAttempts??0;}
  configure({mode='normal',observerThrows=false,responseMetadata={},retryLimit}={}){globalThis.fixtureCredentialMode=mode;globalThis.fixtureObserverThrows=observerThrows;globalThis.fixtureResponseMetadata=responseMetadata;globalThis.fixtureRetryLimit=retryLimit;globalThis.fixtureFetchAttempts=0;globalThis.fixtureDiagnostics=[];}
@@ -34,7 +40,7 @@ export class Faults extends WorkerEntrypoint {
  infer(input){const prompt=input.context.messages[0].content;return new ReadableStream({type:'bytes',start(c){c.enqueue(prompt==='invalid_utf8'?new Uint8Array([255]):new TextEncoder().encode(prompt==='oversized'?'x'.repeat(600000):'{"version":2}\\n'));c.close();}});}
 }
 export class Credentials extends DurableObject {
- async status(){return {provider:'codex',inferenceReady:true};}
+ async status(){globalThis.fixtureCredentialCalls=(globalThis.fixtureCredentialCalls??0)+1;return {provider:'codex',inferenceReady:true};}
  async codexAccess(){if(globalThis.fixtureCredentialMode==='held_credential_failure'){await new Promise(resolve=>setTimeout(resolve,3500));throw Error('PRIVATE held credential failure');}if(globalThis.fixtureCredentialMode==='credential_failure')throw Error('PRIVATE credential failure');return {access:globalThis.fixtureCredentialMode==='setup_failure'?'PRIVATE invalid credential':${JSON.stringify(access)}};}
 }`);
 await writeFile(join(work, "client.ts"), `import {cloudAgentModel} from ${JSON.stringify(adapter)};
@@ -43,6 +49,10 @@ export default {async fetch(request,env){
   const input=await request.json();
   if(input.signalCount)return Response.json({count:await env.PROBE.signalCount()});
   if(input.diagnostics)return Response.json(await env.PROBE.diagnostics());
+  if(input.payload)return Response.json(await env.PROBE.payload());
+  if(input.requestHeaders)return Response.json(await env.PROBE.requestHeaders());
+  if(input.credentialCalls)return Response.json({count:await env.PROBE.credentialCalls()});
+  if(input.nativeProvider)return Response.json(await env.PROBE.native(input.context));
   if(input.projectDiagnostic)return Response.json(await env.PROBE.projectDiagnostic(input.projectDiagnostic));
   if(input.fetchAttempts)return Response.json({count:await env.PROBE.fetchAttempts()});
   if(input.configure){await env.PROBE.configure(input.configure);return Response.json({ok:true});}
@@ -64,7 +74,7 @@ const bundle = async (file, piDirectory) => build({
       path: join(piDirectory, "dist", (args.path.slice("@earendil-works/pi-ai/".length) || "index") + ".js")
     }));
     builder.onLoad({ filter: /inference-entrypoint\.js$/ }, async args => ({
-      contents: (await readFile(args.path, "utf8")).replace("function terminalDiagnostic(", "export function terminalDiagnostic(").replace("...input.options, maxTokens:", "...input.options, maxRetries: globalThis.fixtureRetryLimit, maxTokens:").replace("const iterator = models.streamSimple", "abort.signal.addEventListener('abort',()=>globalThis.fixtureProviderAborts=(globalThis.fixtureProviderAborts??0)+1,{once:true}); const iterator = models.streamSimple"), loader: "js"
+      contents: (await readFile(args.path, "utf8")).replace("function terminalDiagnostic(", "export function terminalDiagnostic(").replace("...input.options, maxTokens:", "...input.options, maxRetries: globalThis.fixtureRetryLimit, maxTokens:").replace("onPayload: body => {", "onPayload: body => { globalThis.fixturePayload=JSON.stringify(body);").replace("const iterator = models.streamSimple", "abort.signal.addEventListener('abort',()=>globalThis.fixtureProviderAborts=(globalThis.fixtureProviderAborts??0)+1,{once:true}); const iterator = models.streamSimple"), loader: "js"
     }));
   } }]
 });
@@ -77,8 +87,8 @@ const outbound = async request => {
   assert.equal(request.url, "https://chatgpt.com/backend-api/codex/responses");
   assert.equal(request.headers.get("authorization"), "Bearer " + access);
   const bytes = Buffer.from(await request.arrayBuffer());
-  lastWire = { encoding: request.headers.get("content-encoding") ?? "identity", byteLength: bytes.byteLength };
-  const body = JSON.parse(request.headers.get("content-encoding") === "zstd" ? zstdDecompressSync(bytes).toString() : bytes.toString());
+  lastWire = { encoding: request.headers.get("content-encoding") ?? "identity", byteLength: bytes.byteLength, headers: Object.fromEntries(request.headers), json: request.headers.get("content-encoding") === "zstd" ? zstdDecompressSync(bytes).toString() : bytes.toString() };
+  const body = JSON.parse(lastWire.json);
   lastNative = body;
   assert.equal(body.model, model);
   seenToolOutput ||= body.input.some(item => item.type === "function_call_output" && item.output.includes("READ_ONLY_OK"));
@@ -132,13 +142,34 @@ const checkDiagnostic = async expected => {
   return record;
 };
 try {
-  const plain = await invoke({});
+  let nativeReference;
+  const context = { messages: [{ role: "system", content: "Fixture Unicode 한글🙂 instructions", timestamp: 0 }, { role: "user", content: "hello 한글🙂", timestamp: 1 }], tools: [{ name: "encoding_contract", description: "Fixture 한글🙂 tool", parameters: { type: "object", properties: { value: { type: "string" } }, additionalProperties: false } }] };
+  for (const encoding of [undefined, "native", "identity"]) {
+  if (encoding !== undefined) await mf.setOptions(convertV4MiniflareOptions({ workers: [client, { ...server, bindings: { ...server.bindings, INFERENCE_BRIDGE_REQUEST_ENCODING: encoding } }] }));
+  const plain = await invoke({ context });
   assert.equal(plain.status, 200, JSON.stringify(plain.data));
   assert.equal(plain.data.result.content[0]?.text, "BRIDGE_OK", JSON.stringify(plain.data));
   assert.equal(plain.data.result.usage.totalTokens, 7);
   assert.equal(plain.data.result.usage.cost.total, 0);
   assert(plain.data.events.some(event => event.type === "text_delta"));
   assert(!JSON.stringify(plain.data).includes(access));
+  assert.equal(lastWire.json, (await invoke({ payload: true })).data, "fetch body is exactly the JSON captured before provider compression");
+  const requestHeaders = (await invoke({ requestHeaders: true })).data;
+  assert.equal(Number(lastWire.headers["content-length"]), lastWire.byteLength, "runtime framing describes the selected wire body");
+  if (encoding === undefined) {
+    assert.equal(lastWire.encoding, "zstd", "default retains the real installed provider's native compression");
+    nativeReference = { ...structuredClone(lastWire), requestHeaders };
+  } else {
+    assert.equal(lastWire.encoding, encoding === "identity" ? "identity" : "zstd", "server-owned encoding selection changes only the bridge request");
+    assert.equal(lastWire.json, nativeReference.json, "identity JSON equals the default zstd request after decompression, including Unicode and tools");
+    const withoutEncoding = headers => Object.fromEntries(Object.entries(headers).filter(([key]) => key !== "content-encoding"));
+    assert.deepEqual(withoutEncoding(requestHeaders), withoutEncoding(nativeReference.requestHeaders), "every provider-supplied header except content-encoding is preserved");
+  }
+  const nativeProvider = await invoke({ nativeProvider: true, context });
+  assert.equal(nativeProvider.data.content[0]?.text, "BRIDGE_OK");
+  assert.equal(lastWire.encoding, "zstd", "ordinary subscription provider keeps native compression under the same Worker environment");
+  assert.equal(lastWire.json, nativeReference.json, "ordinary provider context is unchanged");
+  if (encoding === "native") continue;
   const tool = { name: "read_health", description: "Read only", parameters: { type: "object", properties: {}, additionalProperties: false } };
   const first = await invoke({ prompt: "use_read_tool", tools: [tool] });
   assert.equal(first.data.result.stopReason, "toolUse", JSON.stringify(first.data));
@@ -155,10 +186,12 @@ try {
   }
   assert.equal(calls, beforeDenied);
   assert.deepEqual((await invoke({ diagnostics: true })).data, [], "input rejection emits no provider diagnostic");
+  const beforeProviderDenial = calls;
   const denied = await invoke({ prompt: "provider_denial" });
   assert.equal(denied.data.result.stopReason, "error");
   assert.equal(denied.data.result.errorMessage, "inference_bridge_provider_error");
   assert(!JSON.stringify(denied.data).includes("secret raw provider failure"));
+  assert.equal(calls, beforeProviderDenial + 1, "403 is not retried under either encoding");
   await checkDiagnostic({ phase: "response", credentialAccessFailed: false, fetchAttempted: true, responseReceived: true, status: 403, category: "permission_denied", contentType: "json", challenge: false, requestEndpointExpected: true, requestAuthorizationPresent: true, requestAccountPresent: true, requestContentTypePresent: true, requestAcceptPresent: true, payloadStoreFalse: true, payloadStreamTrue: true, payloadInputArray: true, payloadToolSchemaValid: true, requestWireEncoding: lastWire.encoding, requestWireKind: lastWire.encoding === "zstd" ? "bytes" : "string", requestWireByteLength: lastWire.byteLength, responseRedirected: false, responseFinalEndpointExpected: true, cfErrorType: null, cfErrorOriginPresent: false, ...Object.fromEntries(htmlKeys.map(key => [key, null])), htmlTruncated: null });
   for (const cancelBeforeHTTP of [false, true]) {
     await invoke({ configure: { mode: "held_credential_failure" } });
@@ -239,5 +272,15 @@ try {
   assert(afterAbort >= beforeAbort + 2, "cancel and deadline reach the provider stream AbortSignal");
   assert.deepEqual((await invoke({ diagnostics: true })).data, [], "cancel, deadline and invalid bridge frames emit no provider diagnostic");
   assert.equal((await (await mf.getWorker("bridge-server")).fetch("https://public.invalid/infer")).status, 404);
-  console.log(`inference bridge native check passed (${upstream ? "pinned OS cross-version" : "installed Pi"}): text/tool roundtrip, private binding, allowlist, model/credential rejection, output sanitization, malformed/oversized frames, cancel/deadline, token accounting; 14 failure diagnostic scenarios, redirect/wire/Cloudflare/HTML classifications, latest retry attempt, fixed-schema redaction and unknowns, observer isolation and no success/cancellation diagnostics`);
+  console.log(`inference bridge native check passed (${upstream ? "pinned OS cross-version" : "installed Pi"}, ${encoding ?? "default native"}): text/tool roundtrip, private binding, allowlist, model/credential rejection, output sanitization, malformed/oversized frames, cancel/deadline, token accounting; 14 failure diagnostic scenarios, redirect/wire/Cloudflare/HTML classifications, latest retry attempt, fixed-schema redaction and unknowns, observer isolation and no success/cancellation diagnostics`);
+  }
+  await mf.setOptions(convertV4MiniflareOptions({ workers: [client, { ...server, bindings: { ...server.bindings, INFERENCE_BRIDGE_REQUEST_ENCODING: "gzip" } }] }));
+  const beforeInvalidEncoding = calls;
+  const beforeInvalidCredentials = (await invoke({ credentialCalls: true })).data.count;
+  const invalidEncoding = await invoke({ direct: wire({}) });
+  assert.equal(invalidEncoding.status, 400);
+  assert.equal(invalidEncoding.data.error, "inference_bridge_not_configured", "unknown encoding is rejected rather than silently activating transport changes");
+  assert.equal(calls, beforeInvalidEncoding, "invalid encoding never reaches provider HTTP");
+  assert.equal((await invoke({ credentialCalls: true })).data.count, beforeInvalidCredentials, "invalid encoding is rejected before credential lookup");
+  console.log("inference bridge encoding contract passed: default/explicit native, exact identity JSON/header preservation, both complete behavior suites, no retry and invalid-setting refusal");
 } finally { await mf.dispose(); await rm(work, { recursive: true, force: true }); }

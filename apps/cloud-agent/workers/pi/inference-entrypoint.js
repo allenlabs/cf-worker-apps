@@ -36,7 +36,9 @@ function policy(env) {
   if (!/^(owner|account-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/.test(env.INFERENCE_BRIDGE_ACCOUNT_ID || "") || !/^[a-zA-Z0-9._-]{1,128}$/.test(env.INFERENCE_BRIDGE_MODEL || "")) fail("inference_bridge_not_configured");
   const timeoutMs = Number(env.INFERENCE_BRIDGE_TIMEOUT_MS ?? 120000);
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 120000) fail("inference_bridge_not_configured");
-  return { users, accountId: env.INFERENCE_BRIDGE_ACCOUNT_ID, modelId: env.INFERENCE_BRIDGE_MODEL, timeoutMs };
+  const requestEncoding = env.INFERENCE_BRIDGE_REQUEST_ENCODING ?? "native";
+  if (!["native", "identity"].includes(requestEncoding)) fail("inference_bridge_not_configured");
+  return { users, accountId: env.INFERENCE_BRIDGE_ACCOUNT_ID, modelId: env.INFERENCE_BRIDGE_MODEL, timeoutMs, requestEncoding };
 }
 
 function safeMessage(value) {
@@ -142,6 +144,7 @@ export class CloudAgentInference extends WorkerEntrypoint {
     if (!model) fail("inference_bridge_model_unavailable");
     // Credentials status is local; an in-flight credential refresh retains its existing HTTP timeout.
     const abort = new AbortController(), deadline = setTimeout(() => abort.abort(), configured.timeoutMs);
+    let identityBody;
     const iterator = models.streamSimple(model, input.context, {
       ...input.options, maxTokens: input.options.maxTokens ?? 4096, signal: abort.signal,
       fetch: async (...args) => {
@@ -149,12 +152,22 @@ export class CloudAgentInference extends WorkerEntrypoint {
         observed.responseReceived = false;
         observed.response = undefined;
         observed.request = undefined;
+        if (configured.requestEncoding === "identity") {
+          if (typeof identityBody !== "string") fail("inference_bridge_payload_unavailable");
+          const headers = new Headers(args[1]?.headers);
+          headers.delete("content-encoding");
+          args = [args[0], { ...args[1], headers, body: identityBody }];
+        }
         try { observed.request = codexRequestShape(args[0], args[1], model.id); } catch { /* Observation cannot change transport. */ }
         const response = await globalThis.fetch(...args);
         observed.responseReceived = true;
         return response;
       },
-      onPayload: body => { try { observed.payload = codexPayloadShape(body); } catch { /* Observation cannot change payload. */ } }
+      onPayload: body => {
+        // Keep the exact provider JSON only for this call; native encoding forwards the original fetch arguments.
+        if (configured.requestEncoding === "identity") identityBody = JSON.stringify(body);
+        try { observed.payload = codexPayloadShape(body); } catch { /* Observation cannot change payload. */ }
+      }
     })[Symbol.asyncIterator]();
     let terminal = false, started = false, total = 0;
     let diagnosticLogged = false;
