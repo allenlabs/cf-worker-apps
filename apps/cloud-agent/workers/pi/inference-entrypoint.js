@@ -2,6 +2,7 @@ import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { z } from "zod";
 import { installSubscriptionModels } from "./subscription-models.js";
+import { codexPayloadShape, codexRequestShape } from "./codex-http.js";
 
 const encoder = new TextEncoder();
 const INPUT_LIMIT = 1048576, FRAME_LIMIT = 524288, OUTPUT_LIMIT = 8388608;
@@ -61,6 +62,26 @@ function errorMessage(model, aborted) {
   return { role: "assistant", content: [], api: model.api, provider: model.provider, model: model.id, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: aborted ? "aborted" : "error", errorMessage: aborted ? "inference_bridge_aborted" : "inference_bridge_failed", timestamp: Date.now() };
 }
 
+// Explicit projection: provider diagnostics can contain identifiers and must never be logged wholesale.
+function terminalDiagnostic({ credentialAccessFailed, fetchAttempted, responseReceived, response, request, payload }) {
+  const boolean = value => typeof value === "boolean" ? value : null;
+  const category = ["upstream_blocked", "permission_denied", "invalid_response", "success", "auth_required", "rate_limited", "upstream_error"].includes(response?.category) ? response.category : null;
+  const contentType = ["json", "html", "sse", "other", "missing"].includes(response?.contentType) ? response.contentType : null;
+  return {
+    phase: credentialAccessFailed ? "credential" : !fetchAttempted ? "provider_setup" : responseReceived ? "response" : "fetch",
+    credentialAccessFailed, fetchAttempted, responseReceived,
+    status: Number.isInteger(response?.status) && response.status >= 100 && response.status <= 599 ? response.status : null,
+    category, contentType, challenge: boolean(response?.challenge),
+    requestEndpointExpected: boolean(request?.expectedEndpoint),
+    requestAuthorizationPresent: boolean(request?.headers?.authorization),
+    requestAccountPresent: boolean(request?.headers?.account),
+    requestContentTypePresent: boolean(request?.headers?.contentType),
+    requestAcceptPresent: boolean(request?.headers?.accept),
+    payloadStoreFalse: boolean(payload?.storeFalse), payloadStreamTrue: boolean(payload?.streamTrue),
+    payloadInputArray: boolean(payload?.inputArray), payloadToolSchemaValid: boolean(payload?.toolSchemaValid)
+  };
+}
+
 class InferenceCancellation extends RpcTarget {
   #cancel;
   constructor(cancel) { super(); this.#cancel = cancel; }
@@ -82,13 +103,38 @@ export class CloudAgentInference extends WorkerEntrypoint {
     const status = await credentials.status();
     if (!status.inferenceReady || status.provider !== "codex") fail("inference_bridge_account_unavailable");
     const models = createModels();
-    installSubscriptionModels(models, () => credentials);
+    const observed = { credentialAccessFailed: false, fetchAttempted: false, responseReceived: false };
+    const credentialFacade = { async codexAccess() {
+      try { return await credentials.codexAccess(); }
+      catch (error) { observed.credentialAccessFailed = true; throw error; }
+    } };
+    installSubscriptionModels(models, () => credentialFacade, undefined, diagnostic => {
+      // Retain only observations used by the fixed terminal schema, never a raw error or response body.
+      if (observed.responseReceived) observed.response = { status: diagnostic.status, category: diagnostic.category, contentType: diagnostic.contentType, challenge: diagnostic.challenge };
+    });
     const model = models.getModel("openai-codex", configured.modelId);
     if (!model) fail("inference_bridge_model_unavailable");
     // Credentials status is local; an in-flight credential refresh retains its existing HTTP timeout.
     const abort = new AbortController(), deadline = setTimeout(() => abort.abort(), configured.timeoutMs);
-    const iterator = models.streamSimple(model, input.context, { ...input.options, maxTokens: input.options.maxTokens ?? 4096, signal: abort.signal })[Symbol.asyncIterator]();
+    const iterator = models.streamSimple(model, input.context, {
+      ...input.options, maxTokens: input.options.maxTokens ?? 4096, signal: abort.signal,
+      fetch: async (...args) => {
+        observed.fetchAttempted = true;
+        try { observed.request = codexRequestShape(args[0], args[1], model.id); } catch { /* Observation cannot change transport. */ }
+        const response = await globalThis.fetch(...args);
+        observed.responseReceived = true;
+        return response;
+      },
+      onPayload: body => { try { observed.payload = codexPayloadShape(body); } catch { /* Observation cannot change payload. */ } }
+    })[Symbol.asyncIterator]();
     let terminal = false, started = false, total = 0;
+    let diagnosticLogged = false;
+    const logProviderFailure = () => {
+      if (diagnosticLogged) return;
+      diagnosticLogged = true;
+      try { console.warn("inference_bridge_diagnostic", JSON.stringify(terminalDiagnostic(observed))); }
+      catch { /* Logging cannot alter wire errors, stream lifetime or cancellation. */ }
+    };
     const close = () => { clearTimeout(deadline); abort.abort(); };
     const stream = new ReadableStream({
       type: "bytes",
@@ -105,6 +151,7 @@ export class CloudAgentInference extends WorkerEntrypoint {
           total += bytes.byteLength;
           if (bytes.byteLength > FRAME_LIMIT || total > OUTPUT_LIMIT) fail("inference_bridge_output_too_large");
           terminal = event.type === "done" || event.type === "error";
+          if (event.type === "error" && event.reason !== "aborted" && !abort.signal.aborted) logProviderFailure();
           controller.enqueue(bytes);
           if (terminal) { close(); controller.close(); }
         } catch {

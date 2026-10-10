@@ -37,6 +37,27 @@ It returns `{stream, cancellation}`. `stream` is a byte-oriented ReadableStream 
 
 The bridge validates input before credential access, fixes the account and model on the server, and emits only validated Pi event fields. Provider failures become generic error codes. Request IDs are correlation values, not replay or idempotency keys.
 
+## Failure diagnostics
+
+For a non-aborted provider error, the bridge emits one `console.warn` with the fixed prefix `inference_bridge_diagnostic` and a JSON object containing only these fields:
+
+| Fields | Values |
+| --- | --- |
+| `phase` | `credential`, `provider_setup`, `fetch`, or `response` |
+| `credentialAccessFailed`, `fetchAttempted`, `responseReceived` | Booleans |
+| `status` | Observed HTTP status (100–599), or `null` |
+| `category` | `upstream_blocked`, `permission_denied`, `invalid_response`, `success`, `auth_required`, `rate_limited`, `upstream_error`, or `null` |
+| `contentType` | `json`, `html`, `sse`, `other`, `missing`, or `null` |
+| `challenge` | Observed challenge-header classification, or `null` |
+| `requestEndpointExpected`, `requestAuthorizationPresent`, `requestAccountPresent`, `requestContentTypePresent`, `requestAcceptPresent` | Shape booleans, or `null` when unobserved |
+| `payloadStoreFalse`, `payloadStreamTrue`, `payloadInputArray`, `payloadToolSchemaValid` | Shape booleans, or `null` when unobserved |
+
+The record excludes identities, account IDs, request IDs, tokens, header values, prompts, tool definitions, response bodies, and raw error messages. It is projected from existing provider observations rather than serializing provider diagnostics. Successful calls, cancellation, input rejection, and bridge framing failures do not emit this provider diagnostic. A logging failure cannot change the stream or its public error codes.
+
+`credential` means the existing credential-access call threw; it does not identify why. `provider_setup` means the provider failed before the observed inference HTTP attempt. `fetch` means that attempt began but no response observation was received. `response` describes the observed response, not overall inference success: a status of 200 with category `success` can still precede an SSE protocol or provider failure. A 403 classification alone cannot establish whether account policy, provider access, or network protection caused the denial. A missing observation remains `null`; it is not evidence that a field was absent.
+
+For deployment diagnosis, inspect the fixed prefix in a temporary Worker tail without persisting the stream or collecting unrelated payloads. The bridge adds no diagnostic store or correlation registry. A live tail, unlike mocked verification, can establish which phase and safe HTTP metadata occurred for an actual call; it does not prove provider eligibility or successful model output.
+
 ## Pilot capabilities and limits
 
 - Supports streamed text, thinking, tool calls, and text tool results, including a second inference turn after tool execution. Tool execution remains in the existing OS agent loop. Images, audio and image tool results are rejected.
@@ -60,4 +81,6 @@ CLOUDFLARE_OS_SOURCE=/absolute/path/to/cloudflare-os \
   npm --prefix apps/cloud-agent run inference-bridge-check
 ```
 
-The fixture uses the real installed Codex provider with fake credentials and a local SSE responder. It verifies streaming text, tool-call/result roundtrip, fixed model and account boundaries, user allowlisting, rejected images and oversized input, malformed UTF-8/envelope/output bounds, sanitized provider errors, explicit cancellation reaching the provider AbortSignal before its deadline, server deadline, and token accounting. It makes no production call. Run the OS wrapper build separately to validate the adapter against the pinned backend TypeScript configuration. Live SSO, one Codex call, and read-only MCP execution remain deployment acceptance checks.
+The fixture uses the real installed Codex provider with fake credentials and a local SSE responder. It verifies streaming text, tool-call/result roundtrip, fixed model and account boundaries, user allowlisting, rejected images and oversized input, malformed UTF-8/envelope/output bounds, sanitized provider errors, explicit cancellation reaching the provider AbortSignal before its deadline, server deadline, and token accounting. Failure regressions distinguish credential/setup failures, fetch exceptions, HTTP 403/challenges, and HTTP 200 followed by SSE failure; they also check fixed-schema redaction, one terminal log, observer failure isolation, and no success/cancellation diagnostics. It makes no production call. Run the OS wrapper build separately to validate the adapter against the pinned backend TypeScript configuration. Live SSO, one Codex call, and read-only MCP execution remain deployment acceptance checks.
+
+The diagnostic change passed eight failure scenarios, credential-wait cancellation/deadline regressions, the pinned cross-version fixture, and the app typecheck. The required `test:coverage` run passed its behavioral checks but ended with `Profiler is not enabled` (exit 2). Coverage remains unmeasured; thresholds were not lowered.
