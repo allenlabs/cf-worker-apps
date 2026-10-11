@@ -74,6 +74,70 @@ test('admin model management is opt-in and changes no identities, scopes or bind
   assert.deepEqual(generateConfigs(explicitUser, bases), before);
 });
 
+test('rejects provider-prefixed model IDs before generating deployment configuration', () => {
+  const candidate = structuredClone(example);
+  candidate.modelBridge.model = 'openai/gpt-6.1-sol';
+  assert.throws(() => generateConfigs(candidate, bases), /modelBridge.model/);
+});
+
+test('rejects model IDs longer than the bridge permits', () => {
+  const candidate = structuredClone(example);
+  candidate.modelBridge.model = 'a'.repeat(129);
+  assert.throws(() => parseDeployment(candidate), /modelBridge.model/);
+});
+
+test('accepts syntactic model IDs without freezing runtime catalog availability', () => {
+  for (const model of ['unknown-model', 'Model_1.2-3', 'a'.repeat(128)]) {
+    const candidate = structuredClone(example);
+    candidate.modelBridge.model = model;
+    assert.equal(parseDeployment(candidate).modelBridge.model, model);
+    assert.equal(generateConfigs(candidate, bases).workshop.vars.CODEX_BRIDGE_MODEL, model);
+  }
+});
+
+const modelUsers = count => Array.from({ length: count }, (_, index) => `model-${index}@example.invalid`);
+const maxBridgeEmail = `${'a'.repeat(64)}@${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(53)}.invalid`;
+function withModelUsers(users) {
+  const candidate = structuredClone(example);
+  candidate.auth.allowedIdentities.push(...users.map((email, index) => ({ email, subject: `model-subject-${index}` })));
+  candidate.modelBridge.allowedUserIds = users;
+  return candidate;
+}
+
+test('rejects more model users than the bridge permits', () => {
+  assert.throws(() => generateConfigs(withModelUsers(modelUsers(21)), bases), /modelBridge.allowedUserIds/);
+});
+
+test('accepts the twenty-user bridge boundary', () => {
+  const users = modelUsers(20);
+  const configs = generateConfigs(withModelUsers(users), bases);
+  assert.deepEqual(JSON.parse(configs.workshop.vars.CODEX_BRIDGE_ALLOWED_USER_IDS), users);
+});
+
+test('rejects model email identities longer than the bridge permits', () => {
+  const email = maxBridgeEmail.replace('.invalid', 'd.invalid');
+  assert.equal(email.length, 255);
+  assert.throws(() => parseDeployment(withModelUsers([email])), /modelBridge.allowedUserIds/);
+});
+
+test('accepts a 254-character model email identity', () => {
+  assert.equal(maxBridgeEmail.length, 254);
+  assert.deepEqual(parseDeployment(withModelUsers([maxBridgeEmail])).modelBridge.allowedUserIds, [maxBridgeEmail]);
+});
+
+test('keeps the wider login and administrator identity bounds', () => {
+  const candidate = structuredClone(example);
+  const longEmail = `${'a'.repeat(304)}@example.invalid`;
+  assert.equal(longEmail.length, 320);
+  const emails = [example.modelBridge.allowedUserIds[0], ...modelUsers(98), longEmail];
+  candidate.auth.allowedIdentities = emails.map((email, index) => ({ email, subject: `login-subject-${index}` }));
+  candidate.admins = emails;
+  candidate.modelBridge.allowedUserIds = [emails[0]];
+  const parsed = parseDeployment(candidate);
+  assert.equal(parsed.auth.allowedIdentities.length, 100);
+  assert.deepEqual(parsed.admins, emails);
+});
+
 test('cold builds produce typed-storage runtime exports before checking consumers', () => {
   const steps = buildCommands(example);
   const dependency = steps.findIndex(step => step.args.includes('@gadgets/typed-storage'));

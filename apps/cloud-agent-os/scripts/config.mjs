@@ -89,8 +89,11 @@ export function parseDeployment(value) {
     'modelBridge.management must be user or admin');
   text(value.modelBridge.service, 'modelBridge.service', /^[a-z][a-z0-9-]{0,62}$/);
   assert(!names.some(key => value.workers[key] === value.modelBridge.service), 'Model service must be a separate runtime');
-  text(value.modelBridge.model, 'modelBridge.model', /^[a-zA-Z0-9._/-]+$/);
+  text(value.modelBridge.model, 'modelBridge.model', /^[a-zA-Z0-9._-]{1,128}$/);
   emails(value.modelBridge.allowedUserIds, 'modelBridge.allowedUserIds');
+  assert(value.modelBridge.allowedUserIds.length <= 20, 'modelBridge.allowedUserIds must contain 1–20 identities');
+  assert(value.modelBridge.allowedUserIds.every(email => email.length <= 254),
+    'modelBridge.allowedUserIds contains an email longer than 254 characters');
   assert(value.modelBridge.allowedUserIds.every(email => allowed.includes(email)),
     'Every model user must be allowed to sign in');
   if (value.siteLaunch !== undefined) {

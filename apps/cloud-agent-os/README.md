@@ -39,6 +39,11 @@ the upstream direct-provider form and its normal API-token validation remain unc
 A successful OS login alone must not select or authorize an
 arbitrary subscription account.
 
+`modelBridge.model` must use 1–128 ASCII letters, digits, dots, underscores or hyphens;
+model availability is checked against the runtime catalogs. `modelBridge.allowedUserIds`
+must contain 1–20 pinned lowercase email identities, each at most 254 characters.
+These bridge limits do not reduce the separate login or administrator identity limits.
+
 Set `modelBridge.management` to `"admin"` to manage that existing connection centrally.
 Admin's **Providers** tab shows the configured Codex subscription and lets an administrator
 enable or disable its fixed model. The model is then available to permitted users without
