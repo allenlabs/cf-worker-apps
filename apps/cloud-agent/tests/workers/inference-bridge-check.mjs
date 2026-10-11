@@ -88,6 +88,7 @@ const bundle = async (file, piDirectory) => build({
 await bundle("server.js", join(root, "node_modules/@earendil-works/pi-ai"));
 await bundle("client.ts", upstream ? join(upstream, "packages/workshop-backend/node_modules/@earendil-works/pi-ai") : join(root, "node_modules/@earendil-works/pi-ai"));
 let calls = 0, seenToolOutput = false, lastNative, lastWire, expectedProvider = "codex";
+let responseModelFixture;
 const sse = (events) => new Response(events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
 const outbound = async request => {
   calls++;
@@ -121,12 +122,13 @@ const outbound = async request => {
   const item = tool ? { type: "function_call", id: "fc_fixture", call_id: "call_fixture", name: "read_health", arguments: "{}", status: "completed" }
     : { type: "message", id: "msg_fixture", role: "assistant", status: "completed", content: [{ type: "output_text", text: reply, annotations: [] }] };
   return sse([
-    { type: "response.created", response: { id: "resp_fixture", status: "in_progress" } },
+    { type: "response.created", response: { id: "resp_fixture", status: "in_progress", ...responseModelFixture?.created } },
     { type: "response.output_item.added", output_index: 0, item: { ...item, status: "in_progress", ...(tool ? { arguments: "" } : { content: [] }) } },
     ...(tool ? [{ type: "response.function_call_arguments.delta", item_id: item.id, output_index: 0, delta: "{}" }]
       : [{ type: "response.content_part.added", item_id: item.id, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } }, ...outputChunks.map(delta => ({ type: "response.output_text.delta", item_id: item.id, output_index: 0, content_index: 0, delta }))]),
     { type: "response.output_item.done", output_index: 0, item },
-    { type: "response.completed", response: { id: "resp_fixture", status: "completed", output: [item], usage: { input_tokens: 4, output_tokens: 3, total_tokens: 7, input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 0 } } } }
+    ...(responseModelFixture?.extraEvents ?? []),
+    ...(responseModelFixture?.terminals ?? [{ type: "response.completed", fields: {} }]).map(({ type, fields }) => ({ type, response: { id: "resp_fixture", status: type === "response.incomplete" ? "incomplete" : "completed", output: [item], usage: { input_tokens: 4, output_tokens: 3, total_tokens: 7, input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 0 } }, ...fields } }))
   ]);
 };
 const common = { modulesRoot: work, compatibilityDate: "2026-10-04", compatibilityFlags: ["nodejs_compat"] };
@@ -340,6 +342,48 @@ try {
     assert.equal(plain.data.result.stopReason, "stop");
     assert.equal(plain.data.result.usage.totalTokens, 7);
     assert.equal(lastWire.encoding, "identity", "Codex encoding selection does not alter the API provider transport");
+    const metadataRequest = structuredClone(lastWire);
+    const terminal = fields => ({ type: "response.completed", fields });
+    const modelCases = [
+      { name: "completed server model", fixture: { terminals: [terminal({ model })] }, expected: model },
+      { name: "different requested/server model", fixture: { terminals: [terminal({ model: "gpt-6-luna" })] }, expected: "gpt-6-luna" },
+      { name: "dated server model", fixture: { terminals: [terminal({ model: "gpt-6.1-sol-2026-10-01" })] }, expected: "gpt-6.1-sol-2026-10-01" },
+      { name: "minimum-length model ID", fixture: { terminals: [terminal({ model: "m" })] }, expected: "m" },
+      { name: "maximum-length model ID", fixture: { terminals: [terminal({ model: "m".repeat(128) })] }, expected: "m".repeat(128) },
+      { name: "incomplete server model", fixture: { terminals: [{ type: "response.incomplete", fields: { model, incomplete_details: { reason: "max_output_tokens" } } }] }, expected: model, stop: "length" },
+      { name: "created model is provisional", fixture: { created: { model: "gpt-6-luna" }, terminals: [terminal({ model })] }, expected: model },
+      { name: "created-only model", fixture: { created: { model } } },
+      { name: "omitted model", fixture: {} },
+      { name: "conflicting terminal models", fixture: { terminals: [terminal({ model }), terminal({ model: "gpt-6-luna" })] } },
+      { name: "valid then missing terminal model", fixture: { terminals: [terminal({ model }), terminal({})] } },
+      { name: "valid then malformed terminal model", fixture: { terminals: [terminal({ model }), terminal({ model: "PRIVATE@malformed.invalid" })] } },
+      { name: "malformed then valid terminal model", fixture: { terminals: [terminal({ model: null }), terminal({ model })] } },
+      { name: "unrelated stream-event model spoof", fixture: { extraEvents: [{ type: "response.output_text.delta", item_id: "msg_fixture", output_index: 0, content_index: 0, delta: "", response: { model } }, { type: "response.fixture_metadata", response: { model } }] } },
+      { name: "wrong metadata property", fixture: { terminals: [terminal({ responseModel: model })] } },
+      ...[null, 42, {}, [], "", " ", "m".repeat(129), "PRIVATE@malformed.invalid", "https://PRIVATE.invalid/model", "line\nbreak", "模型"].map(value => ({ name: "malformed model value", fixture: { terminals: [terminal({ model: value })] } }))
+    ];
+    for (const { name, fixture, expected, stop = "stop" } of modelCases) {
+      responseModelFixture = fixture;
+      const before = calls, result = await invoke({ prompt: "OS_OK" });
+      assert.equal(result.status, 200, name);
+      assert.equal(result.data.result.content[0]?.text, "OS_OK", name);
+      assert.equal(result.data.result.stopReason, stop, name);
+      assert.equal(result.data.result.model, model, "message.model remains the configured/requested ID");
+      assert.equal(lastNative.model, model, "server observation does not change the request or model allowlist");
+      assert.deepEqual(lastWire, metadataRequest, "model observation preserves the exact provider request body and headers");
+      assert.equal(result.data.result.responseModel, expected, name);
+      assert.equal(Object.hasOwn(result.data.result, "responseModel"), expected !== undefined, name);
+      assert.equal(calls, before + 1, "metadata observation makes no additional provider request");
+      assert(result.data.events.filter(event => !["done", "error"].includes(event.type)).every(event => !Object.hasOwn(event.partial, "responseModel")), "SIWC metadata is projected only on the terminal message");
+    }
+    responseModelFixture = { created: { model } };
+    const historySpoof = await invoke({ context: { messages: [{ role: "user", content: "Earlier synthetic turn", timestamp: 0 }, { ...plain.data.result, responseModel: model, timestamp: 1 }, { role: "user", content: "OS_OK", timestamp: 2 }] } });
+    assert.equal(historySpoof.data.result.content[0]?.text, "OS_OK");
+    assert.equal(Object.hasOwn(historySpoof.data.result, "responseModel"), false, "supplied assistant history is not a server-model observation");
+    responseModelFixture = undefined;
+    assert.equal(Object.hasOwn((await invoke({ prompt: "OS_OK" })).data.result, "responseModel"), false, "server model state is private to one call");
+    assert.deepEqual((await invoke({ diagnostics: true })).data, [], "model observations and malformed metadata add no success logs");
+    console.log(`inference bridge SIWC terminal-model check passed (${encoding}): ${modelCases.length} actual SDK SSE cases, requested/observed separation, omitted/malformed/conflicting metadata, incomplete output, spoof/history refusal, cross-call isolation and no extra request/log`);
     const tool = { name: "read_health", description: "Read only", parameters: { type: "object", properties: {}, additionalProperties: false } };
     const first = await invoke({ prompt: "use_read_tool", tools: [tool] });
     assert.equal(first.data.result.stopReason, "toolUse");

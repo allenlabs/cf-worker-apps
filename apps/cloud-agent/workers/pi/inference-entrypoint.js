@@ -126,6 +126,24 @@ function siwcEndpoint(value) {
   try { return new URL(value).href === "https://api.openai.com/v1/responses"; } catch { return null; }
 }
 
+function observeTerminalModel(event, observed) {
+  // The SDK owns these parsed events. Read data properties only; never mutate them.
+  const data = (value, key) => {
+    const field = Object.getOwnPropertyDescriptor(value, key);
+    return field && Object.hasOwn(field, "value") ? field.value : undefined;
+  };
+  try {
+    const type = data(event, "type");
+    if (!["response.completed", "response.incomplete"].includes(type)) return;
+    const value = data(data(event, "response"), "model");
+    if (observed.invalid || typeof value !== "string" || !/^[a-zA-Z0-9._-]{1,128}$/.test(value) || observed.seen && observed.model !== value) {
+      observed.invalid = true;
+      observed.model = undefined;
+    } else observed.model = value;
+    observed.seen = true;
+  } catch { observed.invalid = true; observed.model = undefined; }
+}
+
 class InferenceCancellation extends RpcTarget {
   #cancel;
   constructor(cancel) { super(); this.#cancel = cancel; }
@@ -177,14 +195,19 @@ export class CloudAgentInference extends WorkerEntrypoint {
     // Credentials status is local; an in-flight credential refresh retains its existing HTTP timeout.
     const abort = new AbortController(), deadline = setTimeout(() => abort.abort(), configured.timeoutMs);
     let identityBody;
+    const returnedModel = {};
     const iterator = models.streamSimple(model, input.context, {
       ...input.options, maxTokens: input.options.maxTokens ?? 4096, signal: abort.signal,
+      onProviderStreamEvent: configured.provider === "siwc" ? event => observeTerminalModel(event, returnedModel) : undefined,
       fetch: async (...args) => {
         observed.fetchAttempted = true;
         observed.responseReceived = false;
         observed.response = undefined;
         observed.responseMetadata = undefined;
         observed.request = undefined;
+        returnedModel.seen = false;
+        returnedModel.invalid = false;
+        returnedModel.model = undefined;
         if (configured.provider === "codex" && configured.requestEncoding === "identity") {
           if (typeof identityBody !== "string") fail("inference_bridge_payload_unavailable");
           const headers = new Headers(args[1]?.headers);
@@ -238,6 +261,12 @@ export class CloudAgentInference extends WorkerEntrypoint {
           const next = await iterator.next();
           if (next.done) fail("inference_bridge_stream_incomplete");
           const event = safeEvent(next.value);
+          if (configured.provider === "siwc") {
+            const terminal = event.type === "done" || event.type === "error";
+            const message = event[event.type === "done" ? "message" : event.type === "error" ? "error" : "partial"];
+            delete message.responseModel;
+            if (terminal && returnedModel.model !== undefined) message.responseModel = returnedModel.model;
+          }
           if (event.type === "start") { if (started) fail("inference_bridge_response_invalid"); started = true; }
           else if (event.type !== "error" && !started) fail("inference_bridge_response_invalid");
           // ponytail: full partial snapshots cap this pilot at 8 MiB; use delta-only framing for longer turns.
