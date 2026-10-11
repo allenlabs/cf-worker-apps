@@ -6,6 +6,7 @@ import { Agent } from "agents";
 import { PiHarness, skills } from "agents/harness/pi";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { installSubscriptionModels, subscriptionModel } from "./subscription-models.js";
+import { subscriptionInferenceProvider } from "./subscription-inference-policy.js";
 import { fauxProvider, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { Harness, createRegistry, LiveDoc } from "@earendil-works/pi-durable";
 import { ManagementCredentials, adminRoute, channelScope } from "./admin.js";
@@ -177,7 +178,7 @@ export class Credentials extends ManagementCredentials {
   async verifyCodexImageIdentity(token, clientId, expectedEmailHash, explicitPin) { return identityFromToken(token, clientId, undefined, explicitPin === undefined ? await this.ctx.storage.get("registration") : explicitPin, expectedEmailHash); }
   startCodex() { requireCondition(!this.completing && !this.refreshing, "oauth_busy"); return codexImageStart(this, true); }
   checkCodex() { return codexImageCheck(this, this.verifyCodexImageIdentity.bind(this)); }
-  codexAccess(forceRefresh = false) { return codexImageAccess(this, this.verifyCodexImageIdentity.bind(this), forceRefresh, true); }
+  codexAccess(forceRefresh = false) { subscriptionInferenceProvider(this.env.SUBSCRIPTION_INFERENCE_PROVIDER); return codexImageAccess(this, this.verifyCodexImageIdentity.bind(this), forceRefresh, true); }
   startCodexImages() { return codexImageStart(this); }
   checkCodexImages() { return codexImageCheck(this, this.verifyCodexImageIdentity.bind(this)); }
   codexImageAccess() { return codexImageAccess(this, this.verifyCodexImageIdentity.bind(this)); }
@@ -322,17 +323,20 @@ export class Credentials extends ManagementCredentials {
   }
 
   async status() {
+    const selection = subscriptionInferenceProvider(this.env.SUBSCRIPTION_INFERENCE_PROVIDER);
     const registration = await this.ctx.storage.get("registration");
     const credential = await this.open(await this.ctx.storage.get("credential"));
     const identity = await this.open(await this.ctx.storage.get("identity"));
-    const image = await codexImageStatus(this), unified = image.unified;
-    const selectedIdentity = unified ? image.identity : identity;
-    const directUsageGranted = credential?.scopes.includes("chatgpt.tokens.use.direct") ?? false;
-    return { image, provider: unified ? "codex" : "siwc", inferenceReady: unified ? image.inferenceReady : (!!credential && directUsageGranted), capabilities: { inference: unified ? image.inferenceReady : (!!credential && directUsageGranted), images: image.connected && !image.reconnectRequired }, label: (await this.ctx.storage.get("identityPolicy"))?.label ?? "Current connected account", connected: unified || !!credential, loginPending: image.loginPending || !!await this.ctx.storage.get("pending"), legacyLoginPending: !!await this.ctx.storage.get("pending"), loginFailed: image.loginFailed, identityVerified: unified || !!registration, planUsageConfirmed: unified || (registration?.planUsageConfirmed ?? registration?.personalProConfirmed ?? false), planClaim: selectedIdentity ? selectedIdentity.planType : registration?.plan ?? null, identity: selectedIdentity, usage: await this.ctx.storage.get("nativeUsageTotals") ?? null, subjectFingerprint: unified ? await digest(selectedIdentity.accountId).then(value => value.slice(0, 12)) : registration?.subjectHash?.slice(0, 12) ?? null, expiresAt: unified ? image.expiresAt : credential ? new Date(credential.expiresAt).toISOString() : null, directUsageGranted, endpoint: unified ? "https://chatgpt.com/backend-api/codex/responses" : `${RESOURCE}/responses`, automaticInference: this.env.CHANNEL_REPLY_ENABLED === "true" };
+    const image = await codexImageStatus(this), unified = image.unified && selection === "auto";
+    const selectedIdentity = unified ? image.identity : credential ? identity : null;
+    const directUsageGranted = credential?.scopes?.includes("chatgpt.tokens.use.direct") ?? false;
+    const siwcInferenceReady = !!credential && directUsageGranted && credential.scopes.includes("resource.invoke");
+    const inferenceReady = unified ? image.inferenceReady : siwcInferenceReady;
+    return { image, inferencePreference: selection, provider: unified ? "codex" : "siwc", inferenceReady, codexInferenceReady: image.inferenceReady, siwcInferenceReady, capabilities: { inference: inferenceReady, images: image.connected && !image.reconnectRequired }, label: (await this.ctx.storage.get("identityPolicy"))?.label ?? "Current connected account", connected: image.connected || !!credential, loginPending: image.loginPending || !!await this.ctx.storage.get("pending"), legacyLoginPending: !!await this.ctx.storage.get("pending"), loginFailed: image.loginFailed, identityVerified: unified || (!!credential && !!registration), planUsageConfirmed: unified || (!!credential && (registration?.planUsageConfirmed ?? registration?.personalProConfirmed ?? false)), planClaim: selectedIdentity ? selectedIdentity.planType : credential ? registration?.plan ?? null : null, identity: selectedIdentity, usage: await this.ctx.storage.get("nativeUsageTotals") ?? null, subjectFingerprint: unified ? await digest(selectedIdentity.accountId).then(value => value.slice(0, 12)) : credential ? registration?.subjectHash?.slice(0, 12) ?? null : null, expiresAt: unified ? image.expiresAt : credential ? new Date(credential.expiresAt).toISOString() : null, directUsageGranted, endpoint: unified ? "https://chatgpt.com/backend-api/codex/responses" : `${RESOURCE}/responses`, automaticInference: this.env.CHANNEL_REPLY_ENABLED === "true" };
   }
 
   async refreshStatus() {
-    const unified = (await codexImageStatus(this)).unified;
+    const unified = (await this.status()).provider === "codex";
     const key = unified ? "codexImageProfile" : "identity";
     const previous = await this.open(await this.ctx.storage.get(key));
     if (unified) await this.codexAccess(true); else await this.access(true);
@@ -360,10 +364,12 @@ export class Credentials extends ManagementCredentials {
   }
 
   async access(forceRefresh = false) {
+    subscriptionInferenceProvider(this.env.SUBSCRIPTION_INFERENCE_PROVIDER);
     requireCondition(!this.completing, "oauth_busy");
     if (this.refreshing) return this.refreshing;
     const credential = await this.open(await this.ctx.storage.get("credential"));
     requireCondition(credential, "login_required");
+    requireCondition(credential.scopes?.includes("resource.invoke") && credential.scopes.includes("chatgpt.tokens.use.direct"), "plan_usage_scope_missing");
     requireCondition(!this.completing, "oauth_busy");
     if (!forceRefresh && credential.expiresAt - Date.now() > 180000) return credential.access;
     if (this.refreshing) return this.refreshing;
@@ -400,7 +406,7 @@ export class Assistant extends Agent {
       models.setProvider(this.faux.provider);
       this.model = this.faux.getModel();
     } else {
-      installSubscriptionModels(models, () => env.Credentials.getByName(this.runtime().accountId), undefined, diagnostic => this.recordCodexDiagnostic(diagnostic));
+      installSubscriptionModels(models, () => env.Credentials.getByName(this.runtime().accountId), undefined, diagnostic => this.recordCodexDiagnostic(diagnostic), env.SUBSCRIPTION_INFERENCE_PROVIDER);
       this.model = models.getModel("openai", env.OPENAI_MODEL);
       if (!this.model) throw new Error("Requested OpenAI model is absent from Pi catalog");
     }

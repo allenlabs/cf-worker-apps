@@ -1,3 +1,4 @@
+import { subscriptionInferenceProvider } from "./subscription-inference-policy.js";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import { lazyStream } from "@earendil-works/pi-ai/api/lazy";
@@ -5,10 +6,11 @@ import { isRetryableAssistantError } from "@earendil-works/pi-ai/utils/retry";
 import { isContextOverflow } from "@earendil-works/pi-ai/utils/overflow";
 import { codexDiagnostic, codexHtmlError, codexHtmlMarkers, codexPayloadShape, codexRequestShape, codexResponseShape, reportCodexDiagnostic } from "./codex-http.js";
 
-export function installSubscriptionModels(models, credentials, authorize = async () => {}, onDiagnostic) {
+export function installSubscriptionModels(models, credentials, authorize = async () => {}, onDiagnostic, inferencePreference) {
   const publicProvider = openaiProvider(), codex = openaiCodexProvider();
   for (const provider of [publicProvider, codex]) {
     provider.auth = { apiKey: { name: "Verified subscription bearer", resolve: async () => {
+      if (subscriptionInferenceProvider(inferencePreference) === "siwc" && provider.id === "openai-codex") throw new Error("subscription_inference_provider_disabled");
       await authorize();
       const account = await credentials();
       return { auth: { apiKey: provider.id === "openai-codex" ? (await account.codexAccess()).access : await account.access() }, source: "ChatGPT subscription" };

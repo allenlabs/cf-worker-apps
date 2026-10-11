@@ -163,7 +163,7 @@ export class CloudAgentInference extends WorkerEntrypoint {
     if (!configured.users.includes(input.userId)) fail("inference_bridge_user_denied");
     const credentials = this.env.Credentials.getByName(configured.accountId);
     const status = await credentials.status();
-    if (configured.provider === "codex" ? !status.inferenceReady || status.provider !== "codex" : status.connected !== true || status.directUsageGranted !== true) fail("inference_bridge_account_unavailable");
+    if (configured.provider === "codex" ? status.codexInferenceReady !== true : status.siwcInferenceReady !== true) fail("inference_bridge_account_unavailable");
     const models = createModels();
     const observed = { provider: configured.provider, credentialAccessFailed: false, fetchAttempted: false, responseReceived: false };
     const credentialFacade = { async codexAccess() {

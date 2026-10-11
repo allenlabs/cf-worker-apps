@@ -43,7 +43,7 @@ export class Faults extends WorkerEntrypoint {
  infer(input){const prompt=input.context.messages[0].content;return new ReadableStream({type:'bytes',start(c){c.enqueue(prompt==='invalid_utf8'?new Uint8Array([255]):new TextEncoder().encode(prompt==='oversized'?'x'.repeat(600000):'{"version":2}\\n'));c.close();}});}
 }
 export class Credentials extends DurableObject {
- async status(){globalThis.fixtureCredentialCalls=(globalThis.fixtureCredentialCalls??0)+1;return {provider:'codex',inferenceReady:true,connected:true,directUsageGranted:true,...globalThis.fixtureStatus};}
+ async status(){globalThis.fixtureCredentialCalls=(globalThis.fixtureCredentialCalls??0)+1;return {provider:'codex',inferenceReady:true,codexInferenceReady:true,siwcInferenceReady:true,connected:true,directUsageGranted:true,...globalThis.fixtureStatus};}
  async codexAccess(){globalThis.fixtureCodexAccessCalls=(globalThis.fixtureCodexAccessCalls??0)+1;if(globalThis.fixtureCredentialMode==='held_credential_failure'){await new Promise(resolve=>setTimeout(resolve,3500));throw Error('PRIVATE held credential failure');}if(globalThis.fixtureCredentialMode==='credential_failure')throw Error('PRIVATE credential failure');return {access:globalThis.fixtureCredentialMode==='setup_failure'?'PRIVATE invalid credential':${JSON.stringify(access)}};}
  async access(){globalThis.fixtureSiwcAccessCalls=(globalThis.fixtureSiwcAccessCalls??0)+1;if(globalThis.fixtureCredentialMode==='credential_failure')throw Error('PRIVATE legacy credential failure');return ${JSON.stringify(siwcAccess)};}
 }`);
@@ -167,6 +167,8 @@ try {
   const explicitCodex = await invoke({ prompt: "OS_OK" });
   assert.equal(explicitCodex.data.result.content[0]?.text, "OS_OK");
   assert.deepEqual((await invoke({ accessCalls: true })).data, { codex: 1, siwc: 0 }, "explicit Codex keeps the Codex credential accessor");
+  await invoke({ configure: { status: { provider: "siwc", inferenceReady: false, codexInferenceReady: true, siwcInferenceReady: false } } });
+  const independentCodex=await invoke({prompt:"OS_OK"});assert.equal(independentCodex.status,200,JSON.stringify(independentCodex));assert.equal(independentCodex.data.result.content[0]?.text,"OS_OK","native bridge relies on its actual native grant, not ordinary selection");
   expectedProvider = "siwc";
   await mf.setOptions(convertV4MiniflareOptions({ workers: [client, { ...server, bindings: { ...server.bindings, INFERENCE_BRIDGE_PROVIDER: "siwc" } }] }));
   await invoke({ configure: { status: { provider: "codex", inferenceReady: false } } });
@@ -328,7 +330,7 @@ try {
   expectedProvider = "siwc";
   for (const encoding of ["native", "identity"]) {
     await mf.setOptions(convertV4MiniflareOptions({ workers: [client, { ...server, bindings: { ...server.bindings, INFERENCE_BRIDGE_PROVIDER: "siwc", INFERENCE_BRIDGE_REQUEST_ENCODING: encoding } }] }));
-    for (const status of [{ connected: false }, { directUsageGranted: false }, { directUsageGranted: null }, { directUsageGranted: "true" }]) {
+    for (const status of [{ siwcInferenceReady: false }, { siwcInferenceReady: null }, { siwcInferenceReady: "true" }]) {
       await invoke({ configure: { status } });
       const before = calls, rejected = await invoke({admission:wire({})});
       assert.equal(rejected.status, 400);

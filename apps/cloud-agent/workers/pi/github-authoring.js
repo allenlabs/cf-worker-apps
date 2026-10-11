@@ -28,7 +28,7 @@ export class GitHubAuthoring extends Agent {
     ] });
     const models = this.models = createModels(); let model;
     if (env.PROBE_MODE === "mock") { this.faux = fauxProvider({ models: [{ id: "github-fixture", name: "GitHub fixture" }] }); models.setProvider(this.faux.provider); model = this.faux.getModel(); }
-    else { installSubscriptionModels(models, () => env.Credentials.getByName(this.context().context.accountId), () => this.owner().githubAuthorize(this.context().context)); model = models.getModel("openai", env.OPENAI_MODEL); insist(model, "github_model_unavailable", 503); }
+    else { installSubscriptionModels(models, () => env.Credentials.getByName(this.context().context.accountId), () => this.owner().githubAuthorize(this.context().context), undefined, env.SUBSCRIPTION_INFERENCE_PROVIDER); model = models.getModel("openai", env.OPENAI_MODEL); insist(model, "github_model_unavailable", 503); }
     if (!this.draftSql.exec("PRAGMA table_info(github_asks)").toArray().some(column => column.name === "model")) this.draftSql.exec("ALTER TABLE github_asks ADD COLUMN model TEXT");
     this.harness = new PiHarness({ harness: async ({ storage, context }) => {
       this.piContext = context; await this.tenantReady;

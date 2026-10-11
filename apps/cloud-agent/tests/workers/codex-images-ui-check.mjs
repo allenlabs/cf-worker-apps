@@ -15,8 +15,16 @@ const pending=ui.codexConnectionView({...account,image:{loginPending:true}});ass
 assert.match(ui.codexConnectionView({...account,image:{inferenceReady:true,loginPending:true}}),/FIXTURE-CODE&lt;unsafe&gt;/);assert.equal(ui.attempts.size,1,"reconnect code remains visible while old profile works");
 results.set("/api/accounts/check",{pending:true});await ui.codexAccountAction("check",account.id);assert.equal(ui.attempts.size,1);
 results.set("/api/accounts/check",{inferenceReady:true});await ui.codexAccountAction("check",account.id);assert.equal(ui.attempts.size,0);
-assert.match(ui.codexConnectionView({...account,image:{inferenceReady:true}}),/대화와 이미지를/);
-assert.match(ui.codexConnectionView({...account,image:{reconnectRequired:true}}),/자동 전환하지 않습니다/);
+assert.match(ui.codexConnectionView({...account,provider:"codex",image:{inferenceReady:true}}),/대화와 이미지를/);
+const selectedSiwc=ui.accountView({...account,inferencePreference:"siwc",connected:true,expiresAt:"2026-10-11T00:00:00Z",image:{inferenceReady:true,connected:true},capabilities:{images:true}},data);
+assert.match(selectedSiwc,/SIWC 전용/);assert.match(selectedSiwc,/Codex 이미지 연결 \/ 다시 연결/);assert(!selectedSiwc.includes("한 번의 Codex 인증으로 대화와 이미지를"),"SIWC account UI keeps selected inference separate from native images");
+assert.match(selectedSiwc,/이미지.*Codex/);
+assert(!ui.codexConnectionView({...account,inferencePreference:"siwc"}).includes("대화와 이미지를 함께 연결"),"Codex reconnection does not change a selected SIWC inference policy");
+assert.match(ui.codexConnectionView({...account,inferencePreference:"siwc",image:{reconnectRequired:true}}),/대화의 SIWC 선택은 유지/);
+const imageOnly=ui.accountView({...account,inferencePreference:"siwc",connected:true,inferenceReady:false,expiresAt:null,image:{inferenceReady:true,connected:true},capabilities:{images:true}},data);assert.match(imageOnly,/대화.*SIWC.*연결 필요/);assert(!imageOnly.includes("만료 null"));assert.match(imageOnly,/data-action="refresh"[^>]* disabled/);assert(!imageOnly.includes("정보 새로고침으로 확인하세요"),"unavailable SIWC does not recommend its disabled metadata refresh");assert.match(imageOnly,/선택한 SIWC 대화 연결을 사용할 수 없습니다/);
+const noImages=ui.accountView({...account,inferencePreference:"siwc",inferenceReady:false,image:{},capabilities:{images:false}},data);assert.match(noImages,/SIWC 전용/);assert.match(noImages,/Codex 이미지 연결 \/ 다시 연결/);assert(!noImages.includes("대화와 이미지를 함께 연결"));
+assert.match(ui.codexConnectionView(account),/대화와 이미지를 함께 연결/,"auto policy retains unified reconnect explanation");
+assert.match(ui.codexConnectionView({...account,provider:"codex",image:{reconnectRequired:true}}),/자동 전환하지 않습니다/);
 assert.match(ui.codexConnectionView({...account,image:{loginFailed:true}}),/기존 연결은 유지/);
 results.set("/api/accounts/start",{verificationUrl:"https://evil.invalid",userCode:"FIXTURE"});await assert.rejects(ui.codexAccountAction("connect",account.id),/응답을 확인/);assert.equal(ui.attempts.size,0);assert.equal(refreshes,3);
 console.log("Unified subscription UI checks passed: single account-scoped grant, use confirmation, escaped device code, official link, manual check, retained old connection and no separate image onboarding.");
