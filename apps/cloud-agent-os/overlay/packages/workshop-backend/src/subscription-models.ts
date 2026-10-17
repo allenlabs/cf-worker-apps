@@ -10,6 +10,7 @@ import type { UserAiModelRecord } from "./storage-schema/user-storage.js";
 
 type SubscriptionEnvironment = {
   CODEX_BRIDGE_MANAGEMENT?: string;
+  CODEX_BRIDGE_SETUP?: string;
   CODEX_BRIDGE?: unknown;
   CODEX_BRIDGE_MODEL?: string;
   CODEX_BRIDGE_ALLOWED_USER_IDS?: string;
@@ -24,13 +25,14 @@ export function isAdminManagedSubscription(env: Cloudflare.Env & SubscriptionEnv
 export class SubscriptionModels {
   readonly transport = "subscription";
   readonly providers: ReadonlySet<AiModelProvider> = new Set(["openai"]);
-  readonly userModels = false;
+  readonly userModels: boolean;
+  readonly setupUrl?: string;
   readonly all: readonly { id: string; name: string; provider: "openai"; mode: GatewayModelMode }[];
   readonly #authorized: boolean;
 
   constructor(
     env: Cloudflare.Env & SubscriptionEnvironment,
-    config: Pick<AdminConfig, "modelModes">,
+    config: Pick<AdminConfig, "modelModes" | "userModelsEnabled">,
     userId?: string,
   ) {
     if (!isAdminManagedSubscription(env))
@@ -51,6 +53,8 @@ export class SubscriptionModels {
       .safeParse(users);
     if (!env.CODEX_BRIDGE || !catalog || !allowed.success)
       throw new Error("inference_bridge_not_configured");
+    this.userModels = config.userModelsEnabled;
+    this.setupUrl = env.CODEX_BRIDGE_SETUP === "siwc" ? "/gatekeeper/subscription" : undefined;
     this.#authorized = userId !== undefined && allowed.data.includes(userId);
     const mode = Object.hasOwn(config.modelModes, catalog.id)
       ? config.modelModes[catalog.id]
@@ -74,17 +78,19 @@ export class SubscriptionModels {
     if (!this.#authorized || !model || model.mode === "disabled") return undefined;
     return {
       profile: { type: "agent", id: model.id, name: model.name },
-      config: { provider: "openai", model: model.id, apiToken: "" },
+      config: { provider: "openai", model: model.id, apiToken: "", transport: "subscription" },
     };
   }
 
   refuseDisabled(id: string): void {
+    if (!this.get(id)) return;
     if (this.get(id)?.mode === "disabled")
       throw new Error("The subscription model is disabled by an administrator.");
     if (!this.#authorized) throw new Error("inference_bridge_user_denied");
   }
 
-  refuseUserModel(): never {
-    throw new Error("Adding your own models is disabled on this deployment by an administrator.");
+  refuseUserModel(_name?: string): void {
+    if (!this.userModels)
+      throw new Error("Adding your own models is disabled on this deployment by an administrator.");
   }
 }

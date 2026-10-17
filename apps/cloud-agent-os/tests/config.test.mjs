@@ -388,13 +388,14 @@ test('omitting SIWC setup preserves the existing model bridge and router service
     assert.deepEqual(parseDeployment(candidate), candidate);
     const configs = generateConfigs(candidate, bases);
     assert(!configs.router.services.some(binding => binding.binding === 'GATEKEEPER_SUBSCRIPTION'));
+    assert.equal(configs.workshop.vars.CODEX_BRIDGE_SETUP, undefined);
     assert.deepEqual(configs.workshop.services.find(binding => binding.binding === 'CODEX_BRIDGE'), {
       binding: 'CODEX_BRIDGE', service: candidate.modelBridge.service, entrypoint: 'CloudAgentInference',
     });
   }
 });
 
-test('SIWC setup adds only a native router binding and preserves all worker permissions and variables', () => {
+test('SIWC setup adds its router binding and server-owned capability while preserving worker permissions', () => {
   for (const mcp of [true, false]) {
     const baseline = structuredClone(accessExample);
     baseline.mcp = mcp;
@@ -413,6 +414,8 @@ test('SIWC setup adds only a native router binding and preserves all worker perm
       assert(!config.services?.some(binding => binding.binding === 'GATEKEEPER_OIDC'));
       assert(!config.secrets?.required?.includes('OIDC_CLIENT_SECRET'));
     }
+    assert.equal(configs.workshop.vars.CODEX_BRIDGE_SETUP, 'siwc');
+    delete configs.workshop.vars.CODEX_BRIDGE_SETUP;
     configs.router.services.pop();
     assert.equal(JSON.stringify(configs), JSON.stringify(generateConfigs(baseline, bases)));
     assert.deepEqual(buildCommands(enabled), buildCommands(baseline));
@@ -433,6 +436,8 @@ test('SIWC setup rejects every other setup value and supports OIDC authenticatio
     const configs = generateConfigs(candidate, bases);
     assert.deepEqual(configs.router.services.at(-1), { binding: 'GATEKEEPER_SUBSCRIPTION', service: candidate.modelBridge.service });
     delete candidate.modelBridge.setup;
+    assert.equal(configs.workshop.vars.CODEX_BRIDGE_SETUP, 'siwc');
+    delete configs.workshop.vars.CODEX_BRIDGE_SETUP;
     configs.router.services.pop();
     assert.deepEqual(configs, generateConfigs(candidate, bases));
   }

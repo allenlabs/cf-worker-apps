@@ -193,6 +193,7 @@ export function generateConfigs(input, bases) {
     DISABLE_PASSWORD_AUTH: 'true',
     CODEX_BRIDGE_MODEL: config.modelBridge.model,
     CODEX_BRIDGE_MANAGEMENT: config.modelBridge.management ?? 'user',
+    ...(config.modelBridge.setup === 'siwc' ? { CODEX_BRIDGE_SETUP: 'siwc' } : {}),
     CODEX_BRIDGE_ALLOWED_USER_IDS: JSON.stringify(config.modelBridge.allowedUserIds),
     ...(config.siteLaunch ? {
       SITE_LAUNCH_ISSUER: config.auth.issuer,

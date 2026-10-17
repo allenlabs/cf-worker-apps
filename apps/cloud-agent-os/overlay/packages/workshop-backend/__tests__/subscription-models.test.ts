@@ -14,7 +14,8 @@ import {
   DEFAULT_ADMIN_CONFIG,
   type AdminConfig,
 } from "../src/storage-schema/admin-settings-storage.js";
-import { LanguageModelGatekeeper } from "../src/ai-models.js";
+import { makeUserStorage } from "../src/storage-schema/user-storage.js";
+import { getModel, LanguageModelGatekeeper } from "../src/ai-models.js";
 import server from "../src/server.js";
 import "./test-worker.js";
 declare module "cloudflare:workers" {
@@ -27,7 +28,9 @@ const MODEL = "gpt-6.1-sol",
   USER = "one@example.invalid",
   OTHER = "two@example.invalid";
 const PROFILE = { type: "agent" as const, id: MODEL, name: "Codex subscription" };
-const CONFIG: AiModelConfig = { provider: "openai", model: MODEL, apiToken: "" };
+const CONFIG: AiModelConfig = { provider: "openai", model: MODEL, apiToken: "", transport: "subscription" };
+const PERSONAL = { provider: "anthropic", model: "personal-model", apiToken: "fixture-api-token",
+  apiUrl: "https://personal.example.invalid", extraHeaders: { "X-Personal-Key": "fixture-header" } } satisfies AiModelConfig;
 let count = 0;
 function managed(config: Partial<AdminConfig> = {}) {
   const values = new Map<string, string>([
@@ -153,7 +156,7 @@ describe("admin-managed subscription models", () => {
       second = await getGatewayModels(managed(), OTHER);
     expect(first?.list()).toEqual([PROFILE]);
     expect(second?.list()).toEqual([PROFILE]);
-    expect(first?.userModels).toBe(false);
+    expect(first?.userModels).toBe(true);
     expect(first?.resolve(MODEL)?.config).toEqual(CONFIG);
     expect(first?.all.map((m) => m.id)).toEqual([MODEL]);
   });
@@ -213,13 +216,13 @@ describe("admin-managed subscription models", () => {
       await getGatewayModels({ ...managed(), CODEX_BRIDGE_MANAGEMENT: undefined }, USER),
     ).toBeNull();
   });
-  it("blocks personal mutation and builtin deletion while keeping previous records", async () => {
+  it("blocks personal mutation and builtin deletion while keeping previous records when disabled", async () => {
     await inUser(
       USER,
       async (user) => {
         await user.addModel(
           { type: "agent", id: "old-personal", name: "Personal" },
-          { ...CONFIG, model: "old-personal" },
+          { ...PERSONAL, model: "old-personal" },
         );
         await user.setQuickModel("old-personal");
         await user.setPreferredModel("old-personal");
@@ -239,7 +242,7 @@ describe("admin-managed subscription models", () => {
       expect(await user.getPreferredModel()).toBe("old-personal");
       expect(await user.getQuickModel()).toBeNull();
       expect((await user.getChatContext(MODEL)).quickModel).toBeUndefined();
-    });
+    }, { userModelsEnabled: false });
     await inUser(
       USER,
       async (user) => {
@@ -289,6 +292,7 @@ describe("admin-managed subscription models", () => {
         id: MODEL,
         name: PROFILE.name,
         enabled: false,
+        userModelsEnabled: true,
       });
     });
     expect(JSON.parse(fixture.current()!).modelModes).toEqual({ [MODEL]: "disabled" });
@@ -308,6 +312,7 @@ describe("admin-managed subscription models", () => {
         id: MODEL,
         name: PROFILE.name,
         enabled: true,
+        userModelsEnabled: true,
       });
     });
     await runInDurableObject(
@@ -366,6 +371,9 @@ describe("admin-managed subscription models", () => {
         socket.accept();
         using api = newWebSocketRpcSession<PublicApi>(socket);
         using authenticated = await api.authenticate(`${USER}:${token}`);
+        const forged = { ...PERSONAL, transport: "subscription" as const };
+        await expect(authenticated.addModel({ ...PROFILE, id: "rpc-forgery" }, forged))
+          .rejects.toThrow("transport");
         using adminApi = (await authenticated.getAdminApi())!;
         await adminApi.setSubscriptionModelEnabled(false);
         expect(admin.getAdminConfig().modelModes).toEqual({ [MODEL]: "disabled" });
@@ -373,6 +381,7 @@ describe("admin-managed subscription models", () => {
           id: MODEL,
           name: PROFILE.name,
           enabled: false,
+          userModelsEnabled: true,
         });
         await adminApi.setSubscriptionModelEnabled(true);
         expect(admin.getAdminConfig().modelModes).toEqual({});
@@ -403,7 +412,7 @@ describe("admin-managed subscription models", () => {
         expect(await authenticated.getAiConfig()).toMatchObject({
           enabled: true,
           transport: "subscription",
-          userModelsEnabled: false,
+          userModelsEnabled: true,
         });
         await waitOnExecutionContext(ctx);
       } finally {
@@ -411,4 +420,226 @@ describe("admin-managed subscription models", () => {
       }
     });
   });
+  it("isolates personal providers, redacts secrets, and resolves each owner's quick and default model", async () => {
+    for (const [actor, id] of [[USER, "private-one"], [OTHER, "private-two"]]) {
+      await inUser(actor, async user => {
+        const profile = { type: "agent" as const, id, name: id };
+        await user.addModel(profile, PERSONAL);
+        expect((await user.listModels()).map(model => model.id)).toContain(id);
+        const redacted = await user.getModelConfig(id);
+        expect(redacted.config).toEqual({ ...PERSONAL, apiToken: null,
+          extraHeaders: { "X-Personal-Key": null } });
+        await user.updateModel({ ...profile, name: "Edited" }, redacted.config);
+        await user.setPreferredModel(id);
+        await user.setQuickModel(id);
+        expect(await user.getPreferredModel()).toBe(id);
+        expect(await user.getQuickModel()).toBe(id);
+        const context = await user.getExternalMessageChatContext(null);
+        expect(context.aiModel?.profile.name).toBe("Edited");
+        expect(context.aiModel?.config).toEqual(PERSONAL);
+        expect(context.quickModel).toEqual(PERSONAL);
+        await user.addModel({ ...profile, id: `${id}-clone` }, redacted.config, id);
+        await user.deleteModel(`${id}-clone`);
+        await expect(user.getModelConfig(`${id}-clone`)).rejects.toThrow("No such");
+        await expect(user.addModel(PROFILE, PERSONAL)).rejects.toThrow("already exists");
+      });
+    }
+    await inUser(USER, async user => {
+      expect((await user.listModels()).map(model => model.id)).not.toContain("private-two");
+      await expect(user.getModelConfig("private-two")).rejects.toThrow("No such");
+      await expect(user.setPreferredModel("private-two")).rejects.toThrow("No such");
+      await expect(user.setQuickModel("private-two")).rejects.toThrow("No such");
+      await expect(user.getChatContext("private-two")).rejects.toThrow("No such");
+    });
+    await inUser(OTHER, async user => {
+      expect((await user.listModels()).map(model => model.id)).not.toContain("private-one");
+      await expect(user.getModelConfig("private-one")).rejects.toThrow("No such");
+    });
+  });
+  it("revokes personal selection without deleting records or preferences", async () => {
+    const actor = "revoked@example.invalid", id = "retained-personal";
+    const profile = { type: "agent" as const, id, name: "Retained" };
+    await inUser(actor, async user => {
+      await user.addModel(profile, PERSONAL);
+      await user.setPreferredModel(id);
+      await user.setQuickModel(id);
+    });
+    await inUser(actor, async user => {
+      expect(await user.listModels()).toEqual([]);
+      expect(await user.getQuickModel()).toBeNull();
+      expect((await user.getChatContext(null)).quickModel).toBeUndefined();
+      await expect(user.getChatContext(id)).rejects.toThrow("disabled");
+      await expect(user.getModelConfig(id)).rejects.toThrow("disabled");
+      await expect(user.updateModel(profile, PERSONAL)).rejects.toThrow("disabled");
+      await expect(user.deleteModel(id)).rejects.toThrow("disabled");
+      expect(await user.getPreferredModel()).toBe(id);
+    }, { userModelsEnabled: false });
+    await inUser(actor, async user => {
+      expect((await user.getChatContext(id)).aiModel?.config).toEqual(PERSONAL);
+      expect(await user.getQuickModel()).toBe(id);
+      expect(await user.getPreferredModel()).toBe(id);
+    });
+  });
+  it("rejects forged transport fields before storing or updating personal configurations", async () => {
+    await inUser(USER, async user => {
+      const profile = { type: "agent" as const, id: "transport-forgery", name: "Forged" };
+      for (const transport of ["subscription", undefined, "direct"]) {
+        await expect(user.addModel(profile, { ...PERSONAL, transport } as AiModelConfig))
+          .rejects.toThrow("transport");
+      }
+      await user.addModel(profile, PERSONAL);
+      await expect(user.updateModel(profile, { ...PERSONAL, transport: "subscription" } as AiModelConfig))
+        .rejects.toThrow("transport");
+      expect((await user.getChatContext(profile.id)).aiModel?.config).toEqual(PERSONAL);
+    });
+  });
+  it("changes the personal provider policy and exposes only the configured SIWC setup path", async () => {
+    const fixture = settings();
+    await fixture.inDo(async admin => {
+      expect((await admin.getSettings(USER)).subscriptionModel?.setupUrl).toBeUndefined();
+      const setup = { ...fixture.deployment, CODEX_BRIDGE_SETUP: "siwc" };
+      admin.env = setup;
+      expect((await admin.getSettings(USER)).subscriptionModel?.setupUrl).toBe("/gatekeeper/subscription");
+      await admin.setUserModelsEnabled(false);
+      expect((await admin.getSettings(USER)).subscriptionModel?.userModelsEnabled).toBe(false);
+      expect(admin.getAdminConfig().userModelsEnabled).toBe(false);
+      await admin.setUserModelsEnabled(true);
+      expect(admin.getAdminConfig().userModelsEnabled).toBe(true);
+    });
+    const token = await env.TEST_USER.getByName(USER).loginOrCreateViaGatekeeper(USER, true);
+    for (const setup of [undefined, "https://untrusted.example.invalid/setup", "siwc"]) {
+      const ctx = createExecutionContext();
+      const response = await server.fetch(
+        new Request("https://fixture.invalid/api", { headers: { Upgrade: "websocket" } }),
+        { ...managed(), CODEX_BRIDGE_SETUP: setup, ADMINS: [USER] },
+        ctx,
+      );
+      const socket = response.webSocket!;
+      socket.accept();
+      using api = newWebSocketRpcSession<PublicApi>(socket);
+      using authenticated = await api.authenticate(`${USER}:${token}`);
+      expect(await authenticated.getAiConfig()).toEqual({
+        enabled: true, transport: "subscription", userModelsEnabled: true,
+        enabledProviders: ["openai"], builtInModelIds: [MODEL],
+        ...(setup === "siwc" ? { setupUrl: "/gatekeeper/subscription" } : {}),
+      });
+      await waitOnExecutionContext(ctx);
+    }
+  });
+  it("routes untagged personal aliases directly with their own credentials even for denied shared actors", async () => {
+    const requests: Request[] = [];
+    const deployment = managed();
+    const personal = { ...CONFIG, apiToken: "fixture-personal-key", apiUrl: "https://api.example.invalid/v1" };
+    delete personal.transport;
+    const actor = { type: "user" as const, id: "denied@example.invalid", name: "Denied shared" };
+    const handle = getModel(deployment, personal, actor, {
+      userGateway: { accountId: "fixture-account", apiKey: "fixture-gateway-key" },
+    });
+    const stream = handle.stream(handle.model, { messages: [{ role: "user", content: "fixture", timestamp: 0 }] }, {
+      maxRetries: 0,
+      fetch: async (input, init) => {
+        requests.push(new Request(input, init));
+        return Response.json({ error: { message: "fixture rejection" } }, { status: 400 });
+      },
+    });
+    expect((await stream.result()).stopReason).toBe("error");
+    expect(requests).toHaveLength(1);
+    expect(requests[0].url).toMatch(/^https:\/\/api\.example\.invalid\/v1\//);
+    expect(requests[0].headers.get("authorization")).toBe("Bearer fixture-personal-key");
+    expect(requests[0].headers.get("cf-aig-authorization")).toBeNull();
+    expect(() => getModel(deployment, CONFIG, actor)).toThrow("inference_bridge_user_denied");
+    expect(() => getModel(deployment, CONFIG, { type: "gadget", id: USER, name: "Fixture gadget" }))
+      .toThrow("inference_bridge_user_denied");
+    expect(() => getModel({ ...deployment, CODEX_BRIDGE: undefined }, CONFIG,
+      { ...actor, id: USER })).toThrow("inference_bridge_not_configured");
+    expect(() => getModel(deployment, { ...CONFIG, apiToken: "forged" },
+      { ...actor, id: USER })).toThrow("inference_bridge_model_denied");
+    const alias = { provider: "openai" as const, model: MODEL, apiToken: "" };
+    expect(getModel(deployment, alias, actor).model.provider).toBe("openai");
+  });
+  it("keeps personal same-model bindings independent from shared disabling and revokes them by personal policy", async () => {
+    const direct = { provider: "openai" as const, model: MODEL, apiToken: "fixture-personal-key" };
+    const profile = { type: "agent" as const, id: "same-model-personal", name: "Personal" };
+    await inUser(USER, async user => {
+      await user.addModel(profile, direct);
+      expect((await user.getChatContext(profile.id)).aiModel?.config).toEqual(direct);
+    }, { modelModes: { [MODEL]: "disabled" } });
+    for (const userModelsEnabled of [true, false]) {
+      await inUser(USER, async user => {
+        if (userModelsEnabled) expect((await user.listModels()).map(model => model.id)).toContain(profile.id);
+      }, { modelModes: { [MODEL]: "disabled" }, userModelsEnabled });
+      await runInDurableObject(env.TEST_USER_DIRECTORY.getByName(`personal-binding-${++count}`), async (_u, state) => {
+        Object.defineProperty(state, "props", { configurable: true, value: {
+          displayName: profile.name, config: direct, initiator: { type: "user", id: USER, name: "One" },
+        } });
+        const binding = new LanguageModelGatekeeper(state, managed());
+        if (userModelsEnabled) await expect(binding.startSession(undefined!)).resolves.toBeDefined();
+        else await expect(binding.startSession(undefined!)).rejects.toThrow("disabled");
+      });
+    }
+  });
+
+
+
+  it("uses only the tagged shared bridge and preserves explicit legacy deployment routing", async () => {
+    const calls: unknown[] = [];
+    const message = { role: "assistant", content: [{ type: "text", text: "OK" }],
+      api: "openai-codex-responses", provider: "openai-codex", model: MODEL,
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason: "stop", timestamp: 0 };
+    const deployment = { ...managed(), CODEX_BRIDGE: {
+      async infer(input: unknown) {
+        calls.push(input);
+        return {
+          stream: new ReadableStream<Uint8Array>({ start(controller) {
+            const frames = [{ version: 1, event: { type: "start", partial: message } },
+              { version: 1, event: { type: "done", reason: "stop", message } }];
+            controller.enqueue(new TextEncoder().encode(frames.map(frame => JSON.stringify(frame)).join("\n") + "\n"));
+            controller.close();
+          } }),
+          cancellation: { async cancel() {}, [Symbol.dispose]() {} },
+        };
+      },
+    } };
+    for (const management of ["admin", "user"]) {
+      const config = management === "admin" ? CONFIG : { provider: "openai" as const, model: MODEL, apiToken: "" };
+      const handle = getModel({ ...deployment, CODEX_BRIDGE_MANAGEMENT: management }, config,
+        { type: "user", id: USER, name: "One" });
+      const stream = handle.stream(handle.model, { messages: [{ role: "user", content: "fixture", timestamp: 0 }] });
+      expect((await stream.result()).content).toEqual([{ type: "text", text: "OK" }]);
+    }
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toMatchObject({ version: 1, userId: USER });
+    expect(() => getModel({ ...deployment, CODEX_BRIDGE_MANAGEMENT: "user" }, PERSONAL,
+      { type: "user", id: USER, name: "One" })).toThrow("inference_bridge_model_denied");
+  });
+
+
+  it("strips untrusted historical transport fields when resolving personal records", async () => {
+    const actor = "historical@example.invalid", id = "historical-alias";
+    await runInDurableObject(env.TEST_USER.getByName(actor), async (user, state) => {
+      await user.loginOrCreateViaGatekeeper(actor, true);
+      makeUserStorage(state.storage).aiModels.put({ profile: { type: "agent", id, name: "Historical" },
+        config: CONFIG });
+    });
+    await inUser(actor, async user => {
+      expect((await user.getChatContext(id)).aiModel?.config).toEqual({ provider: "openai", model: MODEL, apiToken: "" });
+      await user.setQuickModel(id);
+      expect((await user.getChatContext(null)).quickModel?.transport).toBeUndefined();
+      expect((await user.getModelConfig(id)).config).not.toHaveProperty("transport");
+    });
+  });
+  it("requires rebinding an old untagged credential-free subscription binding", async () => {
+    await inUser(USER, async () => {});
+    await runInDurableObject(env.TEST_USER_DIRECTORY.getByName(`old-binding-${++count}`), async (_u, state) => {
+      Object.defineProperty(state, "props", { configurable: true, value: {
+        displayName: PROFILE.name, config: { provider: "openai", model: MODEL, apiToken: "" },
+        initiator: { type: "user", id: USER, name: "One" },
+      } });
+      await expect(new LanguageModelGatekeeper(state, managed()).startSession(undefined!))
+        .rejects.toThrow("rebind");
+    });
+  });
+
 });

@@ -86,9 +86,10 @@ entrypoint. The runtime retains its own encrypted account grants. Read the [infe
 `INFERENCE_BRIDGE_MODEL`, `INFERENCE_BRIDGE_ACCOUNT_ID` and `INFERENCE_BRIDGE_ALLOWED_USER_IDS`.
 The Workshop uses the same model and allowed user IDs in `CODEX_BRIDGE_MODEL` and
 `CODEX_BRIDGE_ALLOWED_USER_IDS`. Its frontend receives the same fixed model in
-`VITE_CODEX_BRIDGE_MODEL`: Add Model shows a single Codex subscription and no API credential,
-endpoint or header fields. The submitted config contains an empty token. Without that build flag,
-the upstream direct-provider form and its normal API-token validation remain unchanged.
+`VITE_CODEX_BRIDGE_MODEL`. In legacy user-managed mode, Add Model shows only the fixed
+subscription, with no API credential, endpoint or header fields. In admin-managed mode,
+organization subscription requests and personal API provider requests use separate transports.
+The personal provider form retains its API-token, endpoint and header validation.
 A successful OS login alone must not select or authorize an
 arbitrary subscription account.
 
@@ -98,12 +99,17 @@ must contain 1–20 pinned lowercase email identities, each at most 254 characte
 These bridge limits do not reduce the separate login or administrator identity limits.
 
 Set `modelBridge.management` to `"admin"` to manage that existing connection centrally.
-Admin's **Providers** tab shows the configured Codex subscription and lets an administrator
-enable or disable its fixed model. The model is then available to permitted users without
-creating a per-user provider record. Users choose their default and quick models on **Models**,
-and can select a model for each chat. Personal provider creation and edits are refused by the
-server in this mode; existing records and preferences are retained rather than deleted.
-Disabling the subscription prevents new calls through previously issued model bindings too.
+Admin's **Providers** tab manages the organization subscription and whether users may add
+personal providers. When SIWC setup is configured, its connection button opens the protected
+subscription setup page. Administrators also get this connection button in the initial
+model setup step, before Admin is accessible. The shared model is available to permitted users without a personal
+provider record. Users manage their own API providers, default model and quick model in
+**Providers**, and can select a model for each chat. Personal credentials stay in that user's
+storage. Disabling personal providers hides their models without deleting their records.
+Disabling the shared subscription prevents its new requests, including calls through tagged
+model bindings, while independently authenticated personal providers remain usable.
+Shared configs carry a server-owned subscription transport tag; personal CRUD rejects that tag.
+Older untagged shared model bindings must be reconnected and do not fall back to a paid API.
 No provider credential or account selection is stored in admin configuration: the deployment's
 service binding and the existing runtime's account/model/actor policy remain authoritative.
 Omitting `management`, or setting it to `"user"`, preserves the original per-user setup flow.
@@ -301,7 +307,7 @@ export and rejects `--oidc-secrets`. Confirm the Access policy before exposing t
 4. Connect the permitted MCP endpoint and call a specifically granted harmless read tool.
 5. Confirm every internal Worker has no public route and that browser/network output contains no credentials.
 
-For per-user model setup, open Add Model and confirm the displayed Codex subscription. Its model config is
+In legacy user-managed bridge mode, open Add Model and confirm the displayed subscription. Its model config is
 `{ "provider": "openai", "model": "<configured model>", "apiToken": "" }`.
 The bridge enforces the model and user server-side; the frontend flag grants no permission and
 adding a profile cannot broaden them.

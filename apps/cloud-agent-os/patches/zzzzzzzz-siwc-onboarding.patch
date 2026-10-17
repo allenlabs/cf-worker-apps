@@ -1,0 +1,71 @@
+--- a/packages/workshop-shared/src/api.ts
++++ b/packages/workshop-shared/src/api.ts
+@@ -1512,6 +1512,8 @@
+   enabled: true;
+   /** Set when this catalog uses the existing subscription service rather than AI Gateway. */
+   transport?: "subscription";
++  /** Protected organization subscription setup, advertised only when configured. */
++  setupUrl?: string;
+   /**
+    * The providers the deployment enables: the ones CF_AI_GATEWAY_PROVIDERS lists and the ones its
+    * admin turned on (see AdminApi.setGatewayProviderEnabled). A user can add a model of their own
+--- a/packages/workshop-backend/src/server.ts
++++ b/packages/workshop-backend/src/server.ts
+@@ -250,7 +250,10 @@
+     if (models) {
+       return {
+         enabled: true,
+-        ...(models instanceof SubscriptionModels ? { transport: "subscription" as const } : {}),
++        ...(models instanceof SubscriptionModels ? {
++          transport: "subscription" as const,
++          ...(models.setupUrl ? { setupUrl: models.setupUrl } : {}),
++        } : {}),
+         enabledProviders: [...models.providers] as AiModelProvider[],
+         builtInModelIds: models.all.map(model => model.id),
+         userModelsEnabled: models.userModels,
+--- a/packages/workshop-backend/src/admin-settings.ts
++++ b/packages/workshop-backend/src/admin-settings.ts
+@@ -448,11 +448,11 @@
+   }
+ 
+   #subscriptionDescriptor(config: AdminConfig): NonNullable<AdminSettingsView["subscriptionModel"]> {
+-    const [model] = new SubscriptionModels(this.env, config).all;
+-    const env: Cloudflare.Env & { CODEX_BRIDGE_SETUP?: string } = this.env;
++    const models = new SubscriptionModels(this.env, config);
++    const [model] = models.all;
+     return { id: model.id, name: model.name, enabled: model.mode !== "disabled",
+       userModelsEnabled: config.userModelsEnabled,
+-      ...(env.CODEX_BRIDGE_SETUP === "siwc" ? { setupUrl: "/gatekeeper/subscription" } : {}),
++      ...(models.setupUrl ? { setupUrl: models.setupUrl } : {}),
+     };
+   }
+ 
+--- a/packages/workshop-frontend/src/OnboardingWizard.tsx
++++ b/packages/workshop-frontend/src/OnboardingWizard.tsx
+@@ -64,7 +64,7 @@
+ }: {
+   onComplete: () => void
+ }) {
+-  const { authenticatedApi, currentUser } = useAuthenticatedApi()
++  const { authenticatedApi, currentUser, isAdmin } = useAuthenticatedApi()
+   const { resolvedThemeMode } = useTheme()
+   const toasts = useKumoToastManager()
+   const siteName = useSiteName()
+@@ -484,6 +484,17 @@
+                 <p className="text-sm text-kumo-subtle mb-6">
+                   Pick the AI model you&apos;d like to use by default
+                 </p>
++
++                {isAdmin && aiConfig?.enabled && aiConfig.transport === 'subscription' && aiConfig.setupUrl && (
++                  <a
++                    href={aiConfig.setupUrl}
++                    target="_blank"
++                    rel="noopener noreferrer"
++                    className="mb-4 flex items-center justify-center rounded-xl border border-kumo-line px-4 py-2.5 text-sm font-medium text-kumo-brand hover:bg-kumo-tint"
++                  >
++                    Connect organization SIWC subscription
++                  </a>
++                )}
+ 
+                 {modelsLoading ? (
+                   <div className="flex items-center justify-center py-12">

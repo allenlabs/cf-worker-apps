@@ -1,12 +1,13 @@
 import type { AiGatewayInfo } from '@gadgets/workshop-shared/api'
 
-/** Build-time labels and loading-state controls for an admin-managed subscription deployment. */
+/** Keep subscription controls closed until the deployment policy loads. */
 export const isAdminManagedSubscription = () => import.meta.env.VITE_CODEX_BRIDGE_MANAGEMENT === 'admin'
 
-/** Subscription users choose models; the deployment manages their provider. */
-export const isSubscriptionSelectionOnly = (config: AiGatewayInfo | null) =>
-  isAdminManagedSubscription() || (config?.enabled === true && config.transport === 'subscription')
-
-/** Whether the deployment policy offers personal provider configuration. */
+/** Whether the loaded deployment policy offers personal provider configuration. */
 export const canAddPersonalModels = (config: AiGatewayInfo | null) =>
-  !isSubscriptionSelectionOnly(config) && (config?.enabled !== true || config.userModelsEnabled)
+  config !== null && (config.enabled ? config.userModelsEnabled : !isAdminManagedSubscription())
+
+/** A shared subscription with personal providers disabled offers model selection only. */
+export const isSubscriptionSelectionOnly = (config: AiGatewayInfo | null) =>
+  (isAdminManagedSubscription() || (config?.enabled === true && config.transport === 'subscription')) &&
+  !canAddPersonalModels(config)

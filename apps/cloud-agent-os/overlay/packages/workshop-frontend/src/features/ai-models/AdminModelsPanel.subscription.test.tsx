@@ -26,24 +26,26 @@ describe('Admin-managed Codex subscription', () => {
     addToast.mockReset()
   })
 
-  const render = async (enabled: boolean, mutate = async (_enabled: boolean) => {}) => {
+  const render = async (enabled: boolean, mutate = async (_enabled: boolean) => {},
+    policy: Pick<NonNullable<AdminSettingsView['subscriptionModel']>, 'userModelsEnabled' | 'setupUrl'> = { userModelsEnabled: true }) => {
     const setSubscriptionModelEnabled = vi.fn(mutate)
     const onChanged = vi.fn<() => Promise<void>>(async () => {})
-    const admin = { setSubscriptionModelEnabled } as unknown as RpcStub<AdminApi>
+    const setUserModelsEnabled = vi.fn(mutate)
+    const admin = { setSubscriptionModelEnabled, setUserModelsEnabled } as unknown as RpcStub<AdminApi>
     root = createRoot(document.body.appendChild(document.createElement('div')))
     const show = async (reported: boolean) => {
       const subscriptionModel: AdminSettingsView['subscriptionModel'] = {
-        id: 'codex-subscription', name: 'Codex subscription', enabled: reported,
+        id: 'codex-subscription', name: 'Codex subscription', enabled: reported, ...policy,
       }
       await act(async () => root!.render(<AdminModelsPanel admin={admin}
         gatewayModels={undefined} subscriptionModel={subscriptionModel} onChanged={onChanged} />))
     }
     await show(enabled)
-    return { setSubscriptionModelEnabled, onChanged, show }
+    return { setSubscriptionModelEnabled, setUserModelsEnabled, onChanged, show }
   }
 
-  const toggle = () => {
-    const control = document.body.querySelector<HTMLButtonElement>('[role="switch"]')!
+  const toggle = (label = "Enable Codex subscription") => {
+    const control = document.body.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${label}"]`)!
     const checkbox = control?.nextElementSibling
     if (!(checkbox instanceof HTMLInputElement)) throw new Error('Missing subscription toggle')
     return { control, checkbox }
@@ -66,17 +68,43 @@ describe('Admin-managed Codex subscription', () => {
     expect(toggle().control.getAttribute('aria-checked')).toBe(String(!enabled))
   })
 
-  it('locks the toggle during a write, then restores it and reports a rejected write', async () => {
+  it.each(['Enable Codex subscription', 'Allow personal providers'])('locks both toggles during a write, then restores them and reports rejection (%s)', async label => {
     let reject!: (reason: Error) => void
     const pending = new Promise<void>((_resolve, fail) => { reject = fail })
     vi.spyOn(console, 'error').mockImplementation(() => {})
     const { onChanged } = await render(true, () => pending)
-    await act(async () => toggle().checkbox.click())
+    await act(async () => toggle(label).checkbox.click())
     expect(toggle().control.disabled).toBe(true)
+    expect(toggle('Allow personal providers').control.disabled).toBe(true)
     await act(async () => reject(new Error('Unavailable')))
     expect(toggle().control.disabled).toBe(false)
     expect(toggle().control.getAttribute('aria-checked')).toBe('true')
     expect(onChanged).not.toHaveBeenCalled()
     expect(addToast).toHaveBeenCalledWith(expect.objectContaining({ variant: 'error' }))
   })
+  it.each([undefined, '/gatekeeper/subscription'])('offers SIWC setup only when advertised (%s)', async setupUrl => {
+    await render(true, undefined, { userModelsEnabled: true, setupUrl })
+    const link = document.body.querySelector<HTMLAnchorElement>('a[href="/gatekeeper/subscription"]')
+    if (setupUrl) {
+      expect(link?.textContent).toBe('Connect or manage SIWC subscription')
+      expect(link?.getAttribute('href')).toBe('/gatekeeper/subscription')
+    } else expect(link).toBeNull()
+    expect(document.body.textContent).toContain('Organization subscription')
+    expect(document.body.textContent).toContain('Personal providers')
+  })
+
+  it.each([true, false])('saves the personal-provider policy through Admin (%s)', async userModelsEnabled => {
+    const { setUserModelsEnabled, setSubscriptionModelEnabled, onChanged, show } =
+      await render(true, undefined, { userModelsEnabled, setupUrl: undefined })
+    const label = 'Allow personal providers'
+    expect(toggle(label).control.getAttribute('aria-checked')).toBe(String(userModelsEnabled))
+    await act(async () => toggle(label).checkbox.click())
+    expect(setUserModelsEnabled).toHaveBeenCalledExactlyOnceWith(!userModelsEnabled)
+    expect(setSubscriptionModelEnabled).not.toHaveBeenCalled()
+    expect(onChanged).toHaveBeenCalledOnce()
+    expect(toggle(label).control.getAttribute('aria-checked')).toBe(String(userModelsEnabled))
+    await show(false)
+    expect(toggle().control.getAttribute('aria-checked')).toBe('false')
+  })
+
 })

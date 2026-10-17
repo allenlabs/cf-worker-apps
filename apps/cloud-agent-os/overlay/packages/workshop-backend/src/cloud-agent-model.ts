@@ -8,6 +8,7 @@ import { z } from "zod";
 type BridgeEnvironment = {
   CODEX_BRIDGE?: { infer(input: unknown): Promise<{ stream: ReadableStream<Uint8Array>; cancellation: { cancel(): Promise<void>; [Symbol.dispose](): void } }> };
   CODEX_BRIDGE_MODEL?: string;
+  CODEX_BRIDGE_MANAGEMENT?: string;
   CODEX_BRIDGE_ALLOWED_USER_IDS?: string;
 };
 
@@ -39,8 +40,11 @@ function failedMessage(model: Model<Api>, aborted: boolean): AssistantMessage {
 
 /** Server-owned subscription transport enabled by an explicit service binding. */
 export function cloudAgentModel(env: Cloudflare.Env & BridgeEnvironment, config: AiModelConfig, initiator: AiChatAuthorInfo): ModelHandle | undefined {
+  // Legacy user-managed deployments select their sole bridge through deployment configuration.
+  if (config.transport !== "subscription" &&
+      !(env.CODEX_BRIDGE && env.CODEX_BRIDGE_MANAGEMENT !== "admin")) return undefined;
   const bridge = env.CODEX_BRIDGE;
-  if (!bridge) return undefined;
+  if (!bridge) throw Error("inference_bridge_not_configured");
   let users: unknown;
   try { users = JSON.parse(env.CODEX_BRIDGE_ALLOWED_USER_IDS || ""); } catch { throw Error("inference_bridge_not_configured"); }
   const allowed = z.array(z.email().refine(value => value === value.toLowerCase())).min(1).max(20).safeParse(users);

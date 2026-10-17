@@ -1,0 +1,207 @@
+diff --git a/packages/workshop-backend/src/user.ts b/packages/workshop-backend/src/user.ts
+--- a/packages/workshop-backend/src/user.ts
++++ b/packages/workshop-backend/src/user.ts
+@@ -11,7 +11,7 @@
+ } from "./storage-schema/user-storage.js";
+ import { recordAnalytics } from "./analytics";
+ import { createWorkshopLogger } from "./observability";
+-import { getGatewayModels, type DeploymentModels } from "./ai-gateway.js";
++import { GatewayModels, getGatewayModels, type DeploymentModels } from "./ai-gateway.js";
+ import { isAdminManagedSubscription, SubscriptionModels } from "./subscription-models.js";
+ import { utcDayKey, nextUtcMidnightIso, DailyQuotaResult } from "./ai-gateway-billing/limits/config.js";
+ import type { AdminSettings } from "./admin-settings.js";
+@@ -68,7 +68,7 @@
+ 
+ /** Withholds the non-empty secrets of `config`, for returning it to a client. */
+ function redactModelConfig(config: AiModelConfig): RedactedAiModelConfig {
+-  let {apiToken, extraHeaders, ...rest} = config;
++  let {apiToken, extraHeaders, transport, ...rest} = config;
+   return {
+     ...rest,
+     apiToken: withholdSecret(apiToken),
+@@ -84,6 +84,8 @@
+  */
+ function resolveWithheldSecrets(
+     config: RedactedAiModelConfig, source?: AiModelConfig): AiModelConfig {
++  if (Object.hasOwn(config, "transport"))
++    throw new Error("Personal model transport is server-owned.");
+   let resolve = (secret: string | null, stored: string | undefined, what: string) => {
+     if (secret !== null) return secret;
+     if (!source) {
+@@ -591,7 +593,7 @@
+   }
+ 
+   #putModel(profile: AiChatAuthorInfo, config: AiModelConfig, models: DeploymentModels | null) {
+-    if (models && !models.providers.has(config.provider)) {
++    if (models instanceof GatewayModels && !models.providers.has(config.provider)) {
+       throw new Error(`Provider "${config.provider}" is not available in AI Gateway mode.`);
+     }
+     for (let limit of [config.contextWindow, config.outputLimit]) {
+@@ -602,7 +604,7 @@
+ 
+     // capnweb-validate lets through properties that RedactedAiModelConfig omits, and these are a
+     // deployment's to set on its own models.
+-    let {reasoning, compactionInputBudget, behavesLike, capabilities, ...own} = config;
++    let {reasoning, compactionInputBudget, behavesLike, capabilities, transport, ...own} = config;
+ 
+     profile.type = "agent";
+     this.storage.aiModels.put({profile, config: own});
+@@ -623,7 +625,7 @@
+     if (id !== null && isAdminManagedSubscription(this.env)) {
+       const models = await getGatewayModels(this.env, this.#modelUserId(),
+           () => this.adminSettings.getByName("").getAdminConfig());
+-      if (!models?.resolve(id)) throw new Error(`No such model: ${id}`);
++      if (!this.#resolveModel(id, models)) throw new Error(`No such model: ${id}`);
+     }
+     this.storage.quickModel.put(id);
+   }
+@@ -633,7 +635,7 @@
+     if (isAdminManagedSubscription(this.env)) {
+       const models = await getGatewayModels(this.env, this.#modelUserId(),
+           () => this.adminSettings.getByName("").getAdminConfig());
+-      return result && models?.resolve(result) ? result : null;
++      return result && this.#resolveModel(result, models) ? result : null;
+     }
+     if (result && this.storage.aiModels.get(result)) {
+       return result;
+@@ -774,7 +776,7 @@
+     // Resolve the quick model (used for lightweight tasks like title generation).
+     if (models instanceof SubscriptionModels) {
+       const quickModelId = this.storage.quickModel.get();
+-      result.quickModel = quickModelId ? models.resolve(quickModelId)?.config : undefined;
++      result.quickModel = quickModelId ? this.#resolveModel(quickModelId, models)?.config : undefined;
+     } else if (models) {
+       // In AI Gateway mode, always use the hardcoded quick model.
+       result.quickModel = models.gateway.getQuickModelConfig();
+@@ -813,7 +815,11 @@
+    */
+   #resolveModel(id: string, models: DeploymentModels | null): UserAiModelRecord | undefined {
+     if (models?.get(id)) return models.resolve(id);
+-    return models && !models.userModels ? undefined : this.storage.aiModels.get(id);
++    let record = models && !models.userModels ? undefined : this.storage.aiModels.get(id);
++    if (!record) return undefined;
++    // Older personal records can contain extra RPC fields; only the shared resolver grants transport.
++    let {transport, ...config} = record.config;
++    return {...record, config};
+   }
+ 
+   async listGadgets(): Promise<GadgetMetadataWithTimestamps[]> {
+diff --git a/packages/workshop-backend/src/admin-settings.ts b/packages/workshop-backend/src/admin-settings.ts
+--- a/packages/workshop-backend/src/admin-settings.ts
++++ b/packages/workshop-backend/src/admin-settings.ts
+@@ -449,7 +449,11 @@
+ 
+   #subscriptionDescriptor(config: AdminConfig): NonNullable<AdminSettingsView["subscriptionModel"]> {
+     const [model] = new SubscriptionModels(this.env, config).all;
+-    return { id: model.id, name: model.name, enabled: model.mode !== "disabled" };
++    const env: Cloudflare.Env & { CODEX_BRIDGE_SETUP?: string } = this.env;
++    return { id: model.id, name: model.name, enabled: model.mode !== "disabled",
++      userModelsEnabled: config.userModelsEnabled,
++      ...(env.CODEX_BRIDGE_SETUP === "siwc" ? { setupUrl: "/gatekeeper/subscription" } : {}),
++    };
+   }
+ 
+   /** Change only the fixed subscription model's availability, using the existing atomic config mirror. */
+@@ -750,7 +754,7 @@
+ 
+   /** Set whether users may add models of their own to the ones the gateway provides. */
+   async setUserModelsEnabled(enabled: boolean): Promise<void> {
+-    this.#requireGateway();
++    if (!isAdminManagedSubscription(this.env)) this.#requireGateway();
+     await this.updateAdminConfig({ userModelsEnabled: enabled });
+   }
+ 
+diff --git a/packages/workshop-backend/src/ai-models.ts b/packages/workshop-backend/src/ai-models.ts
+--- a/packages/workshop-backend/src/ai-models.ts
++++ b/packages/workshop-backend/src/ai-models.ts
+@@ -1,5 +1,6 @@
+ import { DurableObject, RpcStub, RpcTarget } from "cloudflare:workers";
+ import { cloudAgentModel } from "./cloud-agent-model";
++import { isAdminManagedSubscription, SubscriptionModels } from "./subscription-models.js";
+ import { validateRpc } from "capnweb-validate";
+ import type {
+   AnthropicMessagesCompat, Api, AssistantMessageEventStream, Context, FetchFunction, Model,
+@@ -567,6 +568,7 @@
+                          options: ModelRoutingOptions = {}): ModelHandle {
+   const bound = cloudAgentModel(env, config, initiator);
+   if (bound) return bound;
++  if (isAdminManagedSubscription(env)) return getModelDirect(config, options.sessionAffinity);
+   // BYOK: a connected user's own Cloudflare account pays for everything (all providers, including
+   // Workers AI), routed through the user's own AI Gateway with unified billing. Honored regardless
+   // of whether a platform AI Gateway is configured, so connected users are always billed correctly.
+@@ -915,7 +917,13 @@
+     // so does a binding for any other model: one a user added, or one the admin added and removed.
+     let models = await getGatewayModels(this.env, this.ctx.props.initiator.id,
+         () => this.ctx.exports.AdminSettings.getByName("").getAdminConfig());
+-    if (models?.get(config.model)?.provider === config.provider) {
++    if (models instanceof SubscriptionModels && config.transport !== "subscription" &&
++        models.get(config.model)?.provider === config.provider && !config.apiToken &&
++        config.apiUrl === undefined && !Object.keys(config.extraHeaders ?? {}).length) {
++      throw new Error("Please rebind this subscription model to establish its transport.");
++    }
++    if ((!(models instanceof SubscriptionModels) || config.transport === "subscription") &&
++        models?.get(config.model)?.provider === config.provider) {
+       models.refuseDisabled(config.model);
+     } else {
+       models?.refuseUserModel(this.ctx.props.displayName);
+diff --git a/packages/workshop-shared/src/api.ts b/packages/workshop-shared/src/api.ts
+--- a/packages/workshop-shared/src/api.ts
++++ b/packages/workshop-shared/src/api.ts
+@@ -1058,6 +1058,10 @@
+     name: string;
+     /** Whether this model remains available to authorized users. */
+     enabled: boolean;
++    /** Whether users may configure personal providers beside the shared subscription. */
++    userModelsEnabled: boolean;
++    /** Same-origin setup path, present only when the deployment configures SIWC setup. */
++    setupUrl?: string;
+   };
+   /** The models the deployment provides through AI Gateway. Absent outside AI Gateway mode. */
+   gatewayModels?: {
+@@ -1280,8 +1284,8 @@
+   removeGatewayModel(modelId: string): Promise<void>;
+ 
+   /**
+-   * Set whether users may add models of their own, which run through the deployment's gateway
+-   * like the models it provides. On by default.
++   * Set whether users may add models of their own. On by default. AI Gateway deployments route
++   * these through the gateway; subscription deployments use each personal provider's credentials.
+    *
+    * Off makes the deployment's models the only ones: a user can't add or edit a model, and the
+    * models users added are neither listed nor resolved. A gadget model binding stops at its next
+@@ -1511,7 +1515,7 @@
+   /**
+    * The providers the deployment enables: the ones CF_AI_GATEWAY_PROVIDERS lists and the ones its
+    * admin turned on (see AdminApi.setGatewayProviderEnabled). A user can add a model of their own
+-   * under these only.
++   * under these only when this catalog uses AI Gateway.
+    */
+   enabledProviders: AiModelProvider[];
+   /**
+@@ -1522,7 +1526,7 @@
+   /**
+    * Whether users may add models of their own (see AdminApi.setUserModelsEnabled). When false,
+    * addModel() and updateModel() refuse, and the models the user added are neither listed nor
+-   * resolved. Always false for the admin-managed subscription transport.
++   * resolved.
+    */
+   userModelsEnabled: boolean;
+ } | {
+@@ -1742,6 +1746,9 @@
+ 
+ /** Configuration specifying how to connect to an AI model provider. */
+ export type AiModelConfig = {
++  /** Server-owned subscription routing provenance; never accepted from personal provider forms. */
++  transport?: "subscription";
++
+   /** Which AI provider hosts the model? */
+   provider: AiModelProvider;
+ 
+@@ -1823,6 +1830,6 @@
+  */
+ export type RedactedAiModelConfig = Omit<AiModelConfig,
+     "apiToken" | "extraHeaders" | "reasoning" | "compactionInputBudget" | "behavesLike" |
+-    "capabilities"> & {
++    "capabilities" | "transport"> & {
+   /** `AiModelConfig.apiToken`, or null if withheld. */
+   apiToken: string | null;

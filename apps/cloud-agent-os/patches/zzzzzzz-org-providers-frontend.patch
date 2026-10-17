@@ -1,0 +1,269 @@
+diff --git a/packages/workshop-frontend/src/AddModelModal.tsx b/packages/workshop-frontend/src/AddModelModal.tsx
+--- a/packages/workshop-frontend/src/AddModelModal.tsx
++++ b/packages/workshop-frontend/src/AddModelModal.tsx
+@@ -8,6 +8,7 @@
+ import {
+   headerRowsFromRecord, headerRowsToRecord, validateHeaderRows, type HeaderRow,
+ } from './features/ai-models/extraHeaders'
++import { isAdminManagedSubscription } from './features/ai-models/modelManagement'
+ import { PROVIDER_LABELS, parseTokenLimit } from './features/ai-models/modelForm'
+ 
+ /**
+@@ -108,7 +109,8 @@
+ 
+ export default function AddModelModal({ visible, onCancel, onSuccess, authenticatedApi, aiConfig, mode = { type: 'add' } }: AddModelModalProps) {
+   const toasts = useKumoToastManager()
+-  const bridgeModel = import.meta.env.VITE_CODEX_BRIDGE_MODEL?.trim()
++  const bridgeModel = isAdminManagedSubscription() || (aiConfig?.enabled === true && aiConfig.transport === 'subscription')
++    ? undefined : import.meta.env.VITE_CODEX_BRIDGE_MODEL?.trim()
+ 
+   // Edit and clone modes take their initial state from the source model, so the caller remounts
+   // the modal (with a `key`) to switch source.
+@@ -121,7 +123,7 @@
+   const selection: SelectionType | null = bridgeModel
+     ? { type: 'suggested', provider: 'openai', modelId: bridgeModel, displayName: 'Codex subscription' }
+     : selected
+-  const [selectValue, setSelectValue] = useState<string | undefined>(undefined)
++  const [selectValue, setSelectValue] = useState<string | null>(null)
+ 
+   // Form fields (used for custom models). A null secret keeps the source's withheld value.
+   const [modelId, setModelId] = useState(editing ? source!.config.model : '')
+@@ -141,7 +143,7 @@
+   // Advanced settings collapsible state
+   const [advancedOpen, setAdvancedOpen] = useState(false)
+ 
+-  const gatewayMode = aiConfig?.enabled === true
++  const gatewayMode = aiConfig?.enabled === true && aiConfig.transport !== 'subscription'
+   const enabledProviders: Set<string> | null = gatewayMode
+     ? new Set(aiConfig.enabledProviders)
+     : null
+@@ -155,7 +157,7 @@
+   useEffect(() => {
+     if (!visible) {
+       setSelection(null)
+-      setSelectValue(undefined)
++      setSelectValue(null)
+       setModelId('')
+       setDisplayName('')
+       setApiToken('')
+@@ -342,7 +344,7 @@
+             className="w-full text-sm"
+             placeholder={gatewayMode ? 'Choose a provider...' : 'Choose an AI model...'}
+             value={selectValue}
+-            onValueChange={(v) => handleModelSelect(v as string)}
++            onValueChange={(v) => { if (v) handleModelSelect(v) }}
+             error={errors.selection}
+             renderValue={(v) => {
+               const opt = options.find(o => o.value === v)
+diff --git a/packages/workshop-frontend/src/AddModelModal.test.tsx b/packages/workshop-frontend/src/AddModelModal.test.tsx
+--- a/packages/workshop-frontend/src/AddModelModal.test.tsx
++++ b/packages/workshop-frontend/src/AddModelModal.test.tsx
+@@ -5,7 +5,7 @@
+ import { createRoot, type Root } from 'react-dom/client'
+ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+ import type { RpcStub } from 'capnweb'
+-import type { AuthenticatedApi, RedactedAiModelConfig } from '@gadgets/workshop-shared/api'
++import type { AiGatewayInfo, AuthenticatedApi, RedactedAiModelConfig } from '@gadgets/workshop-shared/api'
+ 
+ vi.mock('@cloudflare/kumo', async (importOriginal) => ({
+   ...(await importOriginal<typeof import('@cloudflare/kumo')>()),
+@@ -52,7 +52,7 @@
+   element.dispatchEvent(new Event('input', { bubbles: true }))
+ })
+ 
+-const click = (element: HTMLElement) => act(() => { element.click() })
++const click = (element: HTMLElement) => act(async () => { element.click() })
+ 
+ describe('AddModelModal with a stored model', () => {
+   let root: Root | undefined
+@@ -65,7 +65,7 @@
+     vi.unstubAllEnvs()
+   })
+ 
+-  const render = async (mode: ModelModalMode) => {
++  const render = async (mode: ModelModalMode, aiConfig: AiGatewayInfo = { enabled: false }) => {
+     const updateModel = vi.fn<AuthenticatedApi['updateModel']>(async () => {})
+     const addModel = vi.fn<AuthenticatedApi['addModel']>(async () => {})
+     const api = { updateModel, addModel } as unknown as RpcStub<AuthenticatedApi>
+@@ -78,7 +78,7 @@
+       onCancel={() => {}}
+       onSuccess={() => {}}
+       authenticatedApi={api}
+-      aiConfig={{ enabled: false }}
++      aiConfig={aiConfig}
+     />))
+     return { updateModel, addModel }
+   }
+@@ -202,4 +202,54 @@
+     await click(button('Save Changes'))
+     expect(updateModel).toHaveBeenCalledWith(PROFILE, { ...config, apiToken: 'fixture-token' })
+   })
++  const subscription: AiGatewayInfo = {
++    enabled: true, transport: 'subscription', userModelsEnabled: true,
++    enabledProviders: ['openai'], builtInModelIds: ['codex-subscription'],
++  }
++
++  it.each(['admin', 'user'])('adds a personal custom provider with its own endpoint, token and headers beside a subscription (%s build)', async management => {
++    vi.stubEnv('VITE_CODEX_BRIDGE_MANAGEMENT', management)
++    vi.stubEnv('VITE_CODEX_BRIDGE_MODEL', 'gpt-fixture-codex')
++    const { addModel } = await render({ type: 'add' }, subscription)
++    const selector = document.body.querySelector<HTMLElement>('[role="combobox"]')
++    expect(selector).not.toBeNull()
++    await click(selector!)
++    const option = Array.from(document.body.querySelectorAll<HTMLElement>('[role="option"]'))
++      .find(element => element.textContent === 'Other Anthropic...')
++    expect(option).toBeDefined()
++    const view: { PointerEvent?: typeof MouseEvent } = window
++    view.PointerEvent = MouseEvent
++    try {
++      await act(async () => option!.focus())
++      await act(async () => option!.dispatchEvent(new KeyboardEvent('keydown', {
++        key: 'Enter', bubbles: true, cancelable: true,
++      })))
++    } finally { delete view.PointerEvent }
++    await type(labeledInput('Model ID'), 'personal-fixture')
++    await type(labeledInput('Display Name'), 'Personal fixture')
++    await type(labeledInput('API Token'), 'fixture-token')
++    await click(button('Advanced Settings'))
++    await type(labeledInput('API URL'), 'https://provider.example/v1')
++    await click(button('Add header'))
++    await type(input('input[aria-label="Header name"]'), 'X-Fixture')
++    await type(input('input[aria-label="Header value"]'), 'fixture-header')
++    await click(button('Add Model'))
++    expect(addModel).toHaveBeenCalledExactlyOnceWith(
++      { type: 'agent', id: 'personal-fixture', name: 'Personal fixture' },
++      { provider: 'anthropic', model: 'personal-fixture', apiToken: 'fixture-token',
++        apiUrl: 'https://provider.example/v1', extraHeaders: { 'X-Fixture': 'fixture-header' } },
++      undefined,
++    )
++  })
++
++  it('keeps personal stored credentials when editing beside an admin-managed subscription', async () => {
++    vi.stubEnv('VITE_CODEX_BRIDGE_MANAGEMENT', 'admin')
++    vi.stubEnv('VITE_CODEX_BRIDGE_MODEL', 'gpt-fixture-codex')
++    const { updateModel } = await render({ type: 'edit', source: { profile: PROFILE, config: CONFIG } }, subscription)
++    expect(labeledInput('API Token').placeholder).toBe('********')
++    expect(labeledInput('API URL').value).toBe('https://ollama.example')
++    await click(button('Save Changes'))
++    expect(updateModel).toHaveBeenCalledExactlyOnceWith(PROFILE, CONFIG)
++  })
++
+ })
+diff --git a/packages/workshop-frontend/src/routes/providers.tsx b/packages/workshop-frontend/src/routes/providers.tsx
+--- a/packages/workshop-frontend/src/routes/providers.tsx
++++ b/packages/workshop-frontend/src/routes/providers.tsx
+@@ -79,11 +79,9 @@
+           <span className="truncate text-sm font-medium tracking-[-0.25px] text-kumo-default">
+             {model.name}
+           </span>
+-          {isBuiltIn && (
+-            <span className="shrink-0 rounded-full bg-kumo-tint px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.4px] text-kumo-subtle">
+-              built-in
+-            </span>
+-          )}
++          <span className="shrink-0 rounded-full bg-kumo-tint px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.4px] text-kumo-subtle">
++            {isBuiltIn ? 'shared' : 'personal'}
++          </span>
+           {isQuick && (
+             <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[rgba(255,72,1,0.10)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.4px] text-kumo-brand">
+               <Lightning size={9} weight="fill" />
+@@ -152,7 +150,7 @@
+ // ─── main page ────────────────────────────────────────────────────────────────
+ 
+ function ProvidersPage() {
+-  useDocumentTitle(isAdminManagedSubscription() ? 'Models' : 'AI Providers')
++  useDocumentTitle('AI Providers')
+ 
+   const { authenticatedApi } = useAuthenticatedApi()
+   const toasts = useKumoToastManager()
+@@ -178,7 +176,7 @@
+         authenticatedApi.getAiConfig(),
+         isAdminManagedSubscription() ? authenticatedApi.getPreferredModel() : Promise.resolve(null),
+       ])
+-      const reportedPreferred = isSubscriptionSelectionOnly(cfg) && !isAdminManagedSubscription()
++      const reportedPreferred = cfg.enabled && cfg.transport === 'subscription' && !isAdminManagedSubscription()
+         ? await authenticatedApi.getPreferredModel()
+         : preferred
+       setModels(modelList)
+@@ -203,6 +201,7 @@
+   useEffect(() => { fetchAll() }, [authenticatedApi])
+ 
+   const gatewayMode = aiConfig?.enabled === true && aiConfig.transport !== 'subscription'
++  const subscriptionMode = isAdminManagedSubscription() || (aiConfig?.enabled === true && aiConfig.transport === 'subscription')
+   const selectionOnly = isSubscriptionSelectionOnly(aiConfig)
+   const canAddModels = canAddPersonalModels(aiConfig)
+ 
+@@ -294,8 +293,10 @@
+           <h1 className="text-2xl font-semibold tracking-tight text-kumo-default">{selectionOnly ? 'Models' : 'AI providers'}</h1>
+           <p className="mt-1 text-[13px] leading-[18px] tracking-[-0.25px] text-kumo-subtle">
+             {selectionOnly
+-              ? 'Choose from the models provided by your administrator.'
+-              : 'Configure the AI models available to your workspaces.'}
++              ? 'Choose from the models shared by your organization.'
++              : subscriptionMode
++                ? 'Choose an organization model or add personal providers with your own credentials.'
++                : 'Configure the AI models available to your workspaces.'}
+           </p>
+         </div>
+         {canAddModels && (
+@@ -312,7 +313,7 @@
+         )}
+       </header>
+ 
+-      {selectionOnly && !loading && !loadError && (
++      {subscriptionMode && !loading && !loadError && (
+         <div className="mb-4 px-3">
+           <Select<string>
+             label="Default model"
+diff --git a/packages/workshop-frontend/src/components/Header.tsx b/packages/workshop-frontend/src/components/Header.tsx
+--- a/packages/workshop-frontend/src/components/Header.tsx
++++ b/packages/workshop-frontend/src/components/Header.tsx
+@@ -7,7 +7,6 @@
+ import UserMenu from './UserMenu'
+ import TopBarNotice from '../TopBarNotice'
+ import SiteLogo from './SiteLogo'
+-import { isAdminManagedSubscription } from '../features/ai-models/modelManagement'
+ 
+ export default function Header() {
+   const auth = useOptionalAuthenticatedApi()
+@@ -176,7 +175,7 @@
+                   className={navLinkClass}
+                   activeProps={{ className: navLinkActiveClass }}
+                 >
+-                  {isAdminManagedSubscription() ? 'Models' : 'Providers'}
++                  Providers
+                 </Link>
+                 {auth.isAdmin && (
+                   <Link
+diff --git a/packages/workshop-frontend/src/components/UserMenu.tsx b/packages/workshop-frontend/src/components/UserMenu.tsx
+--- a/packages/workshop-frontend/src/components/UserMenu.tsx
++++ b/packages/workshop-frontend/src/components/UserMenu.tsx
+@@ -2,7 +2,6 @@
+ import { DropdownMenu } from '@cloudflare/kumo'
+ import { useAuthenticatedApi } from '../AuthContext'
+ import { useAvatar } from '../useAvatar'
+-import { isAdminManagedSubscription } from '../features/ai-models/modelManagement'
+ import { MENU_CONTENT, MENU_ITEM, MENU_ITEM_DANGER, MENU_POSITIONER_STYLE } from './menuStyles'
+ 
+ export default function UserMenu() {
+@@ -43,7 +42,7 @@
+           onClick={() => navigate({ to: '/providers' })}
+           className={MENU_ITEM}
+         >
+-          {isAdminManagedSubscription() ? 'Models' : 'Providers'}
++          Providers
+         </DropdownMenu.Item>
+         {isAdmin && (
+           <DropdownMenu.Item
+diff --git a/packages/workshop-frontend/src/AdminPage.tsx b/packages/workshop-frontend/src/AdminPage.tsx
+--- a/packages/workshop-frontend/src/AdminPage.tsx
++++ b/packages/workshop-frontend/src/AdminPage.tsx
+@@ -435,7 +435,7 @@
+           { value: 'general', label: 'General' },
+           { value: 'gatekeepers', label: 'Gatekeepers' },
+           { value: 'formats', label: 'Formats' },
+-          { value: 'models', label: isAdminManagedSubscription() ? 'Providers' : 'Models' },
++          { value: 'models', label: isAdminManagedSubscription() ? 'Organization providers' : 'Models' },
+           { value: 'access', label: 'Access' },
+         ]}
+       />
