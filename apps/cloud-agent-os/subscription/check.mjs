@@ -13,6 +13,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 const work = await mkdtemp(join(tmpdir(), "subscription-native-check-"));
 const issuer = "https://team.example.invalid", origin = "https://os.example.invalid", audience = "synthetic-access-application";
 const email = "fixture@example.invalid", other = "other@example.invalid", model = "gpt-6.1-sol";
+const oidcIssuer = "https://identity.example.invalid/oidc", oidcSubject = "fixture-oidc-admin";
+const osToken = email + ":" + Buffer.alloc(32, 1).toString("base64");
+const osOtherToken = email + ":" + Buffer.alloc(32, 2).toString("base64");
+const sessionToken = suffix => email + ":" + Buffer.alloc(32, suffix).toString("base64");
 const accessToken = "synthetic-siwc-access-never-log", refreshToken = "synthetic-siwc-refresh-never-log";
 const accessKeys = generateKeyPairSync("rsa", { modulusLength: 2048 });
 const openaiKeys = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -52,10 +56,30 @@ export class Probe extends WorkerEntrypoint {
 await writeFile(join(work, "client.js"), `export default { async fetch(request, env) {
   const path=new URL(request.url).pathname;
   if(path==='/events')return Response.json(await env.PROBE.events());
+  if(path==='/session-calls')return Response.json(await env.SESSION.count());
   if(path==='/fail'){await env.PROBE.fail((await request.json()).value);return Response.json({ok:true});}
   try { const result=await env.BRIDGE.infer(await request.json());return new Response(result.stream); }
   catch { return Response.json({error:'inference_denied'},{status:403}); }
 }};`);
+await writeFile(join(work, "session.js"), `
+import { WorkerEntrypoint } from 'cloudflare:workers';
+let calls = 0;
+export class SubscriptionSetupSession extends WorkerEntrypoint {
+  count() { return calls; }
+  async verify(token) {
+    calls++;
+    if (token === ${JSON.stringify(sessionToken(6))}) throw Error(${JSON.stringify(osToken)});
+    const principal = { issuer: ${JSON.stringify(oidcIssuer)}, subject: ${JSON.stringify(oidcSubject)}, email: ${JSON.stringify(email)} };
+    if (token === ${JSON.stringify(osToken)}) return principal;
+    if (token === ${JSON.stringify(osOtherToken)}) return { ...principal, email: ${JSON.stringify(other)} };
+    if (token === ${JSON.stringify(sessionToken(3))}) return { ...principal, issuer: 'https://impostor.example.invalid/oidc' };
+    if (token === ${JSON.stringify(sessionToken(4))}) return { ...principal, subject: 'impostor' };
+    return null;
+  }
+}
+export default { fetch() { return new Response(null, {status:404}); } };
+`);
+await bundle(join(work, "session.js"), join(work, "session.bundle.js"));
 await bundle(join(work, "server.js"), join(work, "server.bundle.js"));
 await bundle(join(work, "client.js"), join(work, "client.bundle.js"));
 const productionBuild = await bundle(join(here, "index.js"), join(work, "production.bundle.js"));
@@ -67,6 +91,9 @@ const bindings = {
   INFERENCE_BRIDGE_ALLOWED_USER_IDS: JSON.stringify([email]), TOKEN_WRAPPING_KEY: randomBytes(32).toString("base64url"),
   TOKEN_WRAPPING_AAD: "synthetic-subscription/v1",
 };
+const oidcBindings = { ...bindings, SUBSCRIPTION_AUTH_MODE: "oidc", SUBSCRIPTION_ADMIN_ISSUER: oidcIssuer, SUBSCRIPTION_ADMIN_SUBJECT: oidcSubject };
+delete oidcBindings.CF_ACCESS_ISS;
+delete oidcBindings.CF_ACCESS_AUD;
 const sse = events => new Response(events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
 const outboundService = async request => {
   outboundUrls.push(request.url);
@@ -110,6 +137,10 @@ const mf = new Miniflare(convertV4MiniflareOptions({
   workers: [
     { ...common, name: "subscription", routes: [origin + "/*"], scriptPath: join(work, "server.bundle.js"), bindings, durableObjects: { Credentials: { className: "Credentials", useSQLite: true } }, outboundService },
     { ...common, name: "private-client", scriptPath: join(work, "client.bundle.js"), serviceBindings: { PROBE: { name: "subscription", entrypoint: "Probe" }, BRIDGE: { name: "subscription", entrypoint: "CloudAgentInference" } } },
+    { ...common, name: "os-session", scriptPath: join(work, "session.bundle.js") },
+    { ...common, name: "oidc-subscription", scriptPath: join(work, "server.bundle.js"), bindings: oidcBindings, serviceBindings: { OS_SESSION: { name: "os-session", entrypoint: "SubscriptionSetupSession" } }, durableObjects: { Credentials: { className: "Credentials", useSQLite: true } }, outboundService },
+    { ...common, name: "oidc-client", scriptPath: join(work, "client.bundle.js"), serviceBindings: { PROBE: { name: "oidc-subscription", entrypoint: "Probe" }, SESSION: { name: "os-session", entrypoint: "SubscriptionSetupSession" }, BRIDGE: { name: "oidc-subscription", entrypoint: "CloudAgentInference" } } },
+    ...["SUBSCRIPTION_ADMIN_ISSUER", "SUBSCRIPTION_ADMIN_SUBJECT", "SUBSCRIPTION_ADMIN_EMAIL"].map((missing, i) => ({ ...common, name: "oidc-missing-pin-" + i, scriptPath: join(work, "production.bundle.js"), bindings: Object.fromEntries(Object.entries(oidcBindings).filter(([key]) => key !== missing)), serviceBindings: { OS_SESSION: { name: "os-session", entrypoint: "SubscriptionSetupSession" } }, durableObjects: { Credentials: { className: "Credentials", useSQLite: true } }, outboundService })),
     { ...common, name: "native-production", scriptPath: join(work, "production.bundle.js"), bindings, durableObjects: { Credentials: { className: "Credentials", useSQLite: true } }, outboundService },
   ],
 }));
@@ -146,6 +177,36 @@ const callback = authorization => `http://127.0.0.1:1455/auth/callback?${new URL
 const wire = changes => ({ version: 1, requestId: crypto.randomUUID(), userId: email, context: { messages: [{ role: "user", content: "hello", timestamp: 1 }] }, options: { maxTokens: 16 }, ...changes });
 
 try {
+  const oidc = await mf.getWorker("oidc-subscription");
+  const oidcClient = await mf.getWorker("oidc-client");
+  const oidcEvents = async () => (await oidcClient.fetch("https://fixture.invalid/events")).json();
+  const oidcSend = (token = osToken, input = {}, path = "status", extraHeaders = {}) => oidc.fetch(origin + "/gatekeeper/subscription/" + path, {
+    method: "POST", headers: { origin, "content-type": "application/json", ...(token && { authorization: "Bearer " + token }), ...extraHeaders }, body: JSON.stringify(input),
+  });
+  const sessionCalls = async () => (await oidcClient.fetch("https://fixture.invalid/session-calls")).json();
+  const publicShell = await oidc.fetch(origin + "/gatekeeper/subscription");
+  assert.equal(publicShell.status, 200);
+  assert.equal(await sessionCalls(), 0, "OIDC GET never verifies or reads an account session");
+  const shell = await publicShell.text();
+  assert.ok(shell.includes('id="setup-start" disabled') && shell.includes('id="setup-complete" disabled'));
+  assert.ok(!shell.includes(email) && !shell.includes(oidcSubject) && !shell.includes(oidcIssuer) && !shell.includes(osToken));
+  for (const token of [null, "invalid", "x".repeat(300), sessionToken(5), sessionToken(6)]) await assertError(await oidcSend(token), 401, "access_denied");
+  for (const token of [osOtherToken, sessionToken(3), sessionToken(4)]) await assertError(await oidcSend(token), 403, "admin_denied");
+  await assertError(await oidcSend(null, {}, "status", { "cf-access-jwt-assertion": accessJwt(), "x-auth-email": email, "x-auth-subject": oidcSubject, "x-auth-issuer": oidcIssuer }), 401, "access_denied");
+  await assertError(await oidcSend(null, { issuer: oidcIssuer, subject: oidcSubject, email }), 401, "access_denied");
+  for (let i = 0; i < 3; i++) {
+    const missingPin = await mf.getWorker("oidc-missing-pin-" + i);
+    await assertError(await missingPin.fetch(origin + "/gatekeeper/subscription/status", { method: "POST", headers: { origin, "content-type": "application/json", authorization: "Bearer " + osToken }, body: "{}" }), 503, "configuration_invalid");
+  }
+  assert.deepEqual(await oidcEvents(), [], "OIDC missing sessions, each identity mismatch and spoofed claims denied before Credentials");
+  const beforeStatus = await sessionCalls();
+  assert.equal((await oidcSend()).status, 200);
+  assert.equal(await sessionCalls(), beforeStatus + 1, "authenticated status checks the OS session");
+  assert.deepEqual(await oidcEvents(), ["constructor", "status"]);
+  const oidcStart = await oidcSend(osToken, { email, planUsageConfirmed: true }, "start");
+  assert.equal(oidcStart.status, 200);
+  assert.equal(new URL((await oidcStart.json()).authorizationUrl).searchParams.get("client_id"), "dynamic_agent_client");
+
   const production = await mf.getWorker("native-production");
   const productionPage = await production.fetch(origin + "/gatekeeper/subscription", { method: "GET", headers: headers() });
   assert.equal(productionPage.status, 200, "unmodified production artifact runs under workerd: " + await productionPage.text());
@@ -270,10 +331,73 @@ try {
     assert.equal(document.getElementById("authorization").hidden, true);
     assert.equal(document.getElementById("login").hasAttribute("href"), false);
   } finally { dom.window.close(); }
-  for (const secret of [accessToken, refreshToken, "synthetic-code-never-log", nonce, email]) assert.ok(!logs.join("\n").includes(secret), "no callback, identity or grant in runtime logs");
-  assert.ok(outboundUrls.every(url => !url.includes("callback") && !url.includes("code=")));
+  for (const failureAt of ['initial', 'start', 'complete']) {
+    const unauthorized = failureAt === 'initial';
+    let denied = unauthorized;
+    const postedOidc = [];
+    let resolveStatus;
+    const statusWait = new Promise(resolve => { resolveStatus = resolve; });
+    const dom = new JSDOM(subscriptionPage("synthetic-nonce", "oidc"), { url: origin + "/gatekeeper/subscription", runScripts: "dangerously", beforeParse(window) {
+      window.localStorage.setItem("authToken", osToken);
+      window.localStorage.setItem("existing", "preserve");
+      window.Storage.prototype.setItem = () => { throw Error("unexpected_storage_write"); };
+      window.fetch = async (url, options) => {
+        postedOidc.push({ url, options });
+        if (postedOidc.length === 1) await statusWait;
+        return { ok: !denied, status: denied ? 401 : 200, json: async () => denied ? { error: "access_denied" } : ready };
+      };
+    } });
+    try {
+      const { document, Event } = dom.window;
+      assert.equal(document.getElementById("setup-start").disabled, true);
+      assert.equal(document.getElementById("setup-complete").disabled, true);
+      document.getElementById("start").dispatchEvent(new Event("submit", { cancelable: true }));
+      assert.equal(postedOidc.length, 1, "controls cannot submit before authenticated status");
+      resolveStatus();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(document.getElementById("setup-start").disabled, unauthorized);
+      assert.equal(document.getElementById("setup-complete").disabled, unauthorized);
+      assert.equal(document.getElementById("sign-in").hidden, !unauthorized);
+      assert.equal(document.querySelector("#sign-in a").getAttribute("href"), "/");
+      assert.equal(postedOidc[0].options.headers.authorization, "Bearer " + osToken);
+      if (!unauthorized) {
+        dom.window.localStorage.removeItem("authToken");
+        denied = true;
+        document.getElementById("callback").value = "http://127.0.0.1:1455/auth/callback?synthetic";
+        document.getElementById(failureAt).dispatchEvent(new Event("submit", { cancelable: true }));
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(postedOidc[1].options.headers.authorization, undefined, "every POST reads the current OS token");
+        assert.equal(document.getElementById("setup-start").disabled, true);
+        assert.equal(document.getElementById("setup-complete").disabled, true);
+        assert.equal(document.getElementById(failureAt + "-button").matches(":disabled"), true, "authorization failure stays disabled through finally");
+        assert.equal(document.getElementById("sign-in").hidden, false);
+      }
+      denied = false;
+      document.getElementById("refresh").click();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.ok(postedOidc.at(-1).url.endsWith("/status"));
+      for (const id of ["setup-start", "setup-complete", "start-button", "complete-button"]) {
+        assert.equal(document.getElementById(id).matches(":disabled"), false, "successful status refresh restores " + id);
+      }
+      assert.equal(document.getElementById("sign-in").hidden, true);
+      for (const post of postedOidc) assert.ok(post.url.startsWith("/gatekeeper/subscription/"));
+      assert.equal(dom.window.localStorage.length, unauthorized ? 2 : 1);
+      assert.equal(dom.window.localStorage.getItem("existing"), "preserve");
+      assert.equal(dom.window.sessionStorage.length, 0);
+      assert.ok(!document.body.textContent.includes(osToken));
+    } finally { dom.window.close(); }
+  }
+  for (const secret of [osToken, accessToken, refreshToken, "synthetic-code-never-log", nonce, email]) assert.ok(!logs.join("\n").includes(secret), "no callback, identity or grant in runtime logs");
+  assert.ok(outboundUrls.every(url => !url.includes("callback") && !url.includes("code=") && !url.includes(osToken)));
   const config = JSON.parse((await readFile(join(here, "wrangler.example.jsonc"), "utf8")));
   assert.deepEqual(config.durable_objects.bindings, [{ name: "Credentials", class_name: "Credentials" }]);
   assert.deepEqual(config.migrations, [{ tag: "v1", new_sqlite_classes: ["Credentials"] }]);
-  console.log(JSON.stringify({ result: "PASS", nativeRuntime: "Miniflare/workerd", checks: ["Access signature/issuer/audience/expiry/admin", "same-origin JSON bounded requests before DO", "fresh direct SIWC grant with pinned identity", "private SIWC inference and sanitized outputs", "Korean manual callback UI with no browser persistence"], tokenCalls, inferenceCalls, temporaryBuild: work }));
+  const oidcConfig = JSON.parse(await readFile(join(here, "wrangler.oidc.example.jsonc"), "utf8"));
+  assert.equal(oidcConfig.vars.SUBSCRIPTION_AUTH_MODE, "oidc");
+  assert.deepEqual(oidcConfig.services, [{ binding: "OS_SESSION", service: "example-os-workshop", entrypoint: "SubscriptionSetupSession" }]);
+  assert.equal(oidcConfig.vars.CF_ACCESS_ISS, undefined);
+  assert.equal(oidcConfig.vars.CF_ACCESS_AUD, undefined);
+  assert.deepEqual(oidcConfig.durable_objects, config.durable_objects);
+  assert.deepEqual(oidcConfig.migrations, config.migrations);
+  console.log(JSON.stringify({ result: "PASS", nativeRuntime: "Miniflare/workerd", checks: ["Access signature/issuer/audience/expiry/admin", "OIDC private session and exact issuer/subject/email pins before Credentials", "OIDC static shell and authenticated UI gating", "same-origin JSON bounded requests before DO", "fresh direct SIWC grant with pinned identity", "private SIWC inference and sanitized outputs", "Korean manual callback UI with no browser persistence"], tokenCalls, inferenceCalls, temporaryBuild: work }));
 } finally { await mf.dispose(); }

@@ -15,22 +15,30 @@ export type DeploymentConfig = {
     allowedUserIds: string[];
     /** Admin offers the configured subscription to users; user preserves per-user setup. */
     management?: 'user' | 'admin';
+    /** Routes SIWC setup through the router with separately pinned administrator authentication. */
+    setup?: 'siwc';
   };
   mcp: boolean;
   mcpScopes?: Record<string, string[]>;
 } & ({
   auth: {
-    /** Omitted mode preserves existing OIDC deployment configuration. */
-    mode?: 'oidc';
     issuer: string;
     clientId: string;
     displayName: string;
     allowedIdentities: { email: string; subject: string }[];
     loginUrl?: string;
     loginSite?: string;
-  };
+  } & ({
+    /** Omitted mode preserves existing OIDC deployment configuration. */
+    mode?: 'oidc';
+  } | {
+    mode: 'oauth-jwt';
+    /** Exact HTTPS resource origin, used for both resource indicators and JWT audience. */
+    resource: string;
+    scopes: string[];
+    tokenEndpointAuthMethod: 'none' | 'client_secret_post';
+  });
   workers: { oidc: string };
-  modelBridge: { setup?: never };
   /** Trusted host origins; identity policy derives from the OIDC allowlist. */
   siteLaunch?: { parentOrigins: string[] };
 } | {
@@ -42,7 +50,5 @@ export type DeploymentConfig = {
     allowedEmails: string[];
   };
   workers: { oidc?: never };
-  /** Routes SIWC subscription setup through the Access-protected router. */
-  modelBridge: { setup?: 'siwc' };
   siteLaunch?: never;
 });

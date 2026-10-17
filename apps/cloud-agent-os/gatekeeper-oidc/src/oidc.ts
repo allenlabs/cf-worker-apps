@@ -1,12 +1,16 @@
 import { createLocalJWKSet, decodeProtectedHeader, jwtVerify } from "jose";
-import { OAuthClient, type OAuthTokens } from "@gadgets/gatekeeper-kit/oauth-client";
+import { OAuthClient, type OAuthClientAuth, type OAuthTokens } from "@gadgets/gatekeeper-kit/oauth-client";
 import { readTextCapped } from "@gadgets/gatekeeper-kit/response-body";
 
 export interface Env {
   PUBLIC_BASE_URL: string;
   OIDC_ISSUER: string;
   OIDC_CLIENT_ID: string;
-  OIDC_CLIENT_SECRET: string;
+  OIDC_CLIENT_SECRET?: string;
+  SIGN_IN_PROTOCOL?: string;
+  OAUTH_JWT_RESOURCE?: string;
+  OAUTH_JWT_SCOPES?: string;
+  OAUTH_JWT_TOKEN_ENDPOINT_AUTH_METHOD?: string;
   OIDC_DISPLAY_NAME?: string;
   OIDC_ALLOWED_IDENTITIES: string;
   OIDC_LOGIN_URL?: string;
@@ -61,7 +65,6 @@ export function configuration(env: Env) {
     const origin = httpsUrl(text(env.PUBLIC_BASE_URL));
     if (origin.origin !== env.PUBLIC_BASE_URL) throw Error();
     const clientId = text(env.OIDC_CLIENT_ID, 255);
-    const clientSecret = text(env.OIDC_CLIENT_SECRET, 4096);
     const raw: unknown = JSON.parse(env.OIDC_ALLOWED_IDENTITIES);
     if (!Array.isArray(raw) || raw.length === 0 || raw.length > 100) throw Error();
     const allowed = raw.map(value => {
@@ -74,9 +77,30 @@ export function configuration(env: Env) {
     const login = env.OIDC_LOGIN_URL ? httpsUrl(env.OIDC_LOGIN_URL) : null;
     if (env.OIDC_LOGIN_SITE && !login) throw Error();
     if (env.OIDC_LOGIN_SITE && !/^[A-Za-z0-9_-]{1,96}$/.test(env.OIDC_LOGIN_SITE)) throw Error();
-    return { issuer: env.OIDC_ISSUER, origin: origin.origin, clientId, clientSecret, allowed, login,
+    const common = { issuer: env.OIDC_ISSUER, origin: origin.origin, clientId, allowed, login,
       displayName: env.OIDC_DISPLAY_NAME ? text(env.OIDC_DISPLAY_NAME, 128) : "Organization SSO",
       callback: `${origin.origin}/gatekeeper/oidc/oauth` };
+    if (env.SIGN_IN_PROTOCOL === "oauth-jwt") {
+      const resource = httpsUrl(text(env.OAUTH_JWT_RESOURCE));
+      if (resource.origin !== env.OAUTH_JWT_RESOURCE) throw Error();
+      const rawScopes: unknown = JSON.parse(text(env.OAUTH_JWT_SCOPES, 8192));
+      if (!Array.isArray(rawScopes) || rawScopes.length === 0 || rawScopes.length > 32) throw Error();
+      const scopes = rawScopes.map(scope => text(scope, 128));
+      if (scopes.some(scope => !/^[\x21\x23-\x5b\x5d-\x7e]+$/.test(scope)
+          || scope === "openid" || scope === "offline_access") || new Set(scopes).size !== scopes.length) throw Error();
+      const method = env.OAUTH_JWT_TOKEN_ENDPOINT_AUTH_METHOD;
+      if (method !== "none" && method !== "client_secret_post") throw Error();
+      const client: OAuthClientAuth = method === "none" ? { method: "none", id: clientId }
+        : { method: "post", id: clientId, secret: text(env.OIDC_CLIENT_SECRET, 4096) };
+      if (method === "none" && env.OIDC_CLIENT_SECRET !== undefined) throw Error();
+      return { ...common, mode: "oauth-jwt" as const, resource: resource.origin, scopes, method, client };
+    }
+    if (env.SIGN_IN_PROTOCOL !== undefined && env.SIGN_IN_PROTOCOL !== "oidc"
+        || env.OAUTH_JWT_RESOURCE !== undefined || env.OAUTH_JWT_SCOPES !== undefined
+        || env.OAUTH_JWT_TOKEN_ENDPOINT_AUTH_METHOD !== undefined) throw Error();
+    const client: OAuthClientAuth = { method: "basic", encoding: "form", id: clientId,
+      secret: text(env.OIDC_CLIENT_SECRET, 4096) };
+    return { ...common, mode: "oidc" as const, client };
   } catch { throw new SignInError("invalid_sign_in_configuration"); }
 }
 
@@ -96,10 +120,20 @@ async function remoteJson(url: string, headers?: Record<string, string>): Promis
 }
 
 export async function discover(config: Configuration) {
-  const document = await remoteJson(`${config.issuer}/.well-known/openid-configuration`);
-  if (document.issuer !== config.issuer || !Array.isArray(document.id_token_signing_alg_values_supported)
-      || !document.id_token_signing_alg_values_supported.includes("EdDSA")
-      || !Array.isArray(document.code_challenge_methods_supported) || !document.code_challenge_methods_supported.includes("S256")) {
+  const issuer = new URL(config.issuer);
+  const metadata = config.mode === "oauth-jwt"
+    ? `${issuer.origin}/.well-known/oauth-authorization-server${issuer.pathname === "/" ? "" : issuer.pathname}`
+    : `${config.issuer}/.well-known/openid-configuration`;
+  const document = await remoteJson(metadata);
+  const grants = document.grant_types_supported === undefined ? ["authorization_code", "implicit"] : document.grant_types_supported;
+  if (document.issuer !== config.issuer
+      || !Array.isArray(document.code_challenge_methods_supported) || !document.code_challenge_methods_supported.includes("S256")
+      || (config.mode === "oidc"
+        ? !Array.isArray(document.id_token_signing_alg_values_supported) || !document.id_token_signing_alg_values_supported.includes("EdDSA")
+        : document.authorization_response_iss_parameter_supported !== true
+          || !Array.isArray(document.response_types_supported) || !document.response_types_supported.includes("code")
+          || !Array.isArray(grants) || !grants.includes("authorization_code")
+          || !Array.isArray(document.token_endpoint_auth_methods_supported) || !document.token_endpoint_auth_methods_supported.includes(config.method))) {
     throw new SignInError("identity_provider_protocol_mismatch");
   }
   function endpoint(key: string) {
@@ -108,17 +142,17 @@ export async function discover(config: Configuration) {
     return value.href;
   }
   return { authorization: endpoint("authorization_endpoint"), token: endpoint("token_endpoint"),
-    jwks: endpoint("jwks_uri"), userinfo: endpoint("userinfo_endpoint") };
+    jwks: endpoint("jwks_uri"), userinfo: config.mode === "oidc" ? endpoint("userinfo_endpoint") : null };
 }
 
 export function oauthClient(config: Configuration, endpoints: Awaited<ReturnType<typeof discover>>) {
-  return new OAuthClient({ label: "Identity provider", client: { method: "basic", encoding: "form",
-    id: config.clientId, secret: config.clientSecret }, tokenEndpoint: endpoints.token,
+  return new OAuthClient({ label: "Identity provider", client: config.client, tokenEndpoint: endpoints.token,
     authorizationEndpoint: endpoints.authorization, timeoutMs: 15000, maxResponseBytes: 65536 });
 }
 
 export async function verifyIdentity(config: Configuration, endpoints: Awaited<ReturnType<typeof discover>>,
   tokens: OAuthTokens, nonce: string): Promise<VerifiedIdentity> {
+  if (config.mode === "oauth-jwt") return verifyAccessIdentity(config, endpoints.jwks, tokens);
   const token = text(tokens.idToken, 32768);
   const header = decodeProtectedHeader(token);
   if (header.alg !== "EdDSA" || typeof header.kid !== "string" || !header.kid || header.kid.length > 255 || header.crit) {
@@ -145,11 +179,51 @@ export async function verifyIdentity(config: Configuration, endpoints: Awaited<R
   let profile: Record<string, unknown> = payload;
   if (typeof profile.email !== "string" || profile.email_verified === undefined) {
     if (tokens.tokenType?.toLowerCase() !== "bearer") throw new SignInError("invalid_identity_token");
+    if (!endpoints.userinfo) throw new SignInError("identity_provider_protocol_mismatch");
     profile = await remoteJson(endpoints.userinfo, { authorization: `Bearer ${tokens.accessToken}` });
     if (profile.sub !== subject) throw new SignInError("identity_subject_mismatch");
   }
   if (profile.email_verified !== true) throw new SignInError("verified_email_required");
   const identity = { email: text(profile.email, 320).trim().toLowerCase(), subject, expiresAt: payload.exp * 1000 };
+  if (!allowedIdentity(config, identity)) throw new SignInError("identity_not_allowed");
+  return identity;
+}
+
+async function verifyAccessIdentity(config: Extract<Configuration, { mode: "oauth-jwt" }>,
+  jwksUrl: string, tokens: OAuthTokens): Promise<VerifiedIdentity> {
+  if (tokens.tokenType?.toLowerCase() !== "bearer") throw new SignInError("invalid_identity_token");
+  const token = text(tokens.accessToken, 32768);
+  const header = decodeProtectedHeader(token);
+  if (header.alg !== "RS256" || typeof header.kid !== "string" || !header.kid || header.kid.length > 255
+      || header.crit || ["jwk", "jku", "x5u", "x5c"].some(field => field in header)) throw new SignInError("invalid_identity_token");
+  const jwks = await remoteJson(jwksUrl);
+  if (!Array.isArray(jwks.keys) || jwks.keys.length > 32) throw new SignInError("invalid_identity_keys");
+  const matching = jwks.keys.map(record).filter(key => key.kid === header.kid);
+  const [key] = matching;
+  if (matching.length !== 1 || !key || key.kty !== "RSA" || typeof key.n !== "string" || typeof key.e !== "string"
+      || ["d", "p", "q", "dp", "dq", "qi", "oth", "k"].some(field => field in key)
+      || key.alg !== undefined && key.alg !== "RS256" || key.use !== undefined && key.use !== "sig"
+      || key.key_ops !== undefined && !(Array.isArray(key.key_ops) && key.key_ops.length === 1 && key.key_ops[0] === "verify")) {
+    throw new SignInError("invalid_identity_keys");
+  }
+  const keys = [{ kty: "RSA", kid: text(key.kid, 255), n: text(key.n, 2048), e: text(key.e, 16), alg: "RS256", use: "sig" }];
+  const { payload } = await jwtVerify(token, createLocalJWKSet({ keys }), {
+    issuer: config.issuer, audience: config.resource, algorithms: ["RS256"],
+    requiredClaims: ["sub", "exp", "iat", "jti", "client_id", "azp", "scope", "token_use", "email", "emailVerified", "banned"],
+  });
+  const now = Date.now() / 1000;
+  const scope = typeof payload.scope === "string" ? payload.scope : "";
+  if (payload.aud !== config.resource || payload.client_id !== config.clientId || payload.azp !== config.clientId
+      || payload.token_use !== "access" || payload.banned !== false
+      || typeof payload.iat !== "number" || !Number.isSafeInteger(payload.iat) || payload.iat < 0
+      || payload.iat > now + 60 || payload.iat < now - 300
+      || typeof payload.exp !== "number" || !Number.isSafeInteger(payload.exp) || payload.exp <= payload.iat
+      || payload.exp > 8_640_000_000_000
+      || !/^[\x21\x23-\x5b\x5d-\x7e]+(?: [\x21\x23-\x5b\x5d-\x7e]+)*$/.test(scope)
+      || !config.scopes.every(required => scope.split(" ").includes(required))) throw new SignInError("invalid_identity_token");
+  text(payload.jti, 255);
+  if (payload.emailVerified !== true) throw new SignInError("verified_email_required");
+  const identity = { email: text(payload.email, 320).trim().toLowerCase(), subject: text(payload.sub, 255), expiresAt: payload.exp * 1000 };
   if (!allowedIdentity(config, identity)) throw new SignInError("identity_not_allowed");
   return identity;
 }

@@ -3,7 +3,7 @@ import { readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { buildCommands, deploymentOrder, generateConfigs, packages, parseDeployment } from './config.mjs';
+import { buildCommands, deploymentOrder, generateConfigs, packages, parseDeployment, requiresOidcSecret } from './config.mjs';
 import { prepare, run } from './prepare.mjs';
 
 const { values } = parseArgs({ options: {
@@ -19,7 +19,8 @@ try {
   const config = parseDeployment(JSON.parse(await readFile(resolve(values.config), 'utf8')));
   const oidcSecrets = values['oidc-secrets'] ? resolve(values['oidc-secrets']) : undefined;
   assert(config.auth.mode !== 'access' || !oidcSecrets, '--oidc-secrets requires OIDC authentication');
-  if (values.deploy && config.auth.mode !== 'access') {
+  assert(requiresOidcSecret(config) || !oidcSecrets, '--oidc-secrets requires confidential-client authentication');
+  if (values.deploy && requiresOidcSecret(config)) {
     assert(oidcSecrets, '--deploy requires --oidc-secrets <private secret JSON or env file>');
     const metadata = await stat(oidcSecrets);
     assert(metadata.isFile() && metadata.size > 0 && (metadata.mode & 0o077) === 0,
@@ -54,13 +55,14 @@ try {
       if (values.check) {
         if (config.auth.mode !== 'access') {
           run(process.execPath, [join(checkout, packages.oidc, 'tests/check.mjs'), checkout], { cwd: checkout });
+          run(process.execPath, [join(checkout, packages.oidc, 'tests/check.mjs'), checkout, 'oauth-jwt'], { cwd: checkout });
         }
         if (config.mcp) run('pnpm', ['exec', 'vitest', 'run', '__tests__/account-endpoint.test.ts'], {
           cwd: join(checkout, 'packages/mcp-shared'),
         });
         run('pnpm', ['exec', 'vitest', 'run',
           ...(config.auth.mode === 'access' ? ['__tests__/access.test.ts', '__tests__/client-errors.test.ts'] : []),
-          '__tests__/subscription-models.test.ts',
+          '__tests__/subscription-models.test.ts', '__tests__/subscription-setup-session.test.ts',
           '__tests__/user-models.test.ts', '__tests__/admin-settings-models.test.ts',
           '__tests__/site-launch.test.ts', '__tests__/site-launch-agent.test.ts',
           '__tests__/opencode-loop.test.ts', '__tests__/agent-retry.test.ts',

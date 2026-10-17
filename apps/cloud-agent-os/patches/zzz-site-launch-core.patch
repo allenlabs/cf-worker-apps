@@ -213,11 +213,12 @@ index 4fa460f..4ec0f08 100644
  import { RpcStub as NativeRpcStub } from "cloudflare:workers";
  import { recordAnalytics } from "./analytics";
  import { handleClientErrorRequest } from "./client-errors.js";
-@@ -69,6 +71,7 @@ export { OverseerDurableObject, GatekeeperLoopback, GatekeeperHookLoopback,
+@@ -69,6 +71,8 @@ export { OverseerDurableObject, GatekeeperLoopback, GatekeeperHookLoopback,
  
  // Re-export service-binding entrypoint for external channel integrations.
  export { ExternalMessageGateway };
 +export { SiteLaunchGateway } from './site-launch.js';
++export { SubscriptionSetupSession } from './subscription-setup-session.js';
  
  // Declare optional environment variables here since they may be omitted from wrangler.jsonc.
  type Env = Cloudflare.Env & {

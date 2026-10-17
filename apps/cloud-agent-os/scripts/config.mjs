@@ -14,6 +14,11 @@ export function deploymentOrder(config) {
     && (key !== 'oidc' || config.auth.mode !== 'access'));
 }
 
+export function requiresOidcSecret(config) {
+  return config.auth.mode !== 'access'
+    && !(config.auth.mode === 'oauth-jwt' && config.auth.tokenEndpointAuthMethod === 'none');
+}
+
 function object(value, keys, name) {
   assert(value && typeof value === 'object' && !Array.isArray(value), `${name} must be an object`);
   assert(Object.keys(value).every(key => keys.includes(key)), `${name} contains an unsupported field`);
@@ -55,6 +60,7 @@ export function parseDeployment(value) {
     configuredOAuthScope(JSON.stringify(value.mcpScopes), 'https://validation.example.invalid/mcp');
   }
   const access = value.auth?.mode === 'access';
+  const oauthJwt = value.auth?.mode === 'oauth-jwt';
   const names = deploymentOrder(value);
   assert(!access || value.workers.oidc === undefined, 'workers.oidc requires OIDC authentication');
   assert(value.mcp || value.workers.mcp === undefined, 'workers.mcp requires mcp=true');
@@ -68,9 +74,10 @@ export function parseDeployment(value) {
     .map(key => value.resources[key])).size === 3, 'KV namespaces must be separate');
   text(value.resources.blueprintContentBucket, 'blueprintContentBucket', /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/);
   object(value.auth, access ? ['mode', 'issuer', 'audience', 'allowedEmails']
-    : ['mode', 'issuer', 'clientId', 'displayName', 'allowedIdentities', 'loginUrl', 'loginSite'], 'auth');
-  assert(value.auth.mode === undefined || ['oidc', 'access'].includes(value.auth.mode),
-    'auth.mode must be oidc or access');
+    : ['mode', 'issuer', 'clientId', 'displayName', 'allowedIdentities', 'loginUrl', 'loginSite',
+      ...(oauthJwt ? ['resource', 'scopes', 'tokenEndpointAuthMethod'] : [])], 'auth');
+  assert(value.auth.mode === undefined || ['oidc', 'access', 'oauth-jwt'].includes(value.auth.mode),
+    'auth.mode must be oidc, access or oauth-jwt');
   const issuer = https(value.auth.issuer, 'auth.issuer');
   assert(issuer.href.replace(/\/$/, '') === value.auth.issuer, 'auth.issuer must be canonical without a trailing slash');
   let allowed;
@@ -101,6 +108,19 @@ export function parseDeployment(value) {
       text(value.auth.loginSite, 'auth.loginSite', /^[A-Za-z0-9_-]{1,96}$/);
       assert(value.auth.loginUrl !== undefined, 'auth.loginSite requires auth.loginUrl');
     }
+    if (oauthJwt) {
+      const resource = https(value.auth.resource, 'auth.resource');
+      assert(resource.origin === value.auth.resource, 'auth.resource must be a canonical HTTPS origin');
+      assert(['none', 'client_secret_post'].includes(value.auth.tokenEndpointAuthMethod),
+        'OAuth JWT auth.tokenEndpointAuthMethod must be none or client_secret_post');
+      assert(Array.isArray(value.auth.scopes) && value.auth.scopes.length > 0 && value.auth.scopes.length <= 32,
+        'auth.scopes must contain 1–32 explicit scopes');
+      for (const scope of value.auth.scopes) {
+        text(scope, 'auth.scopes[]', /^[\x21\x23-\x5b\x5d-\x7e]{1,128}$/);
+        assert(scope !== 'openid' && scope !== 'offline_access', 'OAuth JWT login does not use OpenID or refresh scopes');
+      }
+      assert(new Set(value.auth.scopes).size === value.auth.scopes.length, 'auth.scopes contains duplicates');
+    }
   }
   emails(value.admins, 'admins');
   assert(value.admins.every(email => allowed.includes(email)), 'Every admin must be allowed to sign in');
@@ -109,7 +129,6 @@ export function parseDeployment(value) {
     'modelBridge.management must be user or admin');
   assert(value.modelBridge.setup === undefined || value.modelBridge.setup === 'siwc',
     'modelBridge.setup must be siwc');
-  assert(value.modelBridge.setup === undefined || access, 'modelBridge.setup requires Access authentication');
   text(value.modelBridge.service, 'modelBridge.service', /^[a-z][a-z0-9-]{0,62}$/);
   assert(!names.some(key => value.workers[key] === value.modelBridge.service), 'Model service must be a separate runtime');
   text(value.modelBridge.model, 'modelBridge.model', /^[a-zA-Z0-9._-]{1,128}$/);
@@ -201,10 +220,17 @@ export function generateConfigs(input, bases) {
       OIDC_CLIENT_ID: config.auth.clientId,
       OIDC_DISPLAY_NAME: config.auth.displayName,
       OIDC_ALLOWED_IDENTITIES: JSON.stringify(config.auth.allowedIdentities),
+      ...(config.auth.mode === 'oauth-jwt' ? {
+        SIGN_IN_PROTOCOL: 'oauth-jwt',
+        OAUTH_JWT_RESOURCE: config.auth.resource,
+        OAUTH_JWT_SCOPES: JSON.stringify(config.auth.scopes),
+        OAUTH_JWT_TOKEN_ENDPOINT_AUTH_METHOD: config.auth.tokenEndpointAuthMethod,
+      } : {}),
       ...(config.auth.loginUrl ? { OIDC_LOGIN_URL: config.auth.loginUrl } : {}),
       ...(config.auth.loginSite ? { OIDC_LOGIN_SITE: config.auth.loginSite } : {}),
     };
-    result.oidc.secrets = { required: ['OIDC_CLIENT_SECRET'] };
+    if (requiresOidcSecret(config)) result.oidc.secrets = { required: ['OIDC_CLIENT_SECRET'] };
+    else delete result.oidc.secrets;
   }
   if (result.mcp) result.mcp.vars = {
     BASE_URL: `${config.origin}/gatekeeper/mcp`,

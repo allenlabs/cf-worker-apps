@@ -17,7 +17,7 @@ secret manager and Worker secret bindings.
 | --- | --- | --- |
 | Router | One custom domain | Static frontend; internal Workshop and Gatekeeper service bindings |
 | Workshop | None | Upstream DO migrations, two KV namespaces, one R2 bucket, Worker Loader and Browser bindings |
-| OIDC Gatekeeper, OIDC mode only | Through router only | New login state; its own client secret and issuer/subject allowlist |
+| Sign-in Gatekeeper, OIDC or OAuth JWT mode | Through router only | Single-use login state; pinned issuer/subject/email allowlist |
 | Context Gatekeeper | Through router only | Upstream DO migrations and a separate KV namespace |
 | MCP Gatekeeper, optional | Through router only | Upstream MCP account DOs; separate user-authorized connector grants |
 
@@ -28,6 +28,30 @@ Its Workshop frontend is built with `VITE_CF_ACCESS_MODE=false`; the backend set
 while the OIDC vendor is configured. The OIDC Gatekeeper verifies identity before the Workshop
 creates its email-keyed account. Admin and model-user lists must be subsets of the pinned login
 allowlist. Login authorization does not grant access to business data.
+
+Use `auth.mode: "oauth-jwt"` only for a provider with the signed access-token contract below.
+Copy `deployment.oauth-jwt.example.json`, then set the exact HTTPS resource origin, explicit scopes
+and `tokenEndpointAuthMethod` to `"none"` for a public PKCE client or `"client_secret_post"` for a
+confidential client. The existing `workers.oidc` binding and `/gatekeeper/oidc/oauth` callback serve
+both profiles. Omitted mode and `"oidc"` keep the existing OIDC flow.
+
+OAuth JWT discovers [RFC 8414 metadata](https://www.rfc-editor.org/rfc/rfc8414) at
+`/.well-known/oauth-authorization-server`, inserting that path before any issuer path. It requires
+authorization code, S256 PKCE, an advertised configured token authentication method and
+[callback issuer identification](https://www.rfc-editor.org/rfc/rfc9207). The callback must contain
+exactly the pinned `iss`. Authorization and code exchange send the same configured
+[resource indicator](https://www.rfc-editor.org/rfc/rfc8707). Endpoints and JWKS must share the issuer origin.
+
+The bearer access token must use RS256 with one matching public RSA verification key, at least
+2048 bits. It must contain the exact issuer, a single string `aud` equal to `auth.resource`, a pinned
+`sub`, nonempty `jti`, integer `iat` and `exp`, `client_id` and `azp` equal to the configured client,
+`token_use: "access"`, a space-separated `scope` containing every configured scope, a string
+`email`, `emailVerified: true` and `banned: false`. The exact issuer/subject/email allowlist still
+authorizes login. `iat` may be at most five minutes old or 60 seconds ahead; `exp` must follow `iat`
+and must not have elapsed. Alternate algorithms, ambiguous keys and audience arrays are rejected.
+This profile does not request OpenID or offline access scopes and does not read an ID token or
+userinfo, send a nonce, persist provider tokens or refresh a grant. Provider expiry bounds the
+handoff identity. The preexisting Workshop session lifetime is independent of provider-token expiry.
 
 Set `auth.mode` to `"access"` for upstream's native Cloudflare Access authentication. Copy
 `deployment.access.example.json` and set the Access team origin in `auth.issuer`, the application's
@@ -66,15 +90,19 @@ service binding and the existing runtime's account/model/actor policy remain aut
 Omitting `management`, or setting it to `"user"`, preserves the original per-user setup flow.
 This subscription catalog does not require or emulate a Cloudflare AI Gateway.
 
-For optional SIWC subscription setup in Access mode, set `modelBridge.setup` to `"siwc"` and
+For optional SIWC subscription setup in either authentication mode, set `modelBridge.setup` to `"siwc"` and
 point `modelBridge.service` at a separately deployed SIWC subscription Worker. That Worker must
 provide the `CloudAgentInference` entrypoint and handle login and API requests beneath
 `/gatekeeper/subscription`. The router adds `GATEKEEPER_SUBSCRIPTION` for this service through its
 existing `/gatekeeper/*` routing. It adds no Workshop Gatekeeper vendor or authentication grant.
-Protect this path with the same Cloudflare Access application as the router. The wrapper does
+For Access, protect this path with the same Cloudflare Access application as the router. For OIDC,
+configure the subscription Worker's `OS_SESSION` service binding to the Workshop's private
+`SubscriptionSetupSession` entrypoint and pin its administrator issuer, subject and email. The
+static setup page uses the existing OS session for every same-origin POST. See
+[subscription setup configuration](subscription/README.md) for both examples and session lifetime. The wrapper does
 not deploy the subscription Worker or create its provider connection. Create a fresh provider
 connection with provider `siwc` in that service; use its SIWC login flow, with no native Codex
-device login or paid API fallback. OIDC mode rejects this setup option. Omitting `setup` preserves
+device login or paid API fallback. Omitting `setup` preserves
 the existing generated configuration.
 
 ## Native OpenCode agent loop
@@ -223,6 +251,11 @@ OIDC deployment order is Context, OIDC, optional MCP, Workshop, then Router. The
 entrypoint must already exist. The wrapper deliberately does not deploy or reconfigure that runtime.
 Remove the temporary secret export after deployment. Every OIDC deployment requires that secret
 file; this avoids an interactive first-deployment prompt or a dummy Worker bootstrap.
+
+OAuth JWT with `tokenEndpointAuthMethod: "client_secret_post"` uses the same owner-only
+`OIDC_CLIENT_SECRET` export and `--oidc-secrets` option. Public `"none"` clients use PKCE without a
+secret, omit `--oidc-secrets` and reject a configured secret. Both use the same deployment order as
+OIDC. `--check` runs both the OIDC EdDSA and OAuth JWT RS256 native workerd security checks.
 
 For Access, first create a self-hosted Cloudflare Access application covering the router hostname
 and all paths, including `/api` and its WebSocket connections. Set its Allow policy to the intended

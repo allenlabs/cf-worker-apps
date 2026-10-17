@@ -1,0 +1,60 @@
+{
+  "name": "cloud-agent-os-subscription-oidc-example",
+  "main": "index.js",
+  "compatibility_date": "2026-10-04",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": {
+    "enabled": false
+  },
+  "vars": {
+    "PUBLIC_ORIGIN": "https://os.example.invalid",
+    "SUBSCRIPTION_ADMIN_EMAIL": "owner@example.invalid",
+    "TENANT_ID": "example-subscription",
+    "PRODUCT_NAME": "Cloud Agent OS subscription",
+    "SUBSCRIPTION_INFERENCE_PROVIDER": "siwc",
+    "INFERENCE_BRIDGE_PROVIDER": "siwc",
+    "INFERENCE_BRIDGE_ACCOUNT_ID": "owner",
+    "INFERENCE_BRIDGE_MODEL": "gpt-6.1-sol",
+    "INFERENCE_BRIDGE_ALLOWED_USER_IDS": "[\"owner@example.invalid\"]",
+    "TOKEN_WRAPPING_AAD": "example-subscription/v1",
+    "SUBSCRIPTION_AUTH_MODE": "oidc",
+    "SUBSCRIPTION_ADMIN_ISSUER": "https://identity.example.invalid/oidc",
+    "SUBSCRIPTION_ADMIN_SUBJECT": "example-admin-subject"
+  },
+  "rules": [
+    {
+      "type": "Text",
+      "globs": [
+        "**/*.sql"
+      ],
+      "fallthrough": true
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "Credentials",
+        "class_name": "Credentials"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "Credentials"
+      ]
+    }
+  ],
+  "services": [
+    {
+      "binding": "OS_SESSION",
+      "service": "example-os-workshop",
+      "entrypoint": "SubscriptionSetupSession"
+    }
+  ]
+}

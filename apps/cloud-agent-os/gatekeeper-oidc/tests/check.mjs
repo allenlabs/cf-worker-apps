@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const upstream = resolve(process.argv[2] ?? process.env.CLOUDFLARE_OS_SOURCE ?? "cloudflare-os");
+const oauthJwt = process.argv[3] === "oauth-jwt";
 const fromUpstream = createRequire(join(upstream, "package.json"));
 const fromGoogle = createRequire(join(upstream, "packages/gatekeeper-google/package.json"));
 const fromKit = createRequire(join(upstream, "packages/gatekeeper-kit/package.json"));
@@ -17,13 +18,20 @@ const { Miniflare, convertV4MiniflareOptions } = fromGoogle("miniflare");
 const output = await mkdtemp(join(root, ".test-output-"));
 const issuer = "https://identity.example.invalid/api/auth";
 const origin = "https://workshop.example.invalid";
+const resource = "https://resource.example.invalid";
+const scopes = ["profile", "email"];
+const metadata = oauthJwt ? `https://identity.example.invalid/.well-known/oauth-authorization-server/api/auth`
+  : `${issuer}/.well-known/openid-configuration`;
 const email = `person-${randomBytes(4).toString("hex")}@example.invalid`;
 const subject = `subject-${randomBytes(8).toString("hex")}`;
 const clientId = randomBytes(16).toString("hex"), secret = randomBytes(32).toString("hex");
-const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-const otherKey = generateKeyPairSync("ed25519").privateKey;
-const jwk = { ...publicKey.export({ format: "jwk" }), kid: "fixture", alg: "EdDSA", use: "sig" };
+const { publicKey, privateKey } = oauthJwt ? generateKeyPairSync("rsa", { modulusLength: 2048 }) : generateKeyPairSync("ed25519");
+const otherKey = (oauthJwt ? generateKeyPairSync("rsa", { modulusLength: 2048 }) : generateKeyPairSync("ed25519")).privateKey;
+const alg = oauthJwt ? "RS256" : "EdDSA";
+const jwk = { ...publicKey.export({ format: "jwk" }), kid: "fixture", alg, use: "sig" };
 let claimsOverride = {}, discoveryOverride = {}, userinfoOverride = {}, keyOverride = null;
+let headerOverride = {}, authMethod = "none", tokenType = "Bearer";
+let signingKeyOverride = null;
 let idNonce, challenge, calls = 0, fallback = false, wrongSignature = false;
 let tokenFailure = null, providerFailure = null, malformedToken = false;
 const privateFailure = "fixture-private-code-token-nonce-email-url-stack";
@@ -33,11 +41,14 @@ async function expectFailure(response, code, status = 400) {
     `fixed, credential-free diagnostic for ${code}`);
 }
 const jwt = () => {
-  const header = Buffer.from(JSON.stringify({ alg: "EdDSA", kid: "fixture" })).toString("base64url");
-  const payload = Buffer.from(JSON.stringify({ iss: issuer, sub: subject, aud: clientId, nonce: idNonce,
+  const header = Buffer.from(JSON.stringify({ alg, kid: "fixture", ...headerOverride })).toString("base64url");
+  const payload = Buffer.from(JSON.stringify({ iss: issuer, sub: subject,
+    ...(oauthJwt ? { aud: resource, jti: "fixture-token-id", client_id: clientId, azp: clientId,
+      token_use: "access", scope: scopes.join(" "), email: email.toUpperCase(), emailVerified: true, banned: false }
+      : { aud: clientId, nonce: idNonce, ...(fallback ? {} : { email: email.toUpperCase(), email_verified: true }) }),
     iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 3600,
-    ...(fallback ? {} : { email: email.toUpperCase(), email_verified: true }), ...claimsOverride })).toString("base64url");
-  return `${header}.${payload}.${sign(null, Buffer.from(`${header}.${payload}`), wrongSignature ? otherKey : privateKey).toString("base64url")}`;
+    ...claimsOverride })).toString("base64url");
+  return `${header}.${payload}.${sign(oauthJwt ? "sha256" : null, Buffer.from(`${header}.${payload}`), wrongSignature ? otherKey : signingKeyOverride ?? privateKey).toString("base64url")}`;
 };
 
 try {
@@ -106,7 +117,9 @@ export default {
     external: ["cloudflare:workers"], alias: { "@gadgets/gatekeeper-kit": join(upstream,"packages/gatekeeper-kit/src"),
       "jose": fromKit.resolve("jose") } });
 
-  const bindings = { PUBLIC_BASE_URL: origin, OIDC_ISSUER: issuer, OIDC_CLIENT_ID: clientId, OIDC_CLIENT_SECRET: secret,
+  const bindings = { PUBLIC_BASE_URL: origin, OIDC_ISSUER: issuer, OIDC_CLIENT_ID: clientId,
+    ...(oauthJwt ? { SIGN_IN_PROTOCOL: "oauth-jwt", OAUTH_JWT_RESOURCE: resource, OAUTH_JWT_SCOPES: JSON.stringify(scopes),
+      OAUTH_JWT_TOKEN_ENDPOINT_AUTH_METHOD: "none" } : { OIDC_CLIENT_SECRET: secret }),
     OIDC_ALLOWED_IDENTITIES: JSON.stringify([{email,subject}]) };
   const options = { name: "oidc-check", modules: true, scriptPath: join(output,"worker.mjs"),
     compatibilityDate: "2026-10-04", compatibilityFlags: ["allow_irrevocable_stub_storage"],
@@ -114,23 +127,35 @@ export default {
     outboundService: async request => {
       const url = new URL(request.url);
       if (providerFailure === url.href) return new Response(privateFailure, {status:503});
-      if (url.href === `${issuer}/.well-known/openid-configuration`) return Response.json({ issuer,
+      if (url.href === metadata) return Response.json({ issuer,
         authorization_endpoint: `${issuer}/authorize`, token_endpoint: `${issuer}/token`, jwks_uri: `${issuer}/jwks`,
-        userinfo_endpoint: `${issuer}/userinfo`, id_token_signing_alg_values_supported:["EdDSA"], code_challenge_methods_supported:["S256"], ...discoveryOverride });
+        ...(oauthJwt ? { response_types_supported: ["code"], grant_types_supported: ["authorization_code"],
+          authorization_response_iss_parameter_supported: true, token_endpoint_auth_methods_supported: ["none", "client_secret_post"] }
+          : { userinfo_endpoint: `${issuer}/userinfo`, id_token_signing_alg_values_supported:["EdDSA"] }),
+        code_challenge_methods_supported:["S256"], ...discoveryOverride });
       if (url.href === `${issuer}/jwks`) return Response.json({keys:keyOverride ?? [jwk]});
       if (url.href === `${issuer}/userinfo`) {
+        assert.equal(oauthJwt, false, "OAuth JWT profile never calls userinfo");
         assert.equal(request.headers.get("authorization"), "Bearer fixture-access-token");
         return Response.json({sub:subject,email,email_verified:true,...userinfoOverride});
       }
       assert.equal(url.href, `${issuer}/token`);
       calls++;
       const body = new URLSearchParams(await request.text());
-      assert.equal(request.headers.get("authorization"), `Basic ${Buffer.from(`${clientId}:${secret}`).toString("base64")}`);
+      if (oauthJwt) {
+        assert.equal(request.headers.get("authorization"), null, "OAuth JWT never uses Basic");
+        assert.equal(body.get("client_id"), clientId);
+        assert.equal(body.get("client_secret"), authMethod === "none" ? null : secret);
+        assert.equal(body.getAll("resource").length, 1);
+        assert.equal(body.get("resource"), resource, "same explicit resource in exchange");
+      } else assert.equal(request.headers.get("authorization"), `Basic ${Buffer.from(`${clientId}:${secret}`).toString("base64")}`);
       assert.equal(body.get("grant_type"),"authorization_code");
       assert.equal(body.get("redirect_uri"),`${origin}/gatekeeper/oidc/oauth`);
       assert.equal(createHash("sha256").update(body.get("code_verifier")).digest("base64url"),challenge);
       if (tokenFailure) return Response.json({error:tokenFailure,error_description:privateFailure}, {status:401});
-      return Response.json({access_token:"fixture-access-token",token_type:"Bearer",id_token:malformedToken ? privateFailure : jwt()});
+      return Response.json(oauthJwt ? { access_token: malformedToken ? privateFailure : jwt(), token_type: tokenType,
+        refresh_token: "fixture-refresh-token", id_token: "ignored-id-token" }
+        : {access_token:"fixture-access-token",token_type:"Bearer",id_token:malformedToken ? privateFailure : jwt()});
     } };
   const make = changes => new Miniflare(convertV4MiniflareOptions({...options,bindings:{...bindings,...changes}}));
   const mf = make({});
@@ -146,7 +171,14 @@ export default {
     assert.equal(attempt.begun.status,302,await attempt.begun.clone().text());
     const authorization = new URL(attempt.begun.headers.get("location"));
     assert.equal(authorization.origin,new URL(issuer).origin);
-    assert.equal(authorization.searchParams.get("scope"),"openid profile email");
+    assert.equal(authorization.searchParams.get("scope"), oauthJwt ? scopes.join(" ") : "openid profile email");
+    assert.equal(authorization.searchParams.get("code_challenge_method"), "S256");
+    assert.equal(authorization.searchParams.get("response_type"), "code");
+    if (oauthJwt) {
+      assert.equal(authorization.searchParams.getAll("resource").length, 1);
+      assert.equal(authorization.searchParams.get("resource"), resource);
+      assert.equal(authorization.searchParams.has("nonce"), false);
+    }
     idNonce=authorization.searchParams.get("nonce"); challenge=authorization.searchParams.get("code_challenge");
     return {...attempt,authorization};
   };
@@ -163,7 +195,7 @@ export default {
     assert.equal(result.status,200,await result.clone().text());
     const html = await result.text();
     assert.match(html,/fixture-handoff-ticket/);
-    for(const value of ["fixture-access-token",secret,jwt(),email,subject]) assert.ok(!html.includes(value),"callback exposes no identity or provider credentials");
+    for(const value of ["fixture-access-token","fixture-refresh-token",secret,jwt(),email,subject]) assert.ok(!html.includes(value),"callback exposes no identity or provider credentials");
     const probe = await mf.getDurableObjectNamespace("Probe");
     assert.deepEqual(await (await probe.get(probe.idFromName("result")).fetch("https://test.invalid")).json(),
       {email,identity:{issuer,subject,email},remainingIdentity:null},
@@ -172,13 +204,28 @@ export default {
     const count = calls;
     await expectFailure(await complete(attempt),"sign_in_attempt_expired"); assert.equal(calls,count,"no repeated code exchange");
 
-    for (const claims of [{iss:"https://other.example.invalid"},{aud:"other-client"},{nonce:"wrong"},
+    const invalidClaims = oauthJwt ? [
+      {iss:"https://other.example.invalid"}, {iss:undefined}, {aud:"other-resource"}, {aud:undefined}, {aud:[resource]}, {aud:[resource,"another"]},
+      {sub:"wrong-subject"}, {email:"not-allowed@example.invalid"}, {emailVerified:false}, {emailVerified:"true"},
+      {emailVerified:undefined}, {email:undefined}, {email:42}, {sub:undefined}, {sub:42},
+      {exp:Math.floor(Date.now()/1000)-1}, {exp:"123"}, {exp:1e300}, {exp:Number.MAX_SAFE_INTEGER}, {exp:1.5}, {exp:undefined},
+      {iat:Math.floor(Date.now()/1000)+3600}, {iat:Math.floor(Date.now()/1000)-3600}, {iat:-1}, {iat:1.5}, {iat:"123"}, {iat:undefined},
+      {exp:Math.floor(Date.now()/1000)+30, iat:Math.floor(Date.now()/1000)+45},
+      {jti:undefined}, {jti:""}, {jti:42}, {client_id:"other"}, {client_id:undefined}, {azp:"other"}, {azp:undefined},
+      {scope:"profile"}, {scope:["profile","email"]}, {scope:"profile\temail"}, {scope:undefined},
+      {token_use:"id"}, {token_use:undefined}, {banned:true}, {banned:"false"}, {banned:undefined},
+    ] : [{iss:"https://other.example.invalid"},{aud:"other-client"},{nonce:"wrong"},
       {exp:Math.floor(Date.now()/1000)-1},{iat:Math.floor(Date.now()/1000)+3600},{email_verified:false},
-      {email:"not-allowed@example.invalid"},{sub:"wrong-subject"},{aud:[clientId,"another"],azp:"another"}]) {
+      {email:"not-allowed@example.invalid"},{sub:"wrong-subject"},{aud:[clientId,"another"],azp:"another"}];
+    for (const claims of invalidClaims) {
       claimsOverride=claims; attempt=await authorize(); result=await complete(attempt);
-      const code = claims.email_verified === false ? "verified_email_required"
-        : claims.email || claims.sub ? "identity_not_allowed" : "invalid_identity_token";
-      await expectFailure(result, code, code === "invalid_identity_token" ? 400 : 403);
+      const code = oauthJwt ? claims.emailVerified === false || claims.emailVerified === "true" ? "verified_email_required"
+        : claims.email === "not-allowed@example.invalid" || claims.sub === "wrong-subject" ? "identity_not_allowed"
+        : claims.email === 42 || claims.sub === 42 || Object.hasOwn(claims,"jti") && claims.jti !== undefined ? "invalid_identity_response"
+        : "invalid_identity_token"
+        : claims.email_verified === false ? "verified_email_required"
+          : claims.email || claims.sub ? "identity_not_allowed" : "invalid_identity_token";
+      await expectFailure(result, code, ["verified_email_required", "identity_not_allowed"].includes(code) ? 403 : 400);
       assert.deepEqual(await inspect(attempt),{keys:[],email:null});
     }
     claimsOverride={};
@@ -188,8 +235,9 @@ export default {
       {email:null,identity:null,remainingIdentity:null},"expired identity cannot authorize Workshop session creation");
     assert.deepEqual(await inspect(attempt),{keys:[],email:null}); claimsOverride={};
     wrongSignature=true; attempt=await authorize(); await expectFailure(await complete(attempt),"invalid_identity_token"); wrongSignature=false;
-    keyOverride=[{...jwk,alg:"RS256"}]; attempt=await authorize(); await expectFailure(await complete(attempt),"invalid_identity_keys"); keyOverride=null;
+    keyOverride=[{...jwk,alg:oauthJwt ? "EdDSA" : "RS256"}]; attempt=await authorize(); await expectFailure(await complete(attempt),"invalid_identity_keys"); keyOverride=null;
     malformedToken=true; attempt=await authorize(); await expectFailure(await complete(attempt),"invalid_identity_token"); malformedToken=false;
+    if (!oauthJwt) {
     fallback=true; attempt=await authorize(); assert.equal((await complete(attempt)).status,200,"verified userinfo fallback");
     assert.deepEqual(await (await probe.get(probe.idFromName("result")).fetch("https://test.invalid")).json(),
       {email,identity:{issuer,subject,email},remainingIdentity:null},"verified userinfo retains the signed subject and issuer");
@@ -198,6 +246,41 @@ export default {
       await expectFailure(await complete(attempt), profile.sub ? "identity_subject_mismatch" : "verified_email_required", profile.sub ? 400 : 403);
     }
     userinfoOverride={};fallback=false;
+    } else {
+      for (const header of [{alg:"HS256"}, {alg:"none"}, {alg:"EdDSA"}, {kid:""}, {crit:["fixture"]},
+        {jwk}, {jku:`${issuer}/jwks`}, {x5u:`${issuer}/keys`}, {x5c:["fixture"]}]) {
+        headerOverride=header; attempt=await authorize(); await expectFailure(await complete(attempt),"invalid_identity_token");
+      }
+      headerOverride={};
+      for (const key of [{...jwk,kty:"oct",k:"fixture"}, {...jwk,d:""}, {...jwk,p:"private"},
+        {...jwk,key_ops:["sign","verify"]}, {...jwk,use:"enc"}, {...jwk,n:"invalid"}]) {
+        keyOverride=[key]; attempt=await authorize(); await expectFailure(await complete(attempt),
+          key.n === "invalid" ? "invalid_identity_token" : "invalid_identity_keys");
+      }
+      keyOverride=[jwk,jwk]; attempt=await authorize(); await expectFailure(await complete(attempt),"invalid_identity_keys");
+      keyOverride=[jwk,{...jwk,d:"private"}]; attempt=await authorize(); await expectFailure(await complete(attempt),"invalid_identity_keys");
+      const weak=generateKeyPairSync("rsa",{modulusLength:1024}); signingKeyOverride=weak.privateKey;
+      keyOverride=[{...weak.publicKey.export({format:"jwk"}),kid:"fixture",alg}];
+      attempt=await authorize(); await expectFailure(await complete(attempt),"invalid_identity_token");
+      keyOverride=null; signingKeyOverride=null;
+      tokenType="DPoP"; attempt=await authorize(); await expectFailure(await complete(attempt),"invalid_identity_token"); tokenType="Bearer";
+      attempt=await authorize(); const missing=new URL(callback(attempt.authorization)); missing.searchParams.delete("iss");
+      const before=calls; await expectFailure(await mf.dispatchFetch(missing),"invalid_sign_in_callback");
+      assert.equal(calls,before,"missing issuer never exchanges a code"); await expectFailure(await complete(attempt),"sign_in_attempt_expired");
+      for (const metadata of [{authorization_response_iss_parameter_supported:false}, {code_challenge_methods_supported:["plain"]},
+        {token_endpoint_auth_methods_supported:["client_secret_basic"]}, {grant_types_supported:["implicit"]},
+        {grant_types_supported:null}, {grant_types_supported:"authorization_code"},
+        {response_types_supported:["token"]}, {issuer:`${issuer}/other`}]) {
+        discoveryOverride=metadata; await expectFailure((await start()).begun,"identity_provider_protocol_mismatch",502);
+      }
+      discoveryOverride={grant_types_supported:undefined};
+      attempt=await authorize(); assert.equal((await complete(attempt)).status,200,"RFC 8414 defaults an omitted grant_types_supported to authorization_code and implicit");
+      discoveryOverride={};
+      authMethod="client_secret_post";
+      const post=make({OAUTH_JWT_TOKEN_ENDPOINT_AUTH_METHOD:authMethod,OIDC_CLIENT_SECRET:secret});
+      try { attempt=await authorize(post); assert.equal((await post.dispatchFetch(callback(attempt.authorization))).status,200); }
+      finally { await post.dispose(); authMethod="none"; }
+    }
     attempt=await authorize(); const before=calls; await inspect(attempt,"/expire");
     await expectFailure(await complete(attempt),"sign_in_attempt_expired"); assert.equal(calls,before,"expired attempt never exchanges code");
     attempt=await authorize(); assert.equal((await mf.dispatchFetch(`${callback(attempt.authorization)}&state=duplicate`)).status,400);
@@ -215,7 +298,7 @@ export default {
       const after=calls; await expectFailure(await complete(attempt),"sign_in_attempt_expired"); assert.equal(calls,after);
     }
     tokenFailure=null;
-    attempt=await authorize(); providerFailure=`${issuer}/.well-known/openid-configuration`;
+    attempt=await authorize(); providerFailure=metadata;
     await expectFailure(await complete(attempt),"identity_provider_unavailable",502); providerFailure=null;
     assert.deepEqual(await inspect(attempt),{keys:[],email:null});
     for (const [binding, code] of [["TEST_CALLBACK_FAILURE","sign_in_handoff_failed"],["TEST_CLEAR_FAILURE","sign_in_cleanup_failed"]]) {
@@ -240,6 +323,6 @@ export default {
       assert.equal(entry.origin,"https://login.example.invalid"); assert.equal(entry.searchParams.get("sitename"),"example");
       assert.equal(new URL(entry.searchParams.get("callbackURL")).origin,new URL(issuer).origin);
     } finally {await loginInstance.dispose();}
-    console.log("OIDC native workerd checks passed: signed login, fixed RPC failure categories/statuses, credential-free token/JWT/handoff/cleanup failures, replay, PKCE, issuer/audience/nonce, verified email, subject allowlist, expiry and auth-only scope.");
+    console.log(`${oauthJwt ? "OAuth JWT RS256" : "OIDC EdDSA"} native workerd checks passed: signed login, fixed RPC failure categories/statuses, credential-free token/JWT/handoff/cleanup failures, replay, PKCE, issuer/audience, verified email, subject allowlist, expiry and auth-only scope.`);
   } finally { await mf.dispose(); }
 } finally { await rm(output,{recursive:true,force:true}); }

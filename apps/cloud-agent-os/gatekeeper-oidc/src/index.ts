@@ -58,8 +58,8 @@ export class OidcLogin extends DurableObject<Env> {
       stage = "identity_provider_unavailable";
       const endpoints = await discover(config);
       const authorize = oauthClient(config, endpoints).authorizationUrl({ redirectUri: config.callback,
-        state: `${this.ctx.id.toString()}:${oauthNonce}`, scopes: ["openid", "profile", "email"],
-        codeChallenge: pkce.codeChallenge, params: { nonce: idNonce } });
+        state: `${this.ctx.id.toString()}:${oauthNonce}`, scopes: config.mode === "oauth-jwt" ? config.scopes : ["openid", "profile", "email"],
+        codeChallenge: pkce.codeChallenge, params: config.mode === "oauth-jwt" ? { resource: config.resource } : { nonce: idNonce } });
       if (!config.login) return { ok: true, value: authorize.href };
       if (this.env.OIDC_LOGIN_SITE) config.login.searchParams.set("sitename", this.env.OIDC_LOGIN_SITE);
       config.login.searchParams.set("callbackURL", authorize.href);
@@ -76,13 +76,14 @@ export class OidcLogin extends DurableObject<Env> {
       if (!attempt) throw new SignInError("sign_in_attempt_expired");
       claimed = true;
       const config = configuration(this.env);
-      if (denied || !code || code.length > 8192 || issuer !== null && issuer !== config.issuer) throw new SignInError("invalid_sign_in_callback");
+      if (denied || !code || code.length > 8192 || issuer !== config.issuer && (config.mode === "oauth-jwt" || issuer !== null)) throw new SignInError("invalid_sign_in_callback");
       const callback = this.ctx.storage.kv.get<Fetcher<GatekeeperConnectCallback>>("callback");
       if (!callback) throw new SignInError("sign_in_attempt_expired");
       stage = "identity_provider_unavailable";
       const endpoints = await discover(config);
       stage = "token_exchange_failed";
-      const tokens = await oauthClient(config, endpoints).exchangeCode({ code, redirectUri: config.callback, codeVerifier: attempt.codeVerifier });
+      const tokens = await oauthClient(config, endpoints).exchangeCode({ code, redirectUri: config.callback, codeVerifier: attempt.codeVerifier,
+        ...(config.mode === "oauth-jwt" ? { params: { resource: config.resource } } : {}) });
       stage = "invalid_identity_token";
       const identity = await verifyIdentity(config, endpoints, tokens, attempt.nonce);
       this.ctx.storage.kv.put("identity", identity);

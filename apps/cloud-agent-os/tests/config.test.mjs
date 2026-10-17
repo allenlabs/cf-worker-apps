@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { buildCommands, deploymentOrder, generateConfigs, packages, parseDeployment } from '../scripts/config.mjs';
+import { buildCommands, deploymentOrder, generateConfigs, packages, parseDeployment, requiresOidcSecret } from '../scripts/config.mjs';
 
 const example = JSON.parse(await readFile(new URL('../deployment.example.json', import.meta.url), 'utf8'));
 const accessExample = JSON.parse(await readFile(new URL('../deployment.access.example.json', import.meta.url), 'utf8'));
@@ -250,6 +250,41 @@ test('explicit OIDC mode preserves legacy generated configuration and build comm
   assert.deepEqual(deploymentOrder(explicit), ['context', 'oidc', 'mcp', 'workshop', 'router']);
 });
 
+test('OAuth JWT is explicit, pins its resource and scopes, and only post requires a secret', () => {
+  const input = structuredClone(example);
+  Object.assign(input.auth, { mode: 'oauth-jwt', resource: 'https://resource.example.com',
+    scopes: ['profile', 'email'], tokenEndpointAuthMethod: 'none' });
+  const generated = generateConfigs(input, bases);
+  assert.equal(generated.oidc.vars.SIGN_IN_PROTOCOL, 'oauth-jwt');
+  assert.equal(generated.oidc.vars.OAUTH_JWT_RESOURCE, input.auth.resource);
+  assert.deepEqual(JSON.parse(generated.oidc.vars.OAUTH_JWT_SCOPES), input.auth.scopes);
+  assert.equal(generated.oidc.vars.OAUTH_JWT_TOKEN_ENDPOINT_AUTH_METHOD, 'none');
+  assert.equal(generated.oidc.secrets, undefined);
+  assert.equal(requiresOidcSecret(input), false);
+  assert.equal(generated.workshop.vars.AUTH_GATEKEEPERS, 'oidc');
+  const post = structuredClone(input);
+  post.auth.tokenEndpointAuthMethod = 'client_secret_post';
+  assert.equal(requiresOidcSecret(post), true);
+  assert.deepEqual(generateConfigs(post, bases).oidc.secrets.required, ['OIDC_CLIENT_SECRET']);
+  for (const mutate of [
+    c => { delete c.auth.mode; },
+    c => { delete c.auth.tokenEndpointAuthMethod; },
+    c => { c.auth.tokenEndpointAuthMethod = 'client_secret_basic'; },
+    c => { c.auth.resource += '/path'; },
+    c => { c.auth.resource += '/'; },
+    c => { c.auth.resource = 'http://resource.example.com'; },
+    c => { c.auth.scopes = []; },
+    c => { c.auth.scopes = ['read write']; },
+    c => { c.auth.scopes = ['profile', 'profile']; },
+    c => { c.auth.scopes = ['openid']; },
+    c => { c.auth.scopes = ['offline_access']; },
+    c => { c.auth.clientSecret = 'not-configuration'; },
+  ]) {
+    const bad = structuredClone(input); mutate(bad);
+    assert.throws(() => parseDeployment(bad));
+  }
+});
+
 test('Access uses native authentication without an OIDC worker, binding or secret', () => {
   const accessBases = structuredClone(bases);
   delete accessBases.oidc;
@@ -357,7 +392,7 @@ test('SIWC setup adds only a native router binding and preserves all worker perm
   }
 });
 
-test('SIWC setup rejects every other setup value and OIDC authentication', () => {
+test('SIWC setup rejects every other setup value and supports OIDC authentication', () => {
   for (const setup of ['', 'SIWC', 'codex', 'device', 'api', null, true, {}, []]) {
     const candidate = structuredClone(accessExample);
     candidate.modelBridge.setup = setup;
@@ -367,7 +402,11 @@ test('SIWC setup rejects every other setup value and OIDC authentication', () =>
     const candidate = structuredClone(example);
     candidate.auth.mode = mode;
     candidate.modelBridge.setup = 'siwc';
-    assert.throws(() => generateConfigs(candidate, bases), /modelBridge.setup requires Access authentication/);
+    const configs = generateConfigs(candidate, bases);
+    assert.deepEqual(configs.router.services.at(-1), { binding: 'GATEKEEPER_SUBSCRIPTION', service: candidate.modelBridge.service });
+    delete candidate.modelBridge.setup;
+    configs.router.services.pop();
+    assert.deepEqual(configs, generateConfigs(candidate, bases));
   }
   const shared = structuredClone(accessExample);
   shared.modelBridge.setup = 'siwc';
@@ -388,7 +427,7 @@ test('Access CLI plans omit OIDC and reject irrelevant OIDC secret exports', () 
   assert.match(rejected.stderr, /--oidc-secrets requires OIDC authentication/);
 });
 
-test('Access check and deployment omit OIDC commands and need no OIDC secret file', async () => {
+test('Access and public OAuth JWT checks and deployments need no OIDC secret file', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'cloud-agent-os-access-'));
   try {
     // Replace only external commands and upstream preparation. The real build script still parses
@@ -411,22 +450,30 @@ test('Access check and deployment omit OIDC commands and need no OIDC secret fil
         }
         return nextResolve(specifier, context);
       }});`);
+    for (const [configFile, deployment] of [['deployment.access.example.json', accessExample],
+      ['deployment.oauth-jwt.example.json', JSON.parse(await readFile(new URL('../deployment.oauth-jwt.example.json', import.meta.url), 'utf8'))]]) {
     for (const mode of ['--check', '--deploy']) {
       const result = spawnSync(process.execPath, ['--import', loader, 'scripts/build.mjs', '--config',
-        'deployment.access.example.json', mode], {
+        configFile, mode], {
         cwd: fileURLToPath(new URL('..', import.meta.url)), encoding: 'utf8',
       });
       assert.equal(result.status, 0, result.stderr);
       const commands = result.stdout.trim().split('\n').map(line => JSON.parse(line));
-      assert(!commands.some(command => command.args.some(arg => arg.includes('oidc'))));
+      const access = deployment.auth.mode === 'access';
+      assert.equal(commands.some(command => command.cwd.endsWith('gatekeeper-oidc')), !access);
       const deployments = commands.filter(command => command.args.includes('wrangler'));
-      assert.deepEqual(deployments.map(command => command.cwd), deploymentOrder(accessExample).map(key => join(dir, packages[key])));
+      assert.deepEqual(deployments.map(command => command.cwd), deploymentOrder(deployment).map(key => join(dir, packages[key])));
       assert(deployments.every(command => !command.args.includes('--secrets-file')));
       assert(deployments.every(command => command.args.includes('--dry-run') === (mode === '--check')));
       if (mode === '--check') {
-        assert(commands.some(command => command.args.includes('__tests__/access.test.ts')));
-        assert(commands.some(command => command.args.includes('src/useAuth.test.tsx')));
+        assert.equal(commands.some(command => command.args.includes('__tests__/access.test.ts')), access);
+        assert.equal(commands.some(command => command.args.includes('src/useAuth.test.tsx')), access);
+        if (!access) {
+          assert(commands.some(command => command.args.includes('oauth-jwt')));
+          assert.equal(commands.filter(command => command.args.some(arg => arg.endsWith('/gatekeeper-oidc/tests/check.mjs'))).length, 2);
+        }
       }
+    }
     }
   } finally {
     await rm(dir, { recursive: true, force: true });

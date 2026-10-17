@@ -14,13 +14,17 @@ class RequestError extends Error {
 
 function settings(env) {
   let origin, issuer, users;
+  const mode = env.SUBSCRIPTION_AUTH_MODE ?? "access";
   try {
     origin = new URL(env.PUBLIC_ORIGIN);
-    issuer = new URL(env.CF_ACCESS_ISS);
+    issuer = new URL(mode === "oidc" ? env.SUBSCRIPTION_ADMIN_ISSUER : env.CF_ACCESS_ISS);
     users = JSON.parse(env.INFERENCE_BRIDGE_ALLOWED_USER_IDS);
   } catch { throw new RequestError("configuration_invalid", 503); }
-  if (origin.protocol !== "https:" || origin.origin !== env.PUBLIC_ORIGIN || issuer.protocol !== "https:" || issuer.origin !== env.CF_ACCESS_ISS ||
-      typeof env.CF_ACCESS_AUD !== "string" || !env.CF_ACCESS_AUD || env.CF_ACCESS_AUD.length > 255 ||
+  const validAuth = mode === "access"
+    ? issuer.protocol === "https:" && issuer.origin === env.CF_ACCESS_ISS && typeof env.CF_ACCESS_AUD === "string" && !!env.CF_ACCESS_AUD && env.CF_ACCESS_AUD.length <= 255
+    : mode === "oidc" && issuer.protocol === "https:" && !issuer.username && !issuer.password && !issuer.search && !issuer.hash && issuer.href.replace(/\/$/, "") === env.SUBSCRIPTION_ADMIN_ISSUER && env.SUBSCRIPTION_ADMIN_ISSUER.length <= 2048 &&
+      typeof env.SUBSCRIPTION_ADMIN_SUBJECT === "string" && env.SUBSCRIPTION_ADMIN_SUBJECT.length > 0 && env.SUBSCRIPTION_ADMIN_SUBJECT.length <= 255 && !/[\x00-\x1f\x7f]/.test(env.SUBSCRIPTION_ADMIN_SUBJECT) && !!env.OS_SESSION;
+  if (!validAuth || origin.protocol !== "https:" || origin.origin !== env.PUBLIC_ORIGIN ||
       typeof env.SUBSCRIPTION_ADMIN_EMAIL !== "string" || !emailPattern.test(env.SUBSCRIPTION_ADMIN_EMAIL) || env.SUBSCRIPTION_ADMIN_EMAIL !== env.SUBSCRIPTION_ADMIN_EMAIL.toLowerCase() || env.SUBSCRIPTION_ADMIN_EMAIL.length > 254 ||
       env.SUBSCRIPTION_INFERENCE_PROVIDER !== "siwc" || env.INFERENCE_BRIDGE_PROVIDER !== "siwc" || env.INFERENCE_BRIDGE_ACCOUNT_ID !== "owner" ||
       !/^[a-zA-Z0-9._-]{1,128}$/.test(env.INFERENCE_BRIDGE_MODEL || "") ||
@@ -29,10 +33,20 @@ function settings(env) {
       !/^[A-Za-z0-9_-]{43}$/.test(env.TOKEN_WRAPPING_KEY || "") || typeof env.TOKEN_WRAPPING_AAD !== "string" || !env.TOKEN_WRAPPING_AAD || encoder.encode(env.TOKEN_WRAPPING_AAD).length > 128) {
     throw new RequestError("configuration_invalid", 503);
   }
-  return { origin: origin.origin, issuer: issuer.origin, audience: env.CF_ACCESS_AUD, admin: env.SUBSCRIPTION_ADMIN_EMAIL };
+  return { mode, origin: origin.origin, issuer: mode === "oidc" ? env.SUBSCRIPTION_ADMIN_ISSUER : issuer.origin, subject: env.SUBSCRIPTION_ADMIN_SUBJECT, audience: env.CF_ACCESS_AUD, admin: env.SUBSCRIPTION_ADMIN_EMAIL };
 }
 
-async function authenticate(request, config) {
+async function authenticate(request, config, env) {
+  if (config.mode === "oidc") {
+    const authorization = request.headers.get("authorization");
+    if (!authorization || authorization.length > 306 || !authorization.startsWith("Bearer ")) throw new RequestError("access_denied", 401);
+    let principal;
+    try { principal = await env.OS_SESSION.verify(authorization.slice(7)); }
+    catch { throw new RequestError("access_denied", 401); }
+    if (!principal) throw new RequestError("access_denied", 401);
+    if (principal.issuer !== config.issuer || principal.subject !== config.subject || principal.email !== config.admin) throw new RequestError("admin_denied", 403);
+    return;
+  }
   const token = request.headers.get("cf-access-jwt-assertion");
   if (!token || token.length > 16384) throw new RequestError("access_denied", 401);
   let payload;
@@ -93,10 +107,11 @@ export default {
     try {
       const config = settings(env), url = new URL(request.url);
       if (url.origin !== config.origin || url.search) throw new RequestError("request_invalid");
-      await authenticate(request, config);
+      const page = request.method === "GET" && (url.pathname === "/" || url.pathname === "/gatekeeper/subscription");
+      if (!(config.mode === "oidc" && page)) await authenticate(request, config, env);
       if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/gatekeeper/subscription")) {
         const nonce = crypto.randomUUID().replaceAll("-", "");
-        return secure(new Response(subscriptionPage(nonce), { headers: { "content-type": "text/html; charset=utf-8" } }), nonce);
+        return secure(new Response(subscriptionPage(nonce, config.mode), { headers: { "content-type": "text/html; charset=utf-8" } }), nonce);
       }
       if (!["/gatekeeper/subscription/status", "/gatekeeper/subscription/start", "/gatekeeper/subscription/complete"].includes(url.pathname)) throw new RequestError("not_found", 404);
       if (request.method !== "POST") throw new RequestError("method_not_allowed", 405);
