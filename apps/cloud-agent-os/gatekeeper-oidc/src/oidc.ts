@@ -11,6 +11,7 @@ export interface Env {
   OAUTH_JWT_RESOURCE?: string;
   OAUTH_JWT_SCOPES?: string;
   OAUTH_JWT_TOKEN_ENDPOINT_AUTH_METHOD?: string;
+  IDENTITY_PROVIDER?: Fetcher;
   OIDC_DISPLAY_NAME?: string;
   OIDC_ALLOWED_IDENTITIES: string;
   OIDC_LOGIN_URL?: string;
@@ -81,6 +82,9 @@ export function configuration(env: Env) {
       displayName: env.OIDC_DISPLAY_NAME ? text(env.OIDC_DISPLAY_NAME, 128) : "Organization SSO",
       callback: `${origin.origin}/gatekeeper/oidc/oauth` };
     if (env.SIGN_IN_PROTOCOL === "oauth-jwt") {
+      if (env.IDENTITY_PROVIDER !== undefined && (env.IDENTITY_PROVIDER === null
+          || typeof env.IDENTITY_PROVIDER !== "object" || typeof env.IDENTITY_PROVIDER.fetch !== "function")) throw Error();
+      const providerFetch = env.IDENTITY_PROVIDER?.fetch.bind(env.IDENTITY_PROVIDER);
       const resource = httpsUrl(text(env.OAUTH_JWT_RESOURCE));
       if (resource.origin !== env.OAUTH_JWT_RESOURCE) throw Error();
       const rawScopes: unknown = JSON.parse(text(env.OAUTH_JWT_SCOPES, 8192));
@@ -93,11 +97,11 @@ export function configuration(env: Env) {
       const client: OAuthClientAuth = method === "none" ? { method: "none", id: clientId }
         : { method: "post", id: clientId, secret: text(env.OIDC_CLIENT_SECRET, 4096) };
       if (method === "none" && env.OIDC_CLIENT_SECRET !== undefined) throw Error();
-      return { ...common, mode: "oauth-jwt" as const, resource: resource.origin, scopes, method, client };
+      return { ...common, mode: "oauth-jwt" as const, resource: resource.origin, scopes, method, client, providerFetch };
     }
     if (env.SIGN_IN_PROTOCOL !== undefined && env.SIGN_IN_PROTOCOL !== "oidc"
         || env.OAUTH_JWT_RESOURCE !== undefined || env.OAUTH_JWT_SCOPES !== undefined
-        || env.OAUTH_JWT_TOKEN_ENDPOINT_AUTH_METHOD !== undefined) throw Error();
+        || env.OAUTH_JWT_TOKEN_ENDPOINT_AUTH_METHOD !== undefined || env.IDENTITY_PROVIDER !== undefined) throw Error();
     const client: OAuthClientAuth = { method: "basic", encoding: "form", id: clientId,
       secret: text(env.OIDC_CLIENT_SECRET, 4096) };
     return { ...common, mode: "oidc" as const, client };
@@ -112,8 +116,9 @@ export function allowedIdentity(config: Configuration, identity: VerifiedIdentit
     candidate.email === identity.email && candidate.subject === identity.subject);
 }
 
-async function remoteJson(url: string, headers?: Record<string, string>): Promise<Record<string, unknown>> {
-  const response = await fetch(url, { headers: { accept: "application/json", ...headers },
+async function remoteJson(config: Configuration, url: string, headers?: Record<string, string>): Promise<Record<string, unknown>> {
+  const transport = config.mode === "oauth-jwt" ? config.providerFetch ?? fetch : fetch;
+  const response = await transport(url, { headers: { accept: "application/json", ...headers },
     redirect: "manual", signal: AbortSignal.timeout(15000) });
   if (!response.ok) throw new SignInError("identity_provider_unavailable");
   return record(JSON.parse(await readTextCapped(response, 65536)));
@@ -124,7 +129,7 @@ export async function discover(config: Configuration) {
   const metadata = config.mode === "oauth-jwt"
     ? `${issuer.origin}/.well-known/oauth-authorization-server${issuer.pathname === "/" ? "" : issuer.pathname}`
     : `${config.issuer}/.well-known/openid-configuration`;
-  const document = await remoteJson(metadata);
+  const document = await remoteJson(config, metadata);
   const grants = document.grant_types_supported === undefined ? ["authorization_code", "implicit"] : document.grant_types_supported;
   if (document.issuer !== config.issuer
       || !Array.isArray(document.code_challenge_methods_supported) || !document.code_challenge_methods_supported.includes("S256")
@@ -147,7 +152,8 @@ export async function discover(config: Configuration) {
 
 export function oauthClient(config: Configuration, endpoints: Awaited<ReturnType<typeof discover>>) {
   return new OAuthClient({ label: "Identity provider", client: config.client, tokenEndpoint: endpoints.token,
-    authorizationEndpoint: endpoints.authorization, timeoutMs: 15000, maxResponseBytes: 65536 });
+    authorizationEndpoint: endpoints.authorization, timeoutMs: 15000, maxResponseBytes: 65536,
+    ...(config.mode === "oauth-jwt" ? { fetch: config.providerFetch } : {}) });
 }
 
 export async function verifyIdentity(config: Configuration, endpoints: Awaited<ReturnType<typeof discover>>,
@@ -158,7 +164,7 @@ export async function verifyIdentity(config: Configuration, endpoints: Awaited<R
   if (header.alg !== "EdDSA" || typeof header.kid !== "string" || !header.kid || header.kid.length > 255 || header.crit) {
     throw new SignInError("invalid_identity_token");
   }
-  const jwks = await remoteJson(endpoints.jwks);
+  const jwks = await remoteJson(config, endpoints.jwks);
   if (!Array.isArray(jwks.keys) || jwks.keys.length > 32) throw new SignInError("invalid_identity_keys");
   const keys = jwks.keys.map(record).filter(key => key.kid === header.kid && key.kty === "OKP"
     && key.crv === "Ed25519" && typeof key.x === "string" && !key.d
@@ -180,7 +186,7 @@ export async function verifyIdentity(config: Configuration, endpoints: Awaited<R
   if (typeof profile.email !== "string" || profile.email_verified === undefined) {
     if (tokens.tokenType?.toLowerCase() !== "bearer") throw new SignInError("invalid_identity_token");
     if (!endpoints.userinfo) throw new SignInError("identity_provider_protocol_mismatch");
-    profile = await remoteJson(endpoints.userinfo, { authorization: `Bearer ${tokens.accessToken}` });
+    profile = await remoteJson(config, endpoints.userinfo, { authorization: `Bearer ${tokens.accessToken}` });
     if (profile.sub !== subject) throw new SignInError("identity_subject_mismatch");
   }
   if (profile.email_verified !== true) throw new SignInError("verified_email_required");
@@ -196,7 +202,7 @@ async function verifyAccessIdentity(config: Extract<Configuration, { mode: "oaut
   const header = decodeProtectedHeader(token);
   if (header.alg !== "RS256" || typeof header.kid !== "string" || !header.kid || header.kid.length > 255
       || header.crit || ["jwk", "jku", "x5u", "x5c"].some(field => field in header)) throw new SignInError("invalid_identity_token");
-  const jwks = await remoteJson(jwksUrl);
+  const jwks = await remoteJson(config, jwksUrl);
   if (!Array.isArray(jwks.keys) || jwks.keys.length > 32) throw new SignInError("invalid_identity_keys");
   const matching = jwks.keys.map(record).filter(key => key.kid === header.kid);
   const [key] = matching;

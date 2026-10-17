@@ -56,6 +56,7 @@ try {
         if (config.auth.mode !== 'access') {
           run(process.execPath, [join(checkout, packages.oidc, 'tests/check.mjs'), checkout], { cwd: checkout });
           run(process.execPath, [join(checkout, packages.oidc, 'tests/check.mjs'), checkout, 'oauth-jwt'], { cwd: checkout });
+          run(process.execPath, [join(checkout, packages.oidc, 'tests/check.mjs'), checkout, 'oauth-jwt-service'], { cwd: checkout });
         }
         if (config.mcp) run('pnpm', ['exec', 'vitest', 'run', '__tests__/account-endpoint.test.ts'], {
           cwd: join(checkout, 'packages/mcp-shared'),

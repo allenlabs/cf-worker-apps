@@ -316,6 +316,35 @@ test('Access uses native authentication without an OIDC worker, binding or secre
   assert.deepEqual(Object.keys(generateConfigs(noMcp, accessBases)), deploymentOrder(noMcp));
 });
 
+test('OAuth JWT provider service is explicit and bound only to the private sign-in Worker', () => {
+  const input = structuredClone(example);
+  Object.assign(input.auth, { mode: 'oauth-jwt', resource: 'https://resource.example.com',
+    scopes: ['profile', 'email'], tokenEndpointAuthMethod: 'none' });
+  const before = generateConfigs(input, bases);
+  assert.equal(before.oidc.services, undefined);
+  const stale = structuredClone(bases);
+  stale.oidc.services = [{ binding: 'IDENTITY_PROVIDER', service: 'stale-provider' }];
+  assert.equal(generateConfigs(input, stale).oidc.services, undefined, 'a base config cannot silently enable a provider binding');
+  input.auth.providerService = 'example-identity-provider';
+  const after = generateConfigs(input, bases);
+  assert.deepEqual(after.oidc.services, [{ binding: 'IDENTITY_PROVIDER', service: input.auth.providerService }]);
+  assert.equal(after.oidc.workers_dev, false);
+  assert.deepEqual(after.oidc.routes, []);
+  delete after.oidc.services;
+  assert.deepEqual(after, before, 'provider routing does not change browser URLs, identities or other Workers');
+  for (const providerService of ['', null, 42, {}, 'https://identity.example.com', 'UPPER', 'a'.repeat(64), input.workers.oidc]) {
+    const bad = structuredClone(input);
+    bad.auth.providerService = providerService;
+    assert.throws(() => parseDeployment(bad), /providerService|separate Worker/);
+  }
+  for (const mode of [undefined, 'oidc', 'access']) {
+    const bad = structuredClone(mode === 'access' ? accessExample : example);
+    bad.auth.mode = mode;
+    bad.auth.providerService = 'example-identity-provider';
+    assert.throws(() => parseDeployment(bad), /unsupported field/);
+  }
+});
+
 test('Access requires bounded explicit email policy, issuer and audience, and rejects OIDC-only features', () => {
   for (const mutate of [
     c => { c.auth.mode = 'unknown'; },
@@ -470,7 +499,8 @@ test('Access and public OAuth JWT checks and deployments need no OIDC secret fil
         assert.equal(commands.some(command => command.args.includes('src/useAuth.test.tsx')), access);
         if (!access) {
           assert(commands.some(command => command.args.includes('oauth-jwt')));
-          assert.equal(commands.filter(command => command.args.some(arg => arg.endsWith('/gatekeeper-oidc/tests/check.mjs'))).length, 2);
+          assert(commands.some(command => command.args.includes('oauth-jwt-service')));
+          assert.equal(commands.filter(command => command.args.some(arg => arg.endsWith('/gatekeeper-oidc/tests/check.mjs'))).length, 3);
         }
       }
     }

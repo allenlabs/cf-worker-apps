@@ -42,6 +42,14 @@ authorization code, S256 PKCE, an advertised configured token authentication met
 exactly the pinned `iss`. Authorization and code exchange send the same configured
 [resource indicator](https://www.rfc-editor.org/rfc/rfc8707). Endpoints and JWKS must share the issuer origin.
 
+For an OAuth JWT provider Worker in the same Cloudflare account, optionally set
+`auth.providerService` to its Worker name. The private sign-in Worker then uses an
+`IDENTITY_PROVIDER` HTTP service binding for metadata, code exchange and JWKS requests, retaining
+their canonical HTTPS URLs, response limits and validation. Browser authorization still uses the
+provider's public URL. The binding does not route arbitrary incoming requests and never falls back
+to public HTTP after a binding failure. Omit it to retain public HTTP requests. OIDC and Access
+configuration reject this option.
+
 The bearer access token must use RS256 with one matching public RSA verification key, at least
 2048 bits. It must contain the exact issuer, a single string `aud` equal to `auth.resource`, a pinned
 `sub`, nonempty `jti`, integer `iat` and `exp`, `client_id` and `azp` equal to the configured client,
@@ -255,7 +263,8 @@ file; this avoids an interactive first-deployment prompt or a dummy Worker boots
 OAuth JWT with `tokenEndpointAuthMethod: "client_secret_post"` uses the same owner-only
 `OIDC_CLIENT_SECRET` export and `--oidc-secrets` option. Public `"none"` clients use PKCE without a
 secret, omit `--oidc-secrets` and reject a configured secret. Both use the same deployment order as
-OIDC. `--check` runs both the OIDC EdDSA and OAuth JWT RS256 native workerd security checks.
+OIDC. `--check` runs the OIDC EdDSA and OAuth JWT RS256 native workerd security checks, including
+the OAuth JWT HTTP service binding path.
 
 For Access, first create a self-hosted Cloudflare Access application covering the router hostname
 and all paths, including `/api` and its WebSocket connections. Set its Allow policy to the intended

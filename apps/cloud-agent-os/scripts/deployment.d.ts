@@ -37,6 +37,8 @@ export type DeploymentConfig = {
     resource: string;
     scopes: string[];
     tokenEndpointAuthMethod: 'none' | 'client_secret_post';
+    /** Optional same-account provider Worker for canonical HTTPS backchannel requests. */
+    providerService?: string;
   });
   workers: { oidc: string };
   /** Trusted host origins; identity policy derives from the OIDC allowlist. */

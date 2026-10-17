@@ -26,4 +26,17 @@ Sign-in failures return a fixed category and HTTP status. The DO's `begin()` and
 
 Callback claims remain single-use, including failed exchanges. Cleanup runs after every claimed callback; a failure to clean up replaces the result with the fixed cleanup category. Browser handoff confirmation remains required for session delivery. Diagnostic categories do not authorize a session or relax verification.
 
+The explicit OAuth JWT profile also accepts an optional `IDENTITY_PROVIDER` HTTP service binding.
+The deployment wrapper creates it from `auth.providerService`, a same-account provider Worker
+name. Metadata, token exchange and JWKS use that binding with the original canonical HTTPS URLs;
+browser authorization uses the public provider URL. Existing timeouts, response caps, manual
+redirect handling and endpoint/identity checks still apply. A present malformed binding is a
+configuration error, and a failed binding request never falls back to public HTTP. OIDC rejects
+the binding. Omission preserves the public HTTP transport.
+
+Run `node tests/check.mjs /absolute/path/to/cloudflare-os oauth-jwt-service` to exercise the
+OAuth JWT profile through a second native workerd Worker. It verifies the metadata/token/JWKS
+URLs, both client authentication methods, PKCE and resource indicators, fixed failures,
+redirect rejection, response caps and zero global provider fetches.
+
 Run `node tests/check.mjs /absolute/path/to/cloudflare-os` after installing that checkout's dependencies. The check bundles this source and drives the real Worker/DO RPC flow under Miniflare, with a fixture callback and a mocked external identity provider. All identities and keys are generated test fixtures. It verifies signed callbacks, exact failure categories and statuses across RPC, redacted token/JWT/handoff/cleanup failures, replay, issuer/audience/nonce/allowlist failures, expiry, and cleanup. It does not exercise the full Workshop callback and browser confirmation or claim to test a hosted SSO login or change the Workshop's own session lifetime.

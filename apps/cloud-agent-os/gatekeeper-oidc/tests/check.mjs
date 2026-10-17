@@ -8,7 +8,8 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const upstream = resolve(process.argv[2] ?? process.env.CLOUDFLARE_OS_SOURCE ?? "cloudflare-os");
-const oauthJwt = process.argv[3] === "oauth-jwt";
+const providerService = process.argv[3] === "oauth-jwt-service";
+const oauthJwt = process.argv[3] === "oauth-jwt" || providerService;
 const fromUpstream = createRequire(join(upstream, "package.json"));
 const fromGoogle = createRequire(join(upstream, "packages/gatekeeper-google/package.json"));
 const fromKit = createRequire(join(upstream, "packages/gatekeeper-kit/package.json"));
@@ -33,7 +34,9 @@ let claimsOverride = {}, discoveryOverride = {}, userinfoOverride = {}, keyOverr
 let headerOverride = {}, authMethod = "none", tokenType = "Bearer";
 let signingKeyOverride = null;
 let idNonce, challenge, calls = 0, fallback = false, wrongSignature = false;
-let tokenFailure = null, providerFailure = null, malformedToken = false;
+let tokenFailure = null, providerFailure = null, malformedToken = false, providerResponse = null;
+let outboundCalls = 0;
+const providerCalls = [];
 const privateFailure = "fixture-private-code-token-nonce-email-url-stack";
 async function expectFailure(response, code, status = 400) {
   assert.equal(response.status, status, `HTTP status for ${code}`);
@@ -121,12 +124,14 @@ export default {
     ...(oauthJwt ? { SIGN_IN_PROTOCOL: "oauth-jwt", OAUTH_JWT_RESOURCE: resource, OAUTH_JWT_SCOPES: JSON.stringify(scopes),
       OAUTH_JWT_TOKEN_ENDPOINT_AUTH_METHOD: "none" } : { OIDC_CLIENT_SECRET: secret }),
     OIDC_ALLOWED_IDENTITIES: JSON.stringify([{email,subject}]) };
-  const options = { name: "oidc-check", modules: true, scriptPath: join(output,"worker.mjs"),
-    compatibilityDate: "2026-10-04", compatibilityFlags: ["allow_irrevocable_stub_storage"],
-    durableObjects: { OidcLogin: { className: "OidcLogin", useSQLite: true }, Probe: { className: "Probe", useSQLite: true } }, bindings,
-    outboundService: async request => {
+  const provider = async request => {
       const url = new URL(request.url);
+      providerCalls.push({url: url.href, method: request.method});
+      if (providerService) assert.equal(request.headers.get("x-native-provider-service"), "true", "real provider Worker receives the binding request");
+      assert([metadata, `${issuer}/token`, `${issuer}/jwks`, ...(!oauthJwt ? [`${issuer}/userinfo`] : [])].includes(url.href),
+        "only canonical discovered provider endpoints are requested");
       if (providerFailure === url.href) return new Response(privateFailure, {status:503});
+      if (providerResponse?.url === url.href) return new Response(providerResponse.body, providerResponse.init);
       if (url.href === metadata) return Response.json({ issuer,
         authorization_endpoint: `${issuer}/authorize`, token_endpoint: `${issuer}/token`, jwks_uri: `${issuer}/jwks`,
         ...(oauthJwt ? { response_types_supported: ["code"], grant_types_supported: ["authorization_code"],
@@ -156,8 +161,25 @@ export default {
       return Response.json(oauthJwt ? { access_token: malformedToken ? privateFailure : jwt(), token_type: tokenType,
         refresh_token: "fixture-refresh-token", id_token: "ignored-id-token" }
         : {access_token:"fixture-access-token",token_type:"Bearer",id_token:malformedToken ? privateFailure : jwt()});
-    } };
-  const make = changes => new Miniflare(convertV4MiniflareOptions({...options,bindings:{...bindings,...changes}}));
+    };
+  const denyOutbound = () => { outboundCalls++; return new Response(privateFailure, {status:503}); };
+  const options = { name: "oidc-check", modules: true, scriptPath: join(output,"worker.mjs"),
+    compatibilityDate: "2026-10-04", compatibilityFlags: ["allow_irrevocable_stub_storage"],
+    durableObjects: { OidcLogin: { className: "OidcLogin", useSQLite: true }, Probe: { className: "Probe", useSQLite: true } },
+    outboundService: providerService ? denyOutbound : provider };
+  const make = changes => {
+    const auth = {...options, bindings:{...bindings,...changes},
+      ...(providerService && !Object.hasOwn(changes,"IDENTITY_PROVIDER")
+        ? {serviceBindings:{IDENTITY_PROVIDER:"identity-provider-check"}} : {})};
+    return new Miniflare(convertV4MiniflareOptions({cf:false,...(providerService ? {workers:[auth, {
+      name:"identity-provider-check", modules:true, compatibilityDate:"2026-10-04",
+      script:`export default { fetch(request,env) {
+        request = new Request(request);
+        request.headers.set("x-native-provider-service","true");
+        return env.FIXTURE.fetch(request);
+      } };`, serviceBindings:{FIXTURE:provider}, outboundService:denyOutbound,
+    }]} : auth)}));
+  };
   const mf = make({});
   const start = async (instance = mf,delay=0) => {
     const response = await instance.dispatchFetch(`${origin}/test/start`,{method:"POST",body:JSON.stringify({scopes:"auth",delay})});
@@ -201,6 +223,9 @@ export default {
       {email,identity:{issuer,subject,email},remainingIdentity:null},
       "the handoff reads the exact verified identity; the cleared capability cannot reconstruct it");
     assert.deepEqual(await inspect(attempt),{keys:[],email:null},"transient identity removed after handoff");
+    assert.deepEqual(providerCalls, [{url:metadata,method:"GET"}, {url:metadata,method:"GET"},
+      {url:`${issuer}/token`,method:"POST"}, {url:`${issuer}/jwks`,method:"GET"}], "canonical metadata, token and JWKS request URLs");
+    assert.equal(outboundCalls,0,"service-bound provider requests never use global outbound fetch");
     const count = calls;
     await expectFailure(await complete(attempt),"sign_in_attempt_expired"); assert.equal(calls,count,"no repeated code exchange");
 
@@ -298,6 +323,32 @@ export default {
       const after=calls; await expectFailure(await complete(attempt),"sign_in_attempt_expired"); assert.equal(calls,after);
     }
     tokenFailure=null;
+    if (providerService) {
+      for (const [url, code, status] of [[metadata,"identity_provider_unavailable",502],
+        [`${issuer}/token`,"token_exchange_failed",400], [`${issuer}/jwks`,"identity_provider_unavailable",502]]) {
+        attempt=await authorize(); providerFailure=url;
+        await expectFailure(await complete(attempt),code,status); providerFailure=null;
+        assert.deepEqual(await inspect(attempt),{keys:[],email:null});
+      }
+      for (const [url, code, status] of [[metadata,"identity_provider_unavailable",502],
+        [`${issuer}/token`,"token_exchange_failed",400], [`${issuer}/jwks`,"identity_provider_unavailable",502]]) {
+        attempt=await authorize();
+        providerResponse={url,body:privateFailure,init:{status:302,headers:{location:"https://other.example.invalid/steal"}}};
+        await expectFailure(await complete(attempt),code,status); providerResponse=null;
+      }
+      for (const url of [metadata,`${issuer}/token`,`${issuer}/jwks`]) {
+        attempt=await authorize(); providerResponse={url,body:"x".repeat(65537)};
+        await expectFailure(await complete(attempt), url === metadata ? "identity_provider_unavailable"
+          : url.endsWith("/token") ? "token_exchange_failed" : "invalid_identity_token", url === metadata ? 502 : 400);
+        providerResponse=null;
+      }
+      const before=providerCalls.length;
+      assert.equal((await mf.dispatchFetch(`${origin}/arbitrary?url=${encodeURIComponent(`${issuer}/token`)}`)).status,404);
+      assert.equal(providerCalls.length,before,"inbound requests cannot route arbitrary provider calls");
+      assert.equal(outboundCalls,0,"provider errors and redirects never fall back to global fetch");
+      assert(providerCalls.every(call => [metadata,`${issuer}/token`,`${issuer}/jwks`].includes(call.url)),
+        "redirect targets are never requested through the provider binding");
+    }
     attempt=await authorize(); providerFailure=metadata;
     await expectFailure(await complete(attempt),"identity_provider_unavailable",502); providerFailure=null;
     assert.deepEqual(await inspect(attempt),{keys:[],email:null});
@@ -317,12 +368,22 @@ export default {
       try { assert.equal((await deniedInstance.dispatchFetch(`${origin}/test/start`,{method:"POST",body:'{"scopes":"auth"}'})).status,400); }
       finally { await deniedInstance.dispose(); }
     }
+    for (const invalid of [null, {}, "identity-provider-check", {fetch:"invalid"}]) {
+      const invalidInstance=make({IDENTITY_PROVIDER:invalid});
+      try {
+        const before=providerCalls.length;
+        const rejected=await invalidInstance.dispatchFetch(`${origin}/test/start`,{method:"POST",body:'{"scopes":"auth"}'});
+        assert.equal(rejected.status,400);
+        assert.equal(await rejected.text(),"Error: invalid_sign_in_configuration");
+        assert.equal(providerCalls.length,before,"malformed provider binding is rejected before requests");
+      } finally { await invalidInstance.dispose(); }
+    }
     const loginInstance=make({OIDC_LOGIN_URL:"https://login.example.invalid/sign-in",OIDC_LOGIN_SITE:"example"});
     try {
       const login=await start(loginInstance); const entry=new URL(login.begun.headers.get("location"));
       assert.equal(entry.origin,"https://login.example.invalid"); assert.equal(entry.searchParams.get("sitename"),"example");
       assert.equal(new URL(entry.searchParams.get("callbackURL")).origin,new URL(issuer).origin);
     } finally {await loginInstance.dispose();}
-    console.log(`${oauthJwt ? "OAuth JWT RS256" : "OIDC EdDSA"} native workerd checks passed: signed login, fixed RPC failure categories/statuses, credential-free token/JWT/handoff/cleanup failures, replay, PKCE, issuer/audience, verified email, subject allowlist, expiry and auth-only scope.`);
+    console.log(`${oauthJwt ? "OAuth JWT RS256" : "OIDC EdDSA"}${providerService ? " service binding" : ""} native workerd checks passed: signed login, fixed RPC failure categories/statuses, credential-free token/JWT/handoff/cleanup failures, replay, PKCE, issuer/audience, verified email, subject allowlist, expiry and auth-only scope.`);
   } finally { await mf.dispose(); }
 } finally { await rm(output,{recursive:true,force:true}); }

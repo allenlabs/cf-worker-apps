@@ -75,7 +75,7 @@ export function parseDeployment(value) {
   text(value.resources.blueprintContentBucket, 'blueprintContentBucket', /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/);
   object(value.auth, access ? ['mode', 'issuer', 'audience', 'allowedEmails']
     : ['mode', 'issuer', 'clientId', 'displayName', 'allowedIdentities', 'loginUrl', 'loginSite',
-      ...(oauthJwt ? ['resource', 'scopes', 'tokenEndpointAuthMethod'] : [])], 'auth');
+      ...(oauthJwt ? ['resource', 'scopes', 'tokenEndpointAuthMethod', 'providerService'] : [])], 'auth');
   assert(value.auth.mode === undefined || ['oidc', 'access', 'oauth-jwt'].includes(value.auth.mode),
     'auth.mode must be oidc, access or oauth-jwt');
   const issuer = https(value.auth.issuer, 'auth.issuer');
@@ -109,6 +109,11 @@ export function parseDeployment(value) {
       assert(value.auth.loginUrl !== undefined, 'auth.loginSite requires auth.loginUrl');
     }
     if (oauthJwt) {
+      if (value.auth.providerService !== undefined) {
+        text(value.auth.providerService, 'auth.providerService', /^[a-z][a-z0-9-]{0,62}$/);
+        assert(!names.some(key => value.workers[key] === value.auth.providerService),
+          'Identity provider service must be a separate Worker');
+      }
       const resource = https(value.auth.resource, 'auth.resource');
       assert(resource.origin === value.auth.resource, 'auth.resource must be a canonical HTTPS origin');
       assert(['none', 'client_secret_post'].includes(value.auth.tokenEndpointAuthMethod),
@@ -214,6 +219,10 @@ export function generateConfigs(input, bases) {
   result.context.kv_namespaces = [{ binding: 'CONTEXT_COLLECTIONS', id: config.resources.contextKvNamespaceId }];
   delete result.context.artifacts;
   if (result.oidc) {
+    if (config.auth.providerService) result.oidc.services = [
+      { binding: 'IDENTITY_PROVIDER', service: config.auth.providerService },
+    ];
+    else delete result.oidc.services;
     result.oidc.vars = {
       PUBLIC_BASE_URL: config.origin,
       OIDC_ISSUER: config.auth.issuer,
