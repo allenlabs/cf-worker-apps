@@ -77,6 +77,39 @@ connection with provider `siwc` in that service; use its SIWC login flow, with n
 device login or paid API fallback. OIDC mode rejects this setup option. Omitting `setup` preserves
 the existing generated configuration.
 
+## Native OpenCode agent loop
+
+The Workshop runs its actual agent loop through `@opencode/sdk/workerd` 2.0.24. The existing
+`ModelHandle` remains the inference transport, including subscription routing, streamed text and
+reasoning, model metadata and usage. Pi message DTOs remain the compatibility format for model
+history and canonical OS storage. The Workshop does not call the Pi agent loop.
+
+Only existing OS tools are registered. Their validation, permissions, transaction guards, action
+approval, connection requests and spawned-agent restrictions remain in the OS callbacks. Native
+builtins and the SDK's synthesized CodeMode `execute` tool are disabled. Tool bodies wait for the
+provider's complete successful stream and execute in emitted order. The next model request awaits
+the existing OS step transaction; an approval stop ends at that committed boundary. Cancellation
+during tools retains completed effects with their transcript and records prevented calls as errors.
+
+Each pass persists its exact SQL prefix ownership before creating the SDK, uses a fresh prefix,
+and restores only committed OS history. The native host closes before cleanup drops its recorded
+tables. A subsequent pass can remove its recorded stale prefix after a restart, without touching
+canonical OS tables. The prefix rewriter is vendored from Agents 0.28.1 under the MIT notice in
+`overlay/packages/workshop-backend/src/OPENCODE_PREFIX_LICENSE`; upgrades need native SQL tests.
+
+OS compaction and bounded retries remain outside the native loop; native compaction, title inference
+and retries are disabled. One ten-minute cooperative abort signal covers the whole OS turn,
+including compaction and retries, and each native pass allows at most 64 model requests. A callback
+that ignores cancellation can outlive that signal. These limits are not a hard billing cap.
+They do not close browser RPC sessions. Measure idle Durable Object duration separately:
+[retained RPC targets extend their execution context](https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/),
+and [non-hibernateable idle time is billable](https://developers.cloudflare.com/durable-objects/platform/pricing/).
+
+`build --check` exercises the real workerd adapter, canonical OS agent suites and Worker dry-runs.
+Native adapter cases cover provider EOF, commit blocking, final failure, approval, cancellation,
+unknown/malformed calls, disabled CodeMode, history restoration, scoped stale-prefix cleanup and
+the model-step limit. Abrupt process-death recovery must also be checked when upgrading the SDK.
+
 ## Internal site-aware launch
 
 Site launch requires OIDC. Access mode rejects `siteLaunch` because the native Access login does
@@ -138,8 +171,9 @@ an unrelated MCP endpoint read-only.
 
 ## Prepare and check
 
-Use Node.js 24.19+ and pnpm compatible with the pinned upstream's `packageManager`. No additional
-runtime dependency is added by the wrapper; overlay packages use the pinned upstream workspace.
+Use Node.js 24.19+ and pnpm compatible with the pinned upstream's `packageManager`. The
+OpenCode SDK, plugin and AI packages are pinned to 2.0.24 for the native OS loop; the existing
+model transport and storage message formats retain their pinned Pi DTO dependency.
 
 ```sh
 npm test

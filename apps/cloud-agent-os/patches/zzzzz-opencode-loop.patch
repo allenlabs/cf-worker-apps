@@ -1,0 +1,99 @@
+--- a/packages/workshop-backend/src/agent.ts
++++ b/packages/workshop-backend/src/agent.ts
+@@ -11,7 +11,7 @@
+   AssistantMessage, ImageContent, Message, SystemMessage, TSchema, TextContent, ToolCall, Usage,
+ } from "@earendil-works/pi-ai";
+ import {
+-  runAgentLoopContinue, type AgentContext, type AgentEvent, type AgentTool,
++  type AgentContext, type AgentEvent, type AgentTool,
+ } from "@earendil-works/pi-agent-core";
+ import { RpcStub as NativeRpcStub } from "cloudflare:workers";
+ import { createTwoFilesPatch, FILE_HEADERS_ONLY } from "diff";
+@@ -24,6 +24,7 @@
+ import { traceRejectedToolCall, traceTool } from "./agent-tracing";
+ import { AgentTurnError, completeText, httpStatusFromError, zeroUsage } from "./ai-invoke";
+ import type { ModelHandle } from "./ai-models";
++import { runOpenCodeLoop } from "./opencode-loop";
+ import { blobOid } from "./git-store";
+ import type {
+   AiChatAgentContext, ChatBindingEntry, CompactionCheckpoint, StoredAssistantMessage,
+@@ -302,6 +303,9 @@
+  *   overseer.ts?
+  */
+ export interface AgentHooks {
++  /** Disposable native loop tables share this DO, separately from canonical OS storage. */
++  getAgentLoopStorage(): DurableObjectStorage;
++
+   getChatAgentContext(chatId: number): AiChatAgentContext;
+ 
+   /**
+@@ -4071,13 +4075,9 @@
+     tools: toolList,
+   };
+ 
+-  await runAgentLoopContinue(context, {
+-    model: handle.model,
+-    // Replay already produces LLM-shaped messages; no custom message types exist. The system
+-    // prompt and tool declarations now ride the leading system message in pi's transcript.
+-    convertToLlm: (messages) => messages as Message[],
+-    toolExecution: "sequential",
+-    maxTokens: maxOutputTokens,
++  await runOpenCodeLoop({
++    storage: hooks.getAgentLoopStorage(), chatId, context, handle,
++    maxTokens: maxOutputTokens, emit, signal: abortSignal,
+     finishTurn: ({message, toolResults}) => {
+       if (message.stopReason === "error" || message.stopReason === "aborted") return;
+       capturedActionsForStep = hooks.consumeCapturedActions(chatId);
+@@ -4115,7 +4115,7 @@
+         return {action: "end"};
+       }
+     },
+-  }, emit, abortSignal, handle.stream);
++  });
+ 
+   // (No end-of-turn flush: every completed step's effects were barrier-committed with its
+   // message, and an abort simply drops the in-flight step's buffer -- nothing durable exists
+--- a/packages/workshop-backend/src/overseer.ts
++++ b/packages/workshop-backend/src/overseer.ts
+@@ -654,6 +654,8 @@
+ type SessionKind = CollaboratorRole | "owner";
+ 
+ class OverseerImpl implements AgentHooks {
++  getAgentLoopStorage(): DurableObjectStorage { return this.ctx.storage; }
++
+   public storage: OverseerStorage;
+   readonly logger: ReturnType<typeof createWorkshopLogger>;
+ 
+--- a/packages/workshop-backend/package.json
++++ b/packages/workshop-backend/package.json
+@@ -15,6 +15,10 @@
+   },
+   "dependencies": {
+     "@cloudflare/puppeteer": "^1.4.0",
++    "@ai-sdk/provider": "4.0.0",
++    "@opencode/ai": "2.0.24",
++    "@opencode/plugin": "2.0.24",
++    "@opencode/sdk": "2.0.24",
+     "@earendil-works/pi-agent-core": "0.99.1",
+     "@earendil-works/pi-ai": "0.99.1",
+     "@gadgets/error-reporting": "workspace:*",
+--- a/pnpm-workspace.yaml
++++ b/pnpm-workspace.yaml
+@@ -67,6 +67,11 @@
+   - "@cloudflare/workerd-*"
+ 
+ allowBuilds:
++  # Native OS integration never uses these optional native SDK accelerators/parsers.
++  '@parcel/watcher': false
++  msgpackr-extract: false
++  tree-sitter-bash: false
++  tree-sitter-powershell: false
+   '@google/genai': true
+   core-js-pure: true
+   esbuild: true
+--- a/packages/workshop-backend/src/agent.ts
++++ b/packages/workshop-backend/src/agent.ts
+@@ -1442,1 +1442,3 @@
++  // One deadline covers native passes, OS compaction and bounded retries.
++  abortSignal = AbortSignal.any([abortSignal, AbortSignal.timeout(10 * 60_000)]);
+   let retries = 0;

@@ -62,7 +62,12 @@ try {
           ...(config.auth.mode === 'access' ? ['__tests__/access.test.ts', '__tests__/client-errors.test.ts'] : []),
           '__tests__/subscription-models.test.ts',
           '__tests__/user-models.test.ts', '__tests__/admin-settings-models.test.ts',
-          '__tests__/site-launch.test.ts', '__tests__/site-launch-agent.test.ts'], {
+          '__tests__/site-launch.test.ts', '__tests__/site-launch-agent.test.ts',
+          '__tests__/opencode-loop.test.ts', '__tests__/agent-retry.test.ts',
+          '__tests__/spawned-agent-tools.test.ts', '__tests__/overseer-hooks.test.ts',
+          '__tests__/chat-model-data.test.ts', '__tests__/agent-compaction.test.ts',
+          '__tests__/chat-changes.test.ts', '__tests__/worktree-session.test.ts',
+          '__tests__/worktrees.test.ts'], {
           cwd: join(checkout, packages.workshop),
         });
         run('pnpm', ['exec', 'vitest', 'run',
