@@ -18,9 +18,27 @@ const origin = "https://cloud-agent.fixture.invalid", issuer = "https://sso.fixt
 const admins = { "admin-one@example.invalid": "fixture-admin-one", "admin-two@example.invalid": "fixture-admin-two" };
 const digest = value => createHash("sha256").update(value).digest("hex");
 const operator = randomBytes(32).toString("hex");
+const coverageRequested = process.argv.includes("--coverage");
 await writeFile(entry, `import {ManagementCredentials,adminRoute} from ${JSON.stringify(resolve("workers/pi/admin.js"))};
 import {conversationDatabase,objectKey,tenantId} from ${JSON.stringify(resolve("workers/pi/conversation-store.js"))};
-export default {fetch:adminRoute};
+${coverageRequested ? `// workerd intercepts remote Profiler.enable for sampling; a local Session enables V8 precise coverage.
+import {Session} from "node:inspector";
+let profiler;
+const inspect = (method, params = {}) => new Promise((resolve, reject) => profiler.post(method, params, (error, result) => error ? reject(error) : resolve(result)));
+export default {async fetch(request, env) {
+ const path = new URL(request.url).pathname;
+ if (path === '/__coverage/start') {
+  profiler = new Session(); profiler.connect();
+  await inspect('Profiler.enable'); await inspect('Profiler.startPreciseCoverage', {callCount:true,detailed:true});
+  return Response.json({started:true});
+ }
+ if (path === '/__coverage/take') {
+  const result = await inspect('Profiler.takePreciseCoverage');
+  await inspect('Profiler.stopPreciseCoverage'); profiler.disconnect();
+  return Response.json(result);
+ }
+ return adminRoute(request, env);
+}};` : "export default {fetch:adminRoute};"}
 export class Credentials extends ManagementCredentials {
  async seal(value){const iv=crypto.getRandomValues(new Uint8Array(12));const key=await crypto.subtle.importKey('raw',Uint8Array.from(atob(this.env.TOKEN_WRAPPING_KEY),c=>c.charCodeAt(0)),{name:'AES-GCM'},false,['encrypt']);return{iv:[...iv],ciphertext:[...new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},key,new TextEncoder().encode(JSON.stringify(value))))]};}
  async open(value){if(!value)return null;const key=await crypto.subtle.importKey('raw',Uint8Array.from(atob(this.env.TOKEN_WRAPPING_KEY),c=>c.charCodeAt(0)),{name:'AES-GCM'},false,['decrypt']);return JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:new Uint8Array(value.iv)},key,new Uint8Array(value.ciphertext))));}
@@ -43,7 +61,7 @@ export class Assistant extends ManagementCredentials {
  async adminSettings(){return{selected:{sessionId:'fixture-session',accountId:'owner',name:await this.ctx.storage.get('sessionName')||''},model:{id:'fixture-model',label:'Fixture'},models:[{id:'fixture-model',label:'Fixture'}],thinking:{value:'medium',label:'Medium'},thinkingChoices:[{value:'medium',label:'Medium'}],sessions:[{id:'fixture-session',name:'Fixture session'}],userEntries:[{id:'fixture-entry',preview:'Fixture user message'}]};}
  async adminControl(input){if(input.args==='busy')throw Error('thread_busy');const receipt=await this.ctx.storage.get(input.operationId);if(receipt)return receipt;const executionCount=(await this.ctx.storage.get('controls')||0)+1;await this.ctx.storage.put('controls',executionCount);if(input.action==='name')await this.ctx.storage.put('sessionName',input.args);const result={operationId:input.operationId,status:'done',message:'Fixture control complete',settings:await this.adminSettings(),executionCount};await this.ctx.storage.put(input.operationId,result);return result;}
 }`);
-await build({ entryPoints: [entry], outfile: bundle, bundle: true, format: "esm", platform: "browser", target: "es2022", loader: { ".sql": "text" }, external: ["cloudflare:workers"] });
+await build({ entryPoints: [entry], outfile: bundle, bundle: true, format: "esm", platform: "browser", target: "es2022", loader: { ".sql": "text" }, external: ["cloudflare:workers", "node:inspector"] });
 const { publicKey, privateKey } = generateKeyPairSync("ed25519");
 const jwk = { ...publicKey.export({ format: "jwk" }), kid: "sso-fixture-key", alg: "EdDSA", use: "sig" };
 let nonce, overrides = {}, tokenCalls = 0, userInfoCalls = 0, missingEmail = false;
@@ -54,10 +72,8 @@ const jwt = () => {
 };
 const rawClientSecret = "fixture-sso-secret", hashedClientSecret = createHash("sha256").update(rawClientSecret).digest("base64url");
 let storedClientSecret = hashedClientSecret;
-const coverageRequested = process.argv.includes("--coverage");
 const options = {
-  inspectorPort: coverageRequested ? 0 : undefined,
-  name: "cloud-agent-admin-check", modulesRoot: directory, modules: [{ type: "ESModule", path: bundle }], compatibilityDate: "2026-10-04", compatibilityFlags: ["nodejs_compat"],
+  name: "cloud-agent-admin-check", modulesRoot: directory, modules: [{ type: "ESModule", path: bundle }], compatibilityDate: "2026-10-04", compatibilityFlags: ["nodejs_compat", ...(coverageRequested ? ["enable_nodejs_inspector_local_dev"] : [])],
   d1Databases: ["CONVERSATIONS"],
   durableObjects: { Credentials: { className: "Credentials", useSQLite: true }, Assistant: { className: "Assistant", useSQLite: true } },
   bindings: { ALLOWED_CHANNEL_ID: "sample-channel", ALLOWED_CHAT_ID: "sample-group", CHANNEL_APP_ID: "sample-app", PUBLIC_ORIGIN: origin, PRODUCT_NAME: "Fixture Cloud Agent", SSO_ISSUER: issuer, SSO_CLIENT_ID: "fixture-client", SSO_CLIENT_SECRET: rawClientSecret, SUPER_ADMIN_EMAILS: JSON.stringify(Object.keys(admins)), SUPER_ADMIN_SUBJECTS: JSON.stringify(admins), SSO_LOGIN_URL: "https://auth.fixture.invalid/auth/login", SSO_SITE: "sample-site", TOKEN_WRAPPING_KEY: randomBytes(32).toString("base64"), PROBE_KEY_SHA256: digest(operator), DIAGNOSTIC_READS_ENABLED: "true" },
@@ -91,39 +107,23 @@ const complete = attempt => send(`/auth/callback?${new URLSearchParams({ code: "
 const overview = async cookie => { const r = await send("/api/overview", { headers: { cookie } }); assert.equal(r.status, 200, await r.clone().text()); return r.json(); };
 const post = (path, body, cookie, csrf, extra = {}) => send(path, { method: "POST", headers: { cookie, origin, "content-type": "application/json", "x-csrf-token": csrf, ...extra }, body: JSON.stringify(body) });
 const coverageFunctions = new Map();
-let profiler, sendInspector, coverageUnavailable;
+let coverageUnavailable;
 async function startCoverage() {
   if (!coverageRequested || coverageUnavailable) return;
   try {
-    await send("/");
-    const inspectorUrl = await mf.getInspectorURL();
-    const targets = await (await fetch(new URL("/json/list", inspectorUrl.href.replace(/^ws:/, "http:")))).json();
-    const target = targets.find(item => item.id.includes("cloud-agent-admin-check")) ?? targets[0];
-    assert.ok(target?.webSocketDebuggerUrl, "workerd inspector target exists");
-    profiler = new WebSocket(target.webSocketDebuggerUrl);
-    await new Promise((resolve, reject) => { profiler.addEventListener("open", resolve, { once: true }); profiler.addEventListener("error", reject, { once: true }); });
-    let nextId = 0;
-    const pending = new Map();
-    profiler.addEventListener("message", event => {
-      const message = JSON.parse(event.data);
-      if (!message.id || !pending.has(message.id)) return;
-      const { resolve, reject } = pending.get(message.id); pending.delete(message.id);
-      if (message.error) reject(Error("workerd coverage unavailable: " + message.error.message));
-      else resolve(message.result);
-    });
-    sendInspector = (method, params = {}) => new Promise((resolve, reject) => {
-      const id = ++nextId; pending.set(id, { resolve, reject }); profiler.send(JSON.stringify({ id, method, params }));
-    });
-    await sendInspector("Profiler.enable");
-    await sendInspector("Profiler.startPreciseCoverage", { callCount: true, detailed: true });
-  } catch (error) { coverageUnavailable = error.message; profiler?.close(); profiler = undefined; }
+    const result = await send("/__coverage/start");
+    assert.equal(result.status, 200, "Local workerd profiler starts");
+    assert.deepEqual(await result.json(), {started:true});
+  } catch (error) { coverageUnavailable = error.message; }
 }
 async function collectCoverage() {
-  if (!profiler || coverageUnavailable) return;
+  if (!coverageRequested || coverageUnavailable) return;
   try {
-    const profile = await sendInspector("Profiler.takePreciseCoverage");
+    const result = await send("/__coverage/take");
+    assert.equal(result.status, 200, "Local workerd coverage is collected");
+    const profile = await result.json();
     const source = await readFile(bundle, "utf8");
-    const start = source.indexOf("// workers/pi/admin.js"), end = source.indexOf("\n// ", start + 1);
+    const start = source.lastIndexOf("// workers/pi/admin.js"), end = source.indexOf("\n// ", start + 1);
     assert.ok(start >= 0 && end > start, "Admin source boundaries exist in bundle");
     const functions = profile.result.filter(script => script.url.endsWith("worker.js")).flatMap(script => script.functions).filter(fn => fn.ranges[0].startOffset >= start && fn.ranges[0].endOffset <= end);
     assert.ok(functions.length, "Actual admin functions appear in workerd coverage");
@@ -132,9 +132,7 @@ async function collectCoverage() {
       const previous = coverageFunctions.get(key);
       coverageFunctions.set(key, { functionName: fn.functionName, startOffset: range.startOffset - start, endOffset: range.endOffset - start, count: (previous?.count || 0) + range.count });
     }
-    await sendInspector("Profiler.stopPreciseCoverage");
   } catch (error) { coverageUnavailable = error.message; }
-  finally { profiler?.close(); profiler = undefined; }
 }
 await startCoverage();
 try {

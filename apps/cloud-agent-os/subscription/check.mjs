@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { zstdDecompressSync } from "node:zlib";
 import { generateKeyPairSync, randomBytes, sign, createHash } from "node:crypto";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -27,7 +28,11 @@ function jwt(keys, kid, claims, header = {}) {
   return `${input}.${sign("RSA-SHA256", Buffer.from(input), keys.privateKey).toString("base64url")}`;
 }
 const accessJwt = (changes = {}, keys = accessKeys) => jwt(keys, accessJwk.kid, { iss: issuer, aud: audience, sub: "synthetic-admin", email, iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 3600, ...changes });
-let nonce, tokenCalls = 0, inferenceCalls = 0, claimsOverride = {}, outboundUrls = [];
+let accountReads = 0, usageReads = 0, duringAccountRead = null;
+let devicePolls = 0, deviceExchanges = 0, deviceSubject = "device-owner", deviceAccount = "device-account", deviceHtmlDenied = false, deviceStartDenied = false, deviceDeniedType = "text/html", deviceResponses = [], deviceJsonDenied = false;
+const deviceClient = "app_EMoamEEZ73f0CkXaXp7hrann";
+const deviceVerifier = "fixture-device-verifier-abcdefghijklmnopqrstuvwxyz";
+let nonce, tokenCalls = 0, inferenceCalls = 0, refreshCalls = 0, claimsOverride = {}, refreshClaims = null, duringToken = null, outboundUrls = [];
 const logs = [];
 class CaptureLog extends Log { log(message) { logs.push(message); } }
 await writeFile(join(work, "server.js"), `
@@ -40,13 +45,18 @@ let statusError = false;
 export class Credentials extends BaseCredentials {
   constructor(ctx, env) { super(ctx, env); events.push('constructor'); }
   async configureAccount(input) { events.push('configureAccount'); return super.configureAccount(input); }
-  async start(approval) { events.push('start:' + approval); return super.start(approval); }
-  async startCodex() { events.push('startCodex'); throw Error('wrong_login_flow'); }
+  async start(approval, intent) { events.push('start:' + approval + ':' + intent); return super.start(approval, intent); }
+  async startCodex(intent) { events.push('startCodex:' + intent); return super.startCodex(intent); }
   async status() { events.push('status'); if(statusError)throw Error(${JSON.stringify(accessToken)});return super.status(); }
   async complete(callback) { events.push('complete'); return super.complete(callback); }
   async access(force) { events.push('access'); return super.access(force); }
-  async codexAccess() { events.push('codexAccess'); throw Error('wrong_inference_provider'); }
-  async fetch() { return Response.json(Object.fromEntries(await this.ctx.storage.list())); }
+  async codexAccess(force) { events.push('codexAccess'); return super.codexAccess(force); }
+  async fetch(request) {
+    if(new URL(request.url).pathname==='/fixture-disconnect') return Response.json(await this.disconnect());
+    if(new URL(request.url).pathname==='/fixture-device-time') { const change=await request.json(); const pending=await this.open(await this.ctx.storage.get('codexImagePending')); await this.ctx.storage.put('codexImagePending',await this.seal({...pending,...change})); }
+    if(new URL(request.url).pathname==='/fixture-put') { const input=await request.json();for(const [key,value] of Object.entries(input)) { if(value===null)await this.ctx.storage.delete(key);else await this.ctx.storage.put(key,value); } }
+    return Response.json(Object.fromEntries(await this.ctx.storage.list()));
+  }
 }
 export class Probe extends WorkerEntrypoint {
   events() { return events; }
@@ -86,8 +96,8 @@ const productionBuild = await bundle(join(here, "index.js"), join(work, "product
 assert.deepEqual(Object.values(productionBuild.metafile.outputs).find(value => value.exports.includes("default")).exports, ["CloudAgentInference", "Credentials", "default"]);
 const bindings = {
   PUBLIC_ORIGIN: origin, CF_ACCESS_ISS: issuer, CF_ACCESS_AUD: audience, SUBSCRIPTION_ADMIN_EMAIL: email,
-  TENANT_ID: "synthetic-subscription", PRODUCT_NAME: "Synthetic subscription", SUBSCRIPTION_INFERENCE_PROVIDER: "siwc",
-  INFERENCE_BRIDGE_PROVIDER: "siwc", INFERENCE_BRIDGE_ACCOUNT_ID: "owner", INFERENCE_BRIDGE_MODEL: model,
+  TENANT_ID: "synthetic-subscription", PRODUCT_NAME: "Synthetic subscription", SUBSCRIPTION_INFERENCE_PROVIDER: "auto",
+  INFERENCE_BRIDGE_PROVIDER: "auto", INFERENCE_BRIDGE_ACCOUNT_ID: "owner", INFERENCE_BRIDGE_MODEL: model,
   INFERENCE_BRIDGE_ALLOWED_USER_IDS: JSON.stringify([email]), TOKEN_WRAPPING_KEY: randomBytes(32).toString("base64url"),
   TOKEN_WRAPPING_AAD: "synthetic-subscription/v1",
 };
@@ -99,26 +109,65 @@ const outboundService = async request => {
   outboundUrls.push(request.url);
   if (request.url === `${issuer}/cdn-cgi/access/certs`) return Response.json({ keys: [accessJwk] });
   if (request.url === "https://auth.openai.com/.well-known/jwks.json") return Response.json({ keys: [openaiJwk] });
+  if (request.url === "https://chatgpt.com/backend-api/wham/accounts/check") {
+    accountReads++; if(duringAccountRead) { const action=duringAccountRead; duringAccountRead=null; await action(); }
+    return Response.json({accounts:[{id:deviceAccount,name:'Selected device workspace',structure:'workspace',plan_type:'plus'},{id:'other-account',name:'Other private workspace'}]});
+  }
+  if (request.url === "https://chatgpt.com/backend-api/wham/usage") {
+    usageReads++;
+    return Response.json({account_id:deviceAccount,plan_type:'plus',rate_limit:{allowed:true,limit_reached:false,primary_window:{used_percent:12,limit_window_seconds:18000,reset_at:1800000000},secondary_window:null}});
+  }
+  if (request.url === "https://auth.openai.com/api/accounts/deviceauth/usercode") {
+    assert.deepEqual(await request.json(), { client_id: deviceClient });
+    return deviceStartDenied ? new Response('<html>blocked</html>', {status:403, headers:{'content-type':'text/html'}}) : Response.json({device_auth_id:'fixture-device-private', user_code:'FIXTURE-CODE', interval:1});
+  }
+  if (request.url === "https://auth.openai.com/api/accounts/deviceauth/token") {
+    devicePolls++;
+    assert.deepEqual(await request.json(), {device_auth_id:'fixture-device-private',user_code:'FIXTURE-CODE'});
+    if (deviceJsonDenied) return Response.json({error:'access_denied'},{status:403});
+    if (deviceResponses.length) {
+      const {status,body,headers}=deviceResponses.shift();
+      return new Response(body,{status,headers});
+    }
+    return deviceHtmlDenied ? new Response(deviceDeniedType==='text/html'?'<!doctype html><html>blocked</html>':'Forbidden', {status:403,headers:{'content-type':deviceDeniedType}}) : Response.json({authorization_code:'fixture-device-code',code_verifier:deviceVerifier,code_challenge:createHash('sha256').update(deviceVerifier).digest('base64url')});
+  }
+  if (request.url === "https://auth.openai.com/oauth/token") {
+    deviceExchanges++;
+    const input = new URLSearchParams(await request.text());
+    assert.equal(input.get('client_id'),deviceClient);
+    const auth = {'chatgpt_plan_type':'plus','chatgpt_account_id':deviceAccount};
+    const claims = {iss:'https://auth.openai.com',aud:deviceClient,sub:deviceSubject,email:'device@example.invalid',name:'Device subscriber',exp:Date.now()/1000+3600,'https://api.openai.com/auth':auth};
+    return Response.json({access_token:jwt(openaiKeys,openaiJwk.kid,claims),refresh_token:'fixture-device-refresh',expires_in:3600,id_token:jwt(openaiKeys,openaiJwk.kid,claims)});
+  }
   if (request.url === "https://auth.openai.com/api/accounts/oauth/token") {
     tokenCalls++;
     const input = new URLSearchParams(await request.text());
-    assert.equal(input.get("grant_type"), "authorization_code");
     assert.equal(input.get("client_id"), "synthetic-client");
+    if (input.get("grant_type") === "refresh_token") {
+      refreshCalls++;
+      assert.equal(input.get("refresh_token"), refreshToken);
+      return Response.json({ access_token: accessToken, refresh_token: refreshToken, token_type: "Bearer", expires_in: 3600, scope: "resource.invoke chatgpt.tokens.use.direct",
+        ...(refreshClaims ? { id_token: jwt(openaiKeys, openaiJwk.kid, { iss: "https://auth.openai.com", aud: "synthetic-client", sub: "synthetic-openai-owner", email: other, email_verified: true, exp: Date.now() / 1000 + 3600, "https://api.openai.com/auth": { chatgpt_plan_type: "pro", chatgpt_account_id: "synthetic-account" }, ...refreshClaims }) } : {}) });
+    }
+    assert.equal(input.get("grant_type"), "authorization_code");
+    if (duringToken) { const run = duringToken; duringToken = null; await run(); }
     assert.equal(input.get("redirect_uri"), "http://127.0.0.1:1455/auth/callback");
     assert.equal(input.get("resource"), "https://api.openai.com/v1");
     assert.match(input.get("code_verifier"), /^[A-Za-z0-9_-]{43}$/);
     return Response.json({ access_token: accessToken, refresh_token: refreshToken, token_type: "Bearer", expires_in: 3600,
       scope: "resource.invoke chatgpt.tokens.use.direct", id_token: jwt(openaiKeys, openaiJwk.kid, {
-        iss: "https://auth.openai.com", aud: "synthetic-client", sub: "synthetic-openai-owner", email,
+        iss: "https://auth.openai.com", aud: "synthetic-client", sub: "synthetic-openai-owner", email: other, name: "Verified subscriber",
         email_verified: true, nonce, exp: Date.now() / 1000 + 3600,
         "https://api.openai.com/auth": { chatgpt_plan_type: "pro", chatgpt_account_id: "synthetic-account" }, ...claimsOverride,
       }),
     });
   }
-  assert.equal(request.url, "https://api.openai.com/v1/responses", "outbound network is fixture-only");
+  assert.ok(["https://api.openai.com/v1/responses", "https://chatgpt.com/backend-api/codex/responses"].includes(request.url), "outbound network is fixture-only");
   inferenceCalls++;
-  assert.equal(request.headers.get("authorization"), `Bearer ${accessToken}`);
-  const input = await request.json();
+  if (request.url.startsWith("https://api.openai.com/")) assert.equal(request.headers.get("authorization"), `Bearer ${accessToken}`);
+  else assert.equal(request.headers.get("chatgpt-account-id"), deviceAccount);
+  const bytes = Buffer.from(await request.arrayBuffer());
+  const input = JSON.parse(request.headers.get("content-encoding") === "zstd" ? zstdDecompressSync(bytes).toString() : bytes.toString());
   assert.equal(input.model, model);
   const item = { id: "msg_fixture", type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "SIWC_READY", annotations: [] }] };
   return sse([
@@ -159,8 +208,8 @@ const inspect = async () => {
   const namespace = await mf.getDurableObjectNamespace("Credentials", "subscription");
   return (await namespace.get(namespace.idFromName("owner")).fetch("https://fixture.invalid/fixture-state")).json();
 };
-const start = async (selectedEmail = email) => {
-  const response = await send("/gatekeeper/subscription/start", { email: selectedEmail, planUsageConfirmed: true });
+const start = async () => {
+  const response = await send("/gatekeeper/subscription/start", { planUsageConfirmed: true });
   assert.equal(response.status, 200, await response.clone().text());
   const result = await response.json();
   assert.deepEqual(Object.keys(result).sort(), ["authorizationUrl", "expiresIn", "manualCallbackRequired"]);
@@ -203,17 +252,17 @@ try {
   assert.equal((await oidcSend()).status, 200);
   assert.equal(await sessionCalls(), beforeStatus + 1, "authenticated status checks the OS session");
   assert.deepEqual(await oidcEvents(), ["constructor", "status"]);
-  const oidcStart = await oidcSend(osToken, { email, planUsageConfirmed: true }, "start");
+  const oidcStart = await oidcSend(osToken, { planUsageConfirmed: true }, "start");
   assert.equal(oidcStart.status, 200);
   assert.equal(new URL((await oidcStart.json()).authorizationUrl).searchParams.get("client_id"), "dynamic_agent_client");
 
   const production = await mf.getWorker("native-production");
   const productionPage = await production.fetch(origin + "/gatekeeper/subscription", { method: "GET", headers: headers() });
   assert.equal(productionPage.status, 200, "unmodified production artifact runs under workerd: " + await productionPage.text());
-  const freshProduction = await production.fetch(origin + "/gatekeeper/subscription/start", { method: "POST", headers: headers(), body: JSON.stringify({ email, planUsageConfirmed: true }) });
+  const freshProduction = await production.fetch(origin + "/gatekeeper/subscription/start", { method: "POST", headers: headers(), body: JSON.stringify({ planUsageConfirmed: true }) });
   assert.equal(freshProduction.status, 200);
   assert.equal(new URL((await freshProduction.json()).authorizationUrl).searchParams.get("client_id"), "dynamic_agent_client", "unmodified production starts a new namespace grant");
-  for (const path of ["/gatekeeper/subscription", "/gatekeeper/subscription/status", "/gatekeeper/subscription/start", "/gatekeeper/subscription/complete"]) {
+  for (const path of ["/gatekeeper/subscription/device/start", "/gatekeeper/subscription/device/check", "/gatekeeper/subscription/select", "/gatekeeper/subscription/account-info", "/gatekeeper/subscription", "/gatekeeper/subscription/status", "/gatekeeper/subscription/start", "/gatekeeper/subscription/complete", "/gatekeeper/subscription/refresh"]) {
     await assertError(await send(path, {}, { headers: { origin, "content-type": "application/json" } }), 401, "access_denied");
   }
   for (const token of ["invalid", accessJwt({ iss: "https://wrong.example.invalid" }), accessJwt({ aud: "wrong" }), accessJwt({ exp: 1 }), accessJwt({ nbf: Math.floor(Date.now() / 1000) + 3600 }), accessJwt({}, openaiKeys), accessJwt({ exp: undefined }), accessJwt({ sub: undefined }), accessJwt({ iat: "invalid" }), accessJwt({ iat: Math.floor(Date.now() / 1000) + 3600 })]) {
@@ -228,10 +277,11 @@ try {
   await assertError(await send("/gatekeeper/subscription/start", {}, { body: new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(15000)); controller.enqueue(new Uint8Array(10000)); controller.close(); } }), duplex: "half" }), 413, "body_too_large");
   await assertError(await send("/gatekeeper/subscription/start", {}, { body: '{"email":"' + "한".repeat(7000) + '"}' }), 413, "body_too_large");
   await assertError(await send("/gatekeeper/subscription/start", {}, { body: new Uint8Array([255, 254]) }), 400, "body_invalid");
-  for (const bad of [null, [], { accountId: "arbitrary" }, { email, planUsageConfirmed: false }, { email, planUsageConfirmed: true, accountId: "arbitrary" }]) {
+  for (const bad of [null, [], { accountId: "arbitrary" }, { planUsageConfirmed: false }, { email, planUsageConfirmed: true }, { planUsageConfirmed: true, replaceAccount: true }, { planUsageConfirmed: true, accountId: "arbitrary" }]) {
     await assertError(await send("/gatekeeper/subscription/start", bad), 400, bad === null || Array.isArray(bad) ? "body_invalid" : "start_input_invalid");
   }
   await assertError(await send("/gatekeeper/subscription/status", { accountId: "arbitrary" }), 400, "body_invalid");
+  await assertError(await send("/gatekeeper/subscription/refresh", { email }), 400, "body_invalid");
   await assertError(await send("/gatekeeper/subscription/status?callbackUrl=synthetic"), 400, "request_invalid");
   await assertError(await send("/infer"), 404, "not_found");
   await assertError(await send("/gatekeeper/subscription/status", {}, { method: "GET", body: undefined }), 405, "method_not_allowed");
@@ -245,24 +295,32 @@ try {
   assert.ok(page.headers.get("content-security-policy").includes("script-src 'nonce-"));
   assert.ok(!html.includes("localStorage") && !html.includes("sessionStorage"));
   let response = await send("/gatekeeper/subscription/status");
-  assert.deepEqual(await response.json(), { connected: false, identityVerified: false, loginPending: false, planUsageConfirmed: false, siwcInferenceReady: false, identity: null });
+  const unavailableUsage = { available: false, reason: "provider_not_supplied" };
+  assert.deepEqual(await response.json(), { connected: false, identityVerified: false, loginPending: false, planUsageConfirmed: false, siwcInferenceReady: false, identity: null, identityRefreshStatus: null, provider: "siwc", inferenceReady: false, codexInferenceReady: false, device: null, deviceFailed: false, usage: unavailableUsage });
+  assert.ok(!html.includes('id="email"') && !html.includes('고정됩니다'));
+  assert.ok(html.includes('https://chatgpt.com/settings/usage'));
   const notReady = await privateClient.fetch("https://fixture.invalid/infer", { method: "POST", body: JSON.stringify(wire()) });
   assert.equal(notReady.status, 403);
   assert.equal(inferenceCalls, 0);
 
+  const namespace = await mf.getDurableObjectNamespace("Credentials", "subscription");
+  const owner = namespace.get(namespace.idFromName("owner"));
+  const put = value => owner.fetch("https://fixture.invalid/fixture-put", { method: "POST", body: JSON.stringify(value) });
+  const stalePolicy = { expectedEmailHash: createHash("sha256").update(email).digest("hex"), label: "Previous unverified selection" };
+  await put({ identityPolicy: stalePolicy, nativeUsageTotals: { source: "pi_committed_usage", totalTokens: 12345 } });
   let authorization = await start();
   assert.equal(authorization.searchParams.get("client_id"), "dynamic_agent_client");
   const firstHost = authorization.searchParams.get("ext_agent_host_id");
   const pending = await inspect();
   assert.ok(pending.pending.ciphertext);
   assert.equal(pending.conversationTenant, bindings.TENANT_ID);
-  assert.equal(pending.identityPolicy.expectedEmailHash, createHash("sha256").update(email).digest("hex"));
+  assert.deepEqual(pending.identityPolicy, stalePolicy, "unverified pre-login email policy is neither enforced nor overwritten");
   assert.ok(!JSON.stringify(pending).includes(nonce));
-  await assertError(await send("/gatekeeper/subscription/start", { email: other, planUsageConfirmed: true }), 400, "account_identity_policy_pinned");
+  await assertError(await send("/gatekeeper/subscription/start", { email: other, planUsageConfirmed: true }), 400, "start_input_invalid");
   await assertError(await send("/gatekeeper/subscription/complete", { callbackUrl: callback(authorization).replace("state=", "state=wrong") }), 400, "callback_state_mismatch");
   assert.equal(tokenCalls, 0);
   await assertError(await send("/gatekeeper/subscription/complete", { callbackUrl: callback(authorization) }), 400, "oauth_attempt_expired");
-  claimsOverride = { email: other };
+  claimsOverride = { email: "invalid email" };
   authorization = await start();
   await assertError(await send("/gatekeeper/subscription/complete", { callbackUrl: callback(authorization) }), 400, "selected_email_mismatch");
   claimsOverride = {};
@@ -270,19 +328,41 @@ try {
   response = await send("/gatekeeper/subscription/complete", { callbackUrl: callback(authorization) });
   assert.equal(response.status, 200);
   const ready = await response.json();
-  assert.deepEqual(ready, { connected: true, identityVerified: true, loginPending: false, planUsageConfirmed: true, siwcInferenceReady: true, identity: { email, planType: "pro", workspaceName: null } });
+  assert.deepEqual(ready, { connected: true, identityVerified: true, loginPending: false, planUsageConfirmed: true, siwcInferenceReady: true, identity: { name: "Verified subscriber", email: other, planType: "pro", workspaceName: null, organizationNames: null, verifiedAt: ready.identity.verifiedAt }, identityRefreshStatus: null, provider: "siwc", inferenceReady: true, codexInferenceReady: false, device: null, deviceFailed: false, usage: unavailableUsage });
+  assert.ok(Number.isFinite(Date.parse(ready.identity.verifiedAt)));
+  assert.notEqual(ready.identity.email, email, "OpenAI account is independent of the OS administrator");
   const stored = await inspect();
   assert.ok(stored.credential.ciphertext && stored.identity.ciphertext);
   assert.equal(stored.pending, undefined);
-  for (const secret of [accessToken, refreshToken, email, "synthetic-code-never-log", nonce]) assert.ok(!JSON.stringify(stored).includes(secret), "no unencrypted grant/callback/identity in DO state");
+  for (const secret of [accessToken, refreshToken, email, other, "Verified subscriber", "synthetic-code-never-log", nonce]) assert.ok(!JSON.stringify(stored).includes(secret), "no unencrypted grant/callback/identity in DO state");
   assert.equal(stored.registration.clientId, "synthetic-client");
-  await assertError(await send("/gatekeeper/subscription/start", { email: other, planUsageConfirmed: true }), 400, "account_identity_policy_pinned");
+  assert.equal(stored.registration.identitySelection, "oauth");
+  assert.deepEqual(stored.identityPolicy, stalePolicy);
+  const preserved = async () => {
+    const current = await inspect();
+    for (const key of ["credential", "registration", "identity"]) assert.deepEqual(current[key], stored[key], "failed reconnect preserves " + key);
+  };
+  for (const changes of [{ sub: "wrong-subject" }, { "https://api.openai.com/auth": { chatgpt_account_id: "wrong-workspace" } }]) {
+    claimsOverride = changes;
+    authorization = await start();
+    await assertError(await send("/gatekeeper/subscription/complete", { callbackUrl: callback(authorization) }), 400, changes.sub ? "selected_user_mismatch" : "selected_workspace_mismatch");
+    await preserved();
+  }
+  claimsOverride = {};
+  authorization = await start();
+  const beforeChanged = tokenCalls;
+  await put({ registration: { ...stored.registration, identitySelection: "legacy" } });
+  await assertError(await send("/gatekeeper/subscription/complete", { callbackUrl: callback(authorization) }), 400, "account_registration_changed");
+  assert.equal(tokenCalls, beforeChanged, "stale snapshot rejected before token exchange");
+  await put({ registration: stored.registration });
+  await assertError(await send("/gatekeeper/subscription/start", { email: other, planUsageConfirmed: true }), 400, "start_input_invalid");
   authorization = await start();
   assert.equal(authorization.searchParams.get("client_id"), "synthetic-client");
   assert.equal(authorization.searchParams.get("ext_agent_host_id"), firstHost);
   assert.equal((await (await send("/gatekeeper/subscription/status")).json()).siwcInferenceReady, true, "repeat start keeps existing grant ready");
   assert.ok(!(await events()).includes("startCodex"));
-  assert.ok((await events()).includes("start:true"));
+  assert.ok((await events()).includes("start:true:connect"));
+  assert.ok(!(await events()).includes("configureAccount"));
 
   const beforeDenied = (await events()).length;
   assert.equal((await privateClient.fetch("https://fixture.invalid/infer", { method: "POST", body: JSON.stringify(wire({ userId: other })) })).status, 403);
@@ -299,6 +379,169 @@ try {
   await assertError(await send("/gatekeeper/subscription/status"), 400, "oauth_failed");
   await privateClient.fetch("https://fixture.invalid/fail", { method: "POST", body: JSON.stringify({ value: false }) });
 
+  response = await send("/gatekeeper/subscription/refresh");
+  const noMetadata = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(noMetadata.identityRefreshStatus, "not_returned");
+  assert.deepEqual(noMetadata.identity, ready.identity);
+  assert.deepEqual(noMetadata.usage, unavailableUsage, "Pi ledger is not a subscription usage estimate");
+  assert.equal(refreshCalls, 1);
+  refreshClaims = { email: "renamed@example.invalid", name: "New verified name", "https://api.openai.com/auth": { chatgpt_plan_type: "business", chatgpt_account_id: "synthetic-account", workspace: { id: "workspace", name: "Workspace label" }, organizations: [{ id: "org", name: "Organization label" }] } };
+  const updated = await (await send("/gatekeeper/subscription/refresh")).json();
+  assert.equal(updated.identityRefreshStatus, "updated");
+  assert.equal(updated.identity.email, "renamed@example.invalid", "email is refreshed metadata, not an account key");
+  assert.equal(updated.identity.name, "New verified name");
+  assert.equal(updated.identity.planType, "business");
+  assert.equal(updated.identity.workspaceName, "Workspace label");
+  assert.deepEqual(updated.identity.organizationNames, ["Organization label"]);
+  refreshClaims = { "https://api.openai.com/auth": { chatgpt_account_id: "synthetic-account" }, name: undefined };
+  const missing = await (await send("/gatekeeper/subscription/refresh")).json();
+  assert.equal(missing.identity.planType, null);
+  assert.equal(missing.identity.workspaceName, null);
+  assert.equal(missing.identity.organizationNames, null);
+  assert.equal(missing.identity.name, null);
+  refreshClaims = null;
+
+  const deviceTime = change => owner.fetch("https://fixture.invalid/fixture-device-time", {method:'POST',body:JSON.stringify(change)});
+  const activeBeforeDevice = await inspect();
+  const deviceStart = await send('/gatekeeper/subscription/device/start',{planUsageConfirmed:true});
+  assert.equal(deviceStart.status,200,await deviceStart.clone().text());
+  const deviceAttempt = await deviceStart.json();
+  assert.deepEqual(Object.keys(deviceAttempt).sort(),['expiresAt','nextCheckAt','userCode','verificationUrl']);
+  assert.equal(deviceAttempt.verificationUrl,'https://auth.openai.com/codex/device');
+  assert.equal(deviceAttempt.userCode,'FIXTURE-CODE');
+  assert.equal((await inspect()).subscriptionProvider,'siwc','start does not select pending device grant');
+  let deviceStatus = await (await send('/gatekeeper/subscription/status')).json();
+  assert.equal(deviceStatus.device.userCode,'FIXTURE-CODE','reload can recover safe device information');
+  assert.ok(!JSON.stringify(deviceStatus).includes('fixture-device-private'));
+  await send('/gatekeeper/subscription/device/check');
+  assert.equal(devicePolls,0,'server polling interval prevents early upstream request');
+  deviceResponses=[
+    {status:403,body:null}, {status:404,body:null},
+    {status:403,body:'',headers:{'content-type':'application/json'}},
+    {status:404,body:' \n\t',headers:{'content-type':'application/json'}},
+    {status:403,body:' \n\t',headers:{'content-type':'text/plain'}},
+    {status:403,body:JSON.stringify({error:'authorization_pending',message:'Waiting for approval',interval:1}),headers:{'content-type':'application/json'}},
+    {status:404,body:JSON.stringify({status:'waiting',interval:1}),headers:{'content-type':'application/json'}},
+  ];
+  while(deviceResponses.length) { await deviceTime({nextAt:Date.now()-1}); const pendingResponse=await send('/gatekeeper/subscription/device/check'); assert.equal(pendingResponse.status,200,await pendingResponse.clone().text()); assert.equal((await pendingResponse.json()).device.userCode,'FIXTURE-CODE'); assert.equal((await inspect()).subscriptionProvider,'siwc','empty or pending-object response never activates'); }
+  await deviceTime({nextAt:Date.now()-1});
+  let deviceComplete = await send('/gatekeeper/subscription/device/check');
+  assert.equal(deviceComplete.status,200,await deviceComplete.clone().text());
+  deviceStatus = await deviceComplete.json();
+  assert.equal(deviceStatus.provider,'codex'); assert.equal(deviceStatus.inferenceReady,true);
+  assert.equal(deviceStatus.identity.email,'device@example.invalid'); assert.equal(deviceStatus.device,null);
+  assert.equal(deviceStatus.siwcInferenceReady,true,'SIWC grant stays ready');
+  const afterDevice = await inspect();
+  assert.equal(afterDevice.subscriptionProvider,'codex');
+  assert.deepEqual(afterDevice.credential,activeBeforeDevice.credential,'device leaves SIWC grant untouched');
+  for(const secret of ['fixture-device-private','fixture-device-refresh','device@example.invalid']) assert.ok(!JSON.stringify(afterDevice).includes(secret),'device pending/profile/metadata encrypted');
+  const deviceInference = await privateClient.fetch('https://fixture.invalid/infer',{method:'POST',body:JSON.stringify(wire())});
+  assert.equal(deviceInference.status,200);
+  const deviceInferenceText = await deviceInference.text();
+  assert.ok(deviceInferenceText.includes('\"type\":\"done\"'), 'device inference completes: ' + deviceInferenceText + ' diagnostics: ' + logs.slice(-2).join(' '));
+  assert.equal(outboundUrls.at(-1),'https://chatgpt.com/backend-api/codex/responses','auto bridge uses selected Codex transport');
+  const accountInfo = await send('/gatekeeper/subscription/account-info');
+  assert.equal(accountInfo.status,200,await accountInfo.clone().text());
+  const projectedInfo = await accountInfo.json();
+  assert.equal(projectedInfo.account.workspaceName,'Selected device workspace');
+  assert.equal(projectedInfo.usage.primaryWindow.usedPercent,12);
+  for(const forbidden of ['other-account','Other private workspace',deviceAccount,'fixture-device-refresh']) assert.ok(!JSON.stringify(projectedInfo).includes(forbidden));
+  await send('/gatekeeper/subscription/account-info'); assert.equal(accountReads,1); assert.equal(usageReads,1,'account snapshot cache prevents repeat network reads');
+  assert.ok((await inspect()).subscriptionAccountInfo.ciphertext);
+  await put({subscriptionAccountInfo:null});
+  let releaseAccount, accountReadStarted;
+  const startedAccount = new Promise(resolve=>accountReadStarted=resolve);
+  const waitAccount = new Promise(resolve=>releaseAccount=resolve);
+  duringAccountRead=async()=>{accountReadStarted(); await waitAccount;};
+  const staleInfo=send('/gatekeeper/subscription/account-info');
+  await startedAccount;
+  let selected = await send('/gatekeeper/subscription/select',{provider:'siwc'});
+  releaseAccount();
+  await assertError(await staleInfo,400,'account_selection_changed'); assert.equal(selected.status,200);
+  assert.equal((await selected.json()).provider,'siwc');
+  assert.equal((await (await send('/gatekeeper/subscription/account-info')).json()).usage.reason,'provider_not_supplied','SIWC does not expose stale Codex usage');
+  await (await privateClient.fetch('https://fixture.invalid/infer',{method:'POST',body:JSON.stringify(wire())})).text();
+  assert.equal(outboundUrls.at(-1),'https://api.openai.com/v1/responses','explicit choice routes SIWC without reauthentication');
+  deviceSubject='other-device-owner';
+  await send('/gatekeeper/subscription/device/start',{planUsageConfirmed:true}); await deviceTime({nextAt:Date.now()-1});
+  await assertError(await send('/gatekeeper/subscription/device/check'),400,'codex_image_identity_mismatch');
+  assert.equal((await inspect()).subscriptionProvider,'siwc');
+  assert.deepEqual((await inspect()).codexImageProfile,afterDevice.codexImageProfile,'wrong identity preserves existing device grant');
+  deviceSubject='device-owner'; deviceHtmlDenied=true;
+  await send('/gatekeeper/subscription/device/start',{planUsageConfirmed:true}); await deviceTime({nextAt:Date.now()-1});
+  await assertError(await send('/gatekeeper/subscription/device/check'),400,'codex_image_remote_denied');
+  const deniedPolls=devicePolls;
+  await assertError(await send('/gatekeeper/subscription/device/check'),400,'codex_image_attempt_failed_restart_login');
+  assert.equal(devicePolls,deniedPolls,'HTML denial is not polled or retried');
+  assert.equal((await inspect()).subscriptionProvider,'siwc');
+  deviceDeniedType='text/plain';
+  await send('/gatekeeper/subscription/device/start',{planUsageConfirmed:true}); await deviceTime({nextAt:Date.now()-1});
+  await assertError(await send('/gatekeeper/subscription/device/check'),400,'codex_image_remote_denied');
+  const plainDeniedPolls=devicePolls;
+  await assertError(await send('/gatekeeper/subscription/device/check'),400,'codex_image_attempt_failed_restart_login');
+  assert.equal(devicePolls,plainDeniedPolls,'plaintext access denial is terminal');
+  deviceHtmlDenied=false; deviceDeniedType='text/html';
+  deviceJsonDenied=true;
+  await send('/gatekeeper/subscription/device/start',{planUsageConfirmed:true}); await deviceTime({nextAt:Date.now()-1});
+  await assertError(await send('/gatekeeper/subscription/device/check'),400,'codex_image_remote_denied');
+  const jsonDeniedPolls=devicePolls;
+  await assertError(await send('/gatekeeper/subscription/device/check'),400,'codex_image_attempt_failed_restart_login');
+  assert.equal(devicePolls,jsonDeniedPolls,'explicit JSON access denial is terminal'); deviceJsonDenied=false;
+  for(const rejected of [
+    {status:404,body:'Forbidden',headers:{'content-type':'text/plain'}},
+    {status:404,body:'<!doctype html><html>blocked</html>'},
+    {status:403,body:'{invalid',headers:{'content-type':'application/json'}},
+    {status:403,body:'[]',headers:{'content-type':'application/json'}},
+    {status:404,body:'null',headers:{'content-type':'application/json'}},
+    {status:403,body:'{}',headers:{'content-type':'application/json','cf-mitigated':'challenge'}},
+  ]) {
+    deviceResponses=[rejected];
+    await send('/gatekeeper/subscription/device/start',{planUsageConfirmed:true}); await deviceTime({nextAt:Date.now()-1});
+    await assertError(await send('/gatekeeper/subscription/device/check'),400,'codex_image_remote_denied');
+    const rejectedPolls=devicePolls;
+    await assertError(await send('/gatekeeper/subscription/device/check'),400,'codex_image_attempt_failed_restart_login');
+    assert.equal(devicePolls,rejectedPolls,'invalid pending response is terminal without repeat');
+    assert.equal((await inspect()).subscriptionProvider,'siwc','invalid pending response preserves active grant');
+  }
+  await send('/gatekeeper/subscription/device/start',{planUsageConfirmed:true}); await deviceTime({expiresAt:Date.now()-1});
+  await assertError(await send('/gatekeeper/subscription/device/check'),400,'codex_image_attempt_expired');
+  deviceStartDenied=true;
+  await assertError(await send('/gatekeeper/subscription/device/start',{planUsageConfirmed:true}),400,'codex_image_oauth_http_403');
+  assert.equal((await inspect()).subscriptionProvider,'siwc','failed device start never affects active connection'); deviceStartDenied=false;
+  await assertError(await send('/gatekeeper/subscription/select',{provider:'arbitrary'}),400,'body_invalid');
+  const beforeReconnect = await inspect();
+  authorization=await start();
+  const siwcReconnect=await send('/gatekeeper/subscription/complete',{callbackUrl:callback(authorization)});
+  assert.equal(siwcReconnect.status,200,await siwcReconnect.clone().text());
+  assert.equal((await inspect()).subscriptionProvider,'siwc');
+  assert.deepEqual((await inspect()).codexImageProfile,beforeReconnect.codexImageProfile,'SIWC reauth preserves Codex slot');
+  await put({credential:null});
+  await assertError(await send('/gatekeeper/subscription/select',{provider:'siwc'}),400,'subscription_connection_unavailable');
+  const selectedUnavailable=await (await send('/gatekeeper/subscription/status')).json();
+  assert.equal(selectedUnavailable.provider,'siwc'); assert.equal(selectedUnavailable.inferenceReady,false,'selected unavailable SIWC never falls back to Codex');
+  await put({credential:(await inspect()).credential ?? beforeReconnect.credential});
+  // A fresh Codex-first setup must not become a SIWC registration or constrain its client/account fields.
+  await put({credential:null,registration:null,identity:null,pending:null,codexImageProfile:null,codexRegistration:null,codexImagePending:null,subscriptionProvider:null});
+  await send('/gatekeeper/subscription/device/start',{planUsageConfirmed:true}); await deviceTime({nextAt:Date.now()-1});
+  assert.equal((await send('/gatekeeper/subscription/device/check')).status,200);
+  assert.equal((await inspect()).subscriptionProvider,'codex');
+  claimsOverride={'https://api.openai.com/auth':{chatgpt_plan_type:'pro'}};
+  authorization=await start();
+  assert.equal(authorization.searchParams.get('client_id'),'dynamic_agent_client');
+  const freshSiwc=await send('/gatekeeper/subscription/complete',{callbackUrl:callback(authorization)});
+  assert.equal(freshSiwc.status,200,await freshSiwc.clone().text());
+  assert.equal((await freshSiwc.json()).provider,'siwc');
+  assert.equal((await inspect()).registration.accountHash,null,'SIWC does not require Codex account ID');
+  assert.equal((await send('/gatekeeper/subscription/select',{provider:'codex'})).status,200,'independent Codex pin remains valid after SIWC-first registration');
+  const disconnected = await owner.fetch('https://fixture.invalid/fixture-disconnect');
+  assert.equal(disconnected.status,200);
+  const disconnectedStatus=await disconnected.json();
+  assert.equal(disconnectedStatus.provider,'codex'); assert.equal(disconnectedStatus.inferenceReady,false); assert.equal(disconnectedStatus.subjectFingerprint,null,'selected missing Codex identity has no fingerprint');
+  assert.equal((await (await send('/gatekeeper/subscription/status')).json()).provider,'codex','status remains available after disconnect');
+  await send('/gatekeeper/subscription/device/start',{planUsageConfirmed:true}); await deviceTime({nextAt:Date.now()-1});
+  const reconnectedDevice=await send('/gatekeeper/subscription/device/check'); assert.equal(reconnectedDevice.status,200); assert.equal((await reconnectedDevice.json()).inferenceReady,true,'same-account reconnect works after disconnect');
+  claimsOverride={};
   const posted = [];
   const dom = new JSDOM(subscriptionPage("synthetic-nonce"), { url: origin + "/gatekeeper/subscription", runScripts: "dangerously", beforeParse(window) {
     window.fetch = async (url, options) => {
@@ -308,7 +551,7 @@ try {
   } });
   try {
     const { document, Event } = dom.window;
-    document.getElementById("email").value = email;
+    assert.equal(document.getElementById("email"), null);
     document.getElementById("approval").checked = true;
     document.getElementById("start").dispatchEvent(new Event("submit", { cancelable: true }));
     await new Promise(resolve => setImmediate(resolve));
@@ -327,10 +570,50 @@ try {
     assert.equal(dom.window.localStorage.length, 0);
     assert.equal(dom.window.sessionStorage.length, 0);
     assert.ok(document.getElementById("status").textContent.includes("연결 준비 완료"));
-    assert.ok(document.getElementById("identity").textContent.includes(email));
+    assert.ok(document.getElementById("identity").textContent.includes(other));
+    assert.ok(document.getElementById("identity").textContent.includes("제공되지 않음"));
+    assert.equal(document.getElementById("metadata-refresh").hidden, false);
+    document.getElementById("metadata-refresh").click();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.ok(posted.some(item => item.url.endsWith("/refresh")));
+    assert.deepEqual(JSON.parse(posted.find(item => item.url.endsWith("/start")).options.body), { planUsageConfirmed: true });
     assert.equal(document.getElementById("authorization").hidden, true);
     assert.equal(document.getElementById("login").hasAttribute("href"), false);
   } finally { dom.window.close(); }
+  const devicePosts = [], timers = new Map(); let timerId = 0;
+  const browserAttempt = {verificationUrl:'https://auth.openai.com/codex/device',userCode:'BROWSER-CODE',expiresAt:new Date(Date.now()+900000).toISOString(),nextCheckAt:new Date(Date.now()+1000).toISOString()};
+  const browserCodex = {...ready,provider:'codex',codexInferenceReady:true,device:null,identity:{...ready.identity,email:'device@example.invalid'}};
+  const deviceDom = new JSDOM(subscriptionPage('synthetic-nonce','access',true),{url:origin+'/gatekeeper/subscription',runScripts:'dangerously',beforeParse(window){
+    window.setTimeout=(callback,delay)=>{const id=++timerId;timers.set(id,{callback,delay});return id;};window.clearTimeout=id=>timers.delete(id);
+    window.fetch=async(url,options)=>{devicePosts.push({url,options});const value=url.endsWith('/device/start')?browserAttempt:url.endsWith('/device/check')?browserCodex:url.endsWith('/account-info')?{checkedAt:new Date().toISOString(),account:{status:'available',workspaceName:'Selected browser workspace',planType:'plus'},usage:{status:'available',planType:'plus',primaryWindow:{usedPercent:12,resetAt:1800000000}}}:ready;return{ok:true,status:200,json:async()=>value};};
+  }});
+  try {
+    await new Promise(resolve=>setImmediate(resolve));
+    const document=deviceDom.window.document;
+    assert.ok(document.getElementById('device-start') && document.getElementById('complete'),'both choices coexist');
+    document.getElementById('device-approval').checked=true;
+    document.getElementById('device-start').dispatchEvent(new deviceDom.window.Event('submit',{cancelable:true}));
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(document.getElementById('device-code').textContent,'BROWSER-CODE');
+    assert.equal(document.getElementById('device-login').href,browserAttempt.verificationUrl);
+    assert.equal(timers.size,1); const timer=[...timers.values()][0]; assert.ok(timer.delay>=1000);
+    assert.equal(devicePosts.filter(item=>item.url.endsWith('/device/check')).length,0,'no early browser polling');
+    await timer.callback();
+    assert.equal(document.getElementById('device').hidden,true);
+    assert.equal(document.getElementById('device-code').textContent,'');
+    assert.ok(document.getElementById('active-provider').textContent.includes('Codex device'));
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.ok(document.getElementById('account-info').textContent.includes('12%'));
+    assert.ok(!document.getElementById('account-info').textContent.includes('1970'));
+    document.getElementById('device-start').dispatchEvent(new deviceDom.window.Event('submit',{cancelable:true}));
+    await new Promise(resolve=>setImmediate(resolve));
+    const staleTimer=[...timers.values()].at(-1), checksBefore=devicePosts.filter(item=>item.url.endsWith('/device/check')).length;
+    deviceDom.window.dispatchEvent(new deviceDom.window.Event('pagehide'));
+    await staleTimer.callback();
+    assert.equal(devicePosts.filter(item=>item.url.endsWith('/device/check')).length,checksBefore,'navigation stops old generation');
+    assert.equal(deviceDom.window.localStorage.length,0); assert.equal(deviceDom.window.sessionStorage.length,0);
+    assert.deepEqual(JSON.parse(devicePosts.find(item=>item.url.endsWith('/device/start')).options.body),{planUsageConfirmed:true});
+  } finally {deviceDom.window.close();}
   for (const failureAt of ['initial', 'start', 'complete']) {
     const unauthorized = failureAt === 'initial';
     let denied = unauthorized;
@@ -366,7 +649,7 @@ try {
         document.getElementById("callback").value = "http://127.0.0.1:1455/auth/callback?synthetic";
         document.getElementById(failureAt).dispatchEvent(new Event("submit", { cancelable: true }));
         await new Promise(resolve => setImmediate(resolve));
-        assert.equal(postedOidc[1].options.headers.authorization, undefined, "every POST reads the current OS token");
+        assert.equal(postedOidc.find(item => item.url.endsWith("/" + failureAt)).options.headers.authorization, undefined, "every POST reads the current OS token");
         assert.equal(document.getElementById("setup-start").disabled, true);
         assert.equal(document.getElementById("setup-complete").disabled, true);
         assert.equal(document.getElementById(failureAt + "-button").matches(":disabled"), true, "authorization failure stays disabled through finally");
@@ -375,7 +658,7 @@ try {
       denied = false;
       document.getElementById("refresh").click();
       await new Promise(resolve => setImmediate(resolve));
-      assert.ok(postedOidc.at(-1).url.endsWith("/status"));
+      assert.ok(postedOidc.some(item => item.url.endsWith("/status")));
       for (const id of ["setup-start", "setup-complete", "start-button", "complete-button"]) {
         assert.equal(document.getElementById(id).matches(":disabled"), false, "successful status refresh restores " + id);
       }
@@ -387,7 +670,7 @@ try {
       assert.ok(!document.body.textContent.includes(osToken));
     } finally { dom.window.close(); }
   }
-  for (const secret of [osToken, accessToken, refreshToken, "synthetic-code-never-log", nonce, email]) assert.ok(!logs.join("\n").includes(secret), "no callback, identity or grant in runtime logs");
+  for (const secret of [osToken, accessToken, refreshToken, "synthetic-code-never-log", nonce, email, other, "renamed@example.invalid"]) assert.ok(!logs.join("\n").includes(secret), "no callback, identity or grant in runtime logs");
   assert.ok(outboundUrls.every(url => !url.includes("callback") && !url.includes("code=") && !url.includes(osToken)));
   const config = JSON.parse((await readFile(join(here, "wrangler.example.jsonc"), "utf8")));
   assert.deepEqual(config.durable_objects.bindings, [{ name: "Credentials", class_name: "Credentials" }]);
@@ -399,5 +682,5 @@ try {
   assert.equal(oidcConfig.vars.CF_ACCESS_AUD, undefined);
   assert.deepEqual(oidcConfig.durable_objects, config.durable_objects);
   assert.deepEqual(oidcConfig.migrations, config.migrations);
-  console.log(JSON.stringify({ result: "PASS", nativeRuntime: "Miniflare/workerd", checks: ["Access signature/issuer/audience/expiry/admin", "OIDC private session and exact issuer/subject/email pins before Credentials", "OIDC static shell and authenticated UI gating", "same-origin JSON bounded requests before DO", "fresh direct SIWC grant with pinned identity", "private SIWC inference and sanitized outputs", "Korean manual callback UI with no browser persistence"], tokenCalls, inferenceCalls, temporaryBuild: work }));
+  console.log(JSON.stringify({ result: "PASS", nativeRuntime: "Miniflare/workerd", checks: ["Access signature/issuer/audience/expiry/admin", "OIDC private session and exact issuer/subject/email pins before Credentials", "OIDC static shell and authenticated UI gating", "same-origin JSON bounded requests before DO", "automatic verified SIWC identity, legacy pins and concurrent registration conflicts", "independent encrypted SIWC and Codex completion in either order", "device empty/pending-object responses, interval, expiry and terminal denial", "explicit active transport and unavailable selection fails closed", "account cache privacy and in-flight selection change", "both login choices and bounded device polling with navigation guard", "automatic metadata and manual callback UI with no browser persistence"], tokenCalls, inferenceCalls, temporaryBuild: work }));
 } finally { await mf.dispose(); }

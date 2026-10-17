@@ -1,3 +1,4 @@
+import { readCodexAccountInfo } from "./codex-account-info.js";
 import { workflowDraftInput, workflowDraftDefinition, workflowDraftPrompt, workflowDraftResult } from "./workflow-assist.js";
 import { reconcileWorkflow } from "./workflow-reconcile.js";
 import { resolveShortcut, suggestShortcuts, skillAskSnapshot } from "./skill-shortcuts.js";
@@ -123,7 +124,7 @@ async function identityFromToken(token, clientId, nonce, pinned, expectedEmailHa
   const now = Date.now() / 1000;
   requireCondition(Number.isFinite(claims.exp) && claims.exp > now && (claims.nbf === undefined || (Number.isFinite(claims.nbf) && claims.nbf <= now + 60)), "id_token_expired");
   const email = claims.email ?? claims["https://api.openai.com/profile"]?.email;
-  requireCondition(typeof email === "string" && encoder.encode(email).length <= 320 && !/[\x00-\x1f]/.test(email) && await digest(email.trim().toLowerCase()) === expectedEmailHash && claims.email_verified !== false, "selected_email_mismatch");
+  requireCondition(typeof email === "string" && encoder.encode(email).length <= 320 && !/[\x00-\x1f\x7f]/.test(email) && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) && (expectedEmailHash === null || await digest(email.trim().toLowerCase()) === expectedEmailHash) && claims.email_verified !== false, "selected_email_mismatch");
   const auth = claims["https://api.openai.com/auth"] ?? {};
   const plan = claimText(auth.chatgpt_plan_type, 64);
   const account = auth.chatgpt_account_id;
@@ -176,7 +177,7 @@ export class Credentials extends ManagementCredentials {
   }
 
   async verifyCodexImageIdentity(token, clientId, expectedEmailHash, explicitPin) { return identityFromToken(token, clientId, undefined, explicitPin === undefined ? await this.ctx.storage.get("registration") : explicitPin, expectedEmailHash); }
-  startCodex() { requireCondition(!this.completing && !this.refreshing, "oauth_busy"); return codexImageStart(this, true); }
+  startCodex(intent) { requireCondition(intent === undefined || (intent === "connect" && this.env.SUBSCRIPTION_INFERENCE_PROVIDER === "auto"), "account_intent_invalid"); requireCondition(!this.completing && !this.refreshing, "oauth_busy"); return codexImageStart(this, true, intent === "connect"); }
   checkCodex() { return codexImageCheck(this, this.verifyCodexImageIdentity.bind(this)); }
   codexAccess(forceRefresh = false) { subscriptionInferenceProvider(this.env.SUBSCRIPTION_INFERENCE_PROVIDER); return codexImageAccess(this, this.verifyCodexImageIdentity.bind(this), forceRefresh, true); }
   startCodexImages() { return codexImageStart(this); }
@@ -274,16 +275,18 @@ export class Credentials extends ManagementCredentials {
     return JSON.parse(new TextDecoder().decode(plaintext));
   }
 
-  async start(planUsageConfirmed) {
+  async start(planUsageConfirmed, accountIntent) {
     requireCondition(planUsageConfirmed === true, "plan_usage_ui_unconfirmed");
+    requireCondition(accountIntent === undefined || (accountIntent === "connect" && ["siwc", "auto"].includes(this.env.SUBSCRIPTION_INFERENCE_PROVIDER)), "account_intent_invalid");
     requireCondition(!this.completing && !this.refreshing, "oauth_busy");
-    await this.expectedEmailHash();
+    const pinned = await this.ctx.storage.get("registration");
+    const automaticIdentity = accountIntent === "connect" && (!pinned || pinned.identitySelection === "oauth");
+    if (!automaticIdentity) await this.expectedEmailHash();
     return this.ctx.blockConcurrencyWhile(async () => {
       await this.wrappingKey();
       let host = await this.ctx.storage.get("host");
       if (!host) { host = `urn:uuid:${crypto.randomUUID()}`; await this.ctx.storage.put("host", host); }
-      const pinned = await this.ctx.storage.get("registration");
-      const pending = { verifier: random(), state: random(), nonce: random(), clientId: pinned?.clientId ?? "dynamic_agent_client", expiresAt: Date.now() + 600000, planUsageConfirmed: true };
+      const pending = { verifier: random(), state: random(), nonce: random(), clientId: pinned?.clientId ?? "dynamic_agent_client", expiresAt: Date.now() + 600000, planUsageConfirmed: true, ...(accountIntent === "connect" ? { accountIntent, automaticIdentity, registrationFingerprint: await digest(JSON.stringify(pinned ?? null)) } : {}) };
       await this.ctx.storage.put("pending", await this.seal(pending));
       const challenge = b64(new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(pending.verifier))));
       const authorization = new URL(`${ISSUER}/api/accounts/authorize`);
@@ -313,11 +316,21 @@ export class Credentials extends ManagementCredentials {
       const clientId = callback.searchParams.get("client_id") || pending.clientId;
       requireCondition(code && code.length <= 8192 && /^[A-Za-z0-9._:-]{1,255}$/.test(clientId) && clientId !== "dynamic_agent_client", "callback_registration_incomplete");
       requireCondition(pending.clientId === "dynamic_agent_client" || pending.clientId === clientId, "callback_client_mismatch");
+      const pinned = await this.ctx.storage.get("registration");
+      if (pending.accountIntent === "connect") requireCondition(pending.registrationFingerprint === await digest(JSON.stringify(pinned ?? null)), "account_registration_changed");
       const token = await fetchJson(`${ISSUER}/api/accounts/oauth/token`, { method: "POST", headers: { accept: "application/json", "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "authorization_code", client_id: clientId, code, code_verifier: pending.verifier, redirect_uri: REDIRECT, resource: RESOURCE }) });
       const credential = tokenFields(token);
-      const identity = await identityFromToken(token.id_token, clientId, pending.nonce, await this.ctx.storage.get("registration"), await this.expectedEmailHash());
+      const automaticIdentity = pending.accountIntent === "connect" && pending.automaticIdentity === true;
+      const identity = await identityFromToken(token.id_token, clientId, pending.nonce, pinned, automaticIdentity ? null : await this.expectedEmailHash());
       const { metadata, ...registration } = identity;
-      await this.ctx.storage.put({ credential: await this.seal({ ...credential, clientId }), registration: { ...registration, clientId }, identity: await this.seal(metadata) });
+      const stored = { credential: await this.seal({ ...credential, clientId }), registration: { ...registration, clientId, ...(automaticIdentity ? { identitySelection: "oauth" } : {}) }, identity: await this.seal(metadata) };
+      await this.ctx.storage.transaction(async transaction => {
+        if (pending.accountIntent === "connect") {
+          requireCondition(pending.registrationFingerprint === await digest(JSON.stringify(await transaction.get("registration") ?? null)), "account_registration_changed");
+          if (this.env.SUBSCRIPTION_INFERENCE_PROVIDER === "auto") await transaction.put("subscriptionProvider", "siwc");
+        }
+        await transaction.put(stored);
+      });
       return this.status();
     } finally { this.completing = false; }
   }
@@ -327,12 +340,52 @@ export class Credentials extends ManagementCredentials {
     const registration = await this.ctx.storage.get("registration");
     const credential = await this.open(await this.ctx.storage.get("credential"));
     const identity = await this.open(await this.ctx.storage.get("identity"));
-    const image = await codexImageStatus(this), unified = image.unified && selection === "auto";
+    const image = await codexImageStatus(this);
+    const active = await this.ctx.storage.get("subscriptionProvider");
+    const unified = selection === "auto" && (active === "codex" || (!active && image.unified));
     const selectedIdentity = unified ? image.identity : credential ? identity : null;
     const directUsageGranted = credential?.scopes?.includes("chatgpt.tokens.use.direct") ?? false;
     const siwcInferenceReady = !!credential && directUsageGranted && credential.scopes.includes("resource.invoke");
     const inferenceReady = unified ? image.inferenceReady : siwcInferenceReady;
-    return { image, inferencePreference: selection, provider: unified ? "codex" : "siwc", inferenceReady, codexInferenceReady: image.inferenceReady, siwcInferenceReady, capabilities: { inference: inferenceReady, images: image.connected && !image.reconnectRequired }, label: (await this.ctx.storage.get("identityPolicy"))?.label ?? "Current connected account", connected: image.connected || !!credential, loginPending: image.loginPending || !!await this.ctx.storage.get("pending"), legacyLoginPending: !!await this.ctx.storage.get("pending"), loginFailed: image.loginFailed, identityVerified: unified || (!!credential && !!registration), planUsageConfirmed: unified || (!!credential && (registration?.planUsageConfirmed ?? registration?.personalProConfirmed ?? false)), planClaim: selectedIdentity ? selectedIdentity.planType : credential ? registration?.plan ?? null : null, identity: selectedIdentity, usage: await this.ctx.storage.get("nativeUsageTotals") ?? null, subjectFingerprint: unified ? await digest(selectedIdentity.accountId).then(value => value.slice(0, 12)) : credential ? registration?.subjectHash?.slice(0, 12) ?? null : null, expiresAt: unified ? image.expiresAt : credential ? new Date(credential.expiresAt).toISOString() : null, directUsageGranted, endpoint: unified ? "https://chatgpt.com/backend-api/codex/responses" : `${RESOURCE}/responses`, automaticInference: this.env.CHANNEL_REPLY_ENABLED === "true" };
+    return { image, inferencePreference: selection, provider: unified ? "codex" : "siwc", inferenceReady, codexInferenceReady: image.inferenceReady, siwcInferenceReady, capabilities: { inference: inferenceReady, images: image.connected && !image.reconnectRequired }, label: (await this.ctx.storage.get("identityPolicy"))?.label ?? "Current connected account", connected: image.connected || !!credential, loginPending: image.loginPending || !!await this.ctx.storage.get("pending"), legacyLoginPending: !!await this.ctx.storage.get("pending"), loginFailed: image.loginFailed, identityVerified: unified ? image.inferenceReady : (!!credential && !!registration), planUsageConfirmed: unified ? image.inferenceReady : (!!credential && (registration?.planUsageConfirmed ?? registration?.personalProConfirmed ?? false)), planClaim: selectedIdentity ? selectedIdentity.planType : credential ? registration?.plan ?? null : null, identity: selectedIdentity, usage: await this.ctx.storage.get("nativeUsageTotals") ?? null, subjectFingerprint: unified ? selectedIdentity?.accountId ? await digest(selectedIdentity.accountId).then(value => value.slice(0, 12)) : null : credential ? registration?.subjectHash?.slice(0, 12) ?? null : null, expiresAt: unified ? image.expiresAt : credential ? new Date(credential.expiresAt).toISOString() : null, directUsageGranted, endpoint: unified ? "https://chatgpt.com/backend-api/codex/responses" : `${RESOURCE}/responses`, automaticInference: this.env.CHANNEL_REPLY_ENABLED === "true" };
+  }
+
+  async selectProvider(provider) {
+    requireCondition(this.env.SUBSCRIPTION_INFERENCE_PROVIDER === "auto" && ["siwc", "codex"].includes(provider), "account_intent_invalid");
+    const selected = await this.ctx.blockConcurrencyWhile(async () => {
+      const status = await this.status();
+      if (!(provider === "siwc" ? status.siwcInferenceReady : status.codexInferenceReady)) return false;
+      await this.ctx.storage.put("subscriptionProvider", provider);
+      return true;
+    });
+    requireCondition(selected, "subscription_connection_unavailable");
+    return this.status();
+  }
+
+  async subscriptionAccountInfo() {
+    const status = await this.status();
+    if (status.provider !== "codex") return { checkedAt: new Date().toISOString(), account: { status: "unavailable", reason: "provider_not_supplied", httpStatus: null }, usage: { status: "unavailable", reason: "provider_not_supplied", httpStatus: null } };
+    requireCondition(status.codexInferenceReady, "subscription_connection_unavailable");
+    const profile = await this.open(await this.ctx.storage.get("codexImageProfile"));
+    const key = await digest(JSON.stringify(["codex", profile.clientId, profile.subjectHash, profile.metadata.accountId]));
+    const stillSelected = async () => {
+      const current = await this.open(await this.ctx.storage.get("codexImageProfile"));
+      requireCondition((await this.status()).provider === "codex" && current?.clientId === profile.clientId && current.subjectHash === profile.subjectHash && current.metadata.accountId === profile.metadata.accountId, "account_selection_changed");
+    };
+    const cached = await this.open(await this.ctx.storage.get("subscriptionAccountInfo"));
+    if (cached?.key === key && cached.expiresAt > Date.now()) { await stillSelected(); return cached.value; }
+    if (this.accountInfoLoading?.key === key) return this.accountInfoLoading.promise;
+    const promise = (async () => {
+      const credential = await this.codexAccess();
+      await stillSelected();
+      const value = await readCodexAccountInfo({ access: credential.access, accountId: credential.accountId });
+      await stillSelected();
+      await this.ctx.storage.put("subscriptionAccountInfo", await this.seal({ key, expiresAt: Date.now() + 60000, value }));
+      await stillSelected();
+      return value;
+    })();
+    this.accountInfoLoading = { key, promise };
+    try { return await promise; } finally { if (this.accountInfoLoading?.promise === promise) this.accountInfoLoading = undefined; }
   }
 
   async refreshStatus() {
@@ -377,7 +430,11 @@ export class Credentials extends ManagementCredentials {
       const token = await fetchJson(`${ISSUER}/api/accounts/oauth/token`, { method: "POST", headers: { accept: "application/json", "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "refresh_token", client_id: credential.clientId, refresh_token: credential.refresh, resource: RESOURCE }) });
       const renewed = tokenFields(token);
       let verified;
-      if (token.id_token !== undefined) verified = await identityFromToken(token.id_token, credential.clientId, undefined, await this.ctx.storage.get("registration"), await this.expectedEmailHash());
+      if (token.id_token !== undefined) {
+        const registration = await this.ctx.storage.get("registration");
+        requireCondition(registration?.clientId === credential.clientId, "account_registration_changed");
+        verified = await identityFromToken(token.id_token, credential.clientId, undefined, registration, registration.identitySelection === "oauth" ? null : await this.expectedEmailHash());
+      }
       await this.ctx.storage.put({ credential: await this.seal({ ...renewed, clientId: credential.clientId }), ...(verified ? { identity: await this.seal(verified.metadata) } : {}) });
       return renewed.access;
     })();

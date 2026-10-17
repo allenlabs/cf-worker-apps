@@ -6,7 +6,7 @@ const encoder = new TextEncoder();
 const jwks = new Map();
 const BODY_LIMIT = 20480;
 const emailPattern = /^[^\s@\x00-\x1f]+@[^\s@\x00-\x1f]+\.[^\s@\x00-\x1f]+$/;
-const safeErrors = new Set(["account_identity_policy_pinned", "oauth_busy", "selected_email_mismatch", "selected_user_mismatch", "selected_workspace_mismatch", "oauth_attempt_expired", "callback_state_mismatch", "authorization_declined", "plan_usage_scope_missing", "callback_uri_mismatch", "callback_parameter_repeated", "callback_issuer_mismatch", "callback_registration_incomplete", "callback_client_mismatch"]);
+const safeErrors = new Set(["account_identity_policy_pinned", "account_provider_conflict", "account_registration_changed", "account_selection_changed", "oauth_busy", "selected_email_mismatch", "selected_user_mismatch", "selected_workspace_mismatch", "oauth_attempt_expired", "callback_state_mismatch", "authorization_declined", "plan_usage_scope_missing", "callback_uri_mismatch", "callback_parameter_repeated", "callback_issuer_mismatch", "callback_registration_incomplete", "callback_client_mismatch"]);
 
 class RequestError extends Error {
   constructor(code, status = 400) { super(code); this.status = status; }
@@ -26,14 +26,14 @@ function settings(env) {
       typeof env.SUBSCRIPTION_ADMIN_SUBJECT === "string" && env.SUBSCRIPTION_ADMIN_SUBJECT.length > 0 && env.SUBSCRIPTION_ADMIN_SUBJECT.length <= 255 && !/[\x00-\x1f\x7f]/.test(env.SUBSCRIPTION_ADMIN_SUBJECT) && !!env.OS_SESSION;
   if (!validAuth || origin.protocol !== "https:" || origin.origin !== env.PUBLIC_ORIGIN ||
       typeof env.SUBSCRIPTION_ADMIN_EMAIL !== "string" || !emailPattern.test(env.SUBSCRIPTION_ADMIN_EMAIL) || env.SUBSCRIPTION_ADMIN_EMAIL !== env.SUBSCRIPTION_ADMIN_EMAIL.toLowerCase() || env.SUBSCRIPTION_ADMIN_EMAIL.length > 254 ||
-      env.SUBSCRIPTION_INFERENCE_PROVIDER !== "siwc" || env.INFERENCE_BRIDGE_PROVIDER !== "siwc" || env.INFERENCE_BRIDGE_ACCOUNT_ID !== "owner" ||
+      !["siwc", "auto"].includes(env.SUBSCRIPTION_INFERENCE_PROVIDER) || env.INFERENCE_BRIDGE_PROVIDER !== env.SUBSCRIPTION_INFERENCE_PROVIDER || env.INFERENCE_BRIDGE_ACCOUNT_ID !== "owner" ||
       !/^[a-zA-Z0-9._-]{1,128}$/.test(env.INFERENCE_BRIDGE_MODEL || "") ||
       !Array.isArray(users) || !users.length || users.length > 20 || new Set(users).size !== users.length || users.some(user => typeof user !== "string" || !emailPattern.test(user) || user.length > 254 || user !== user.toLowerCase()) ||
       !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(env.TENANT_ID || "") ||
       !/^[A-Za-z0-9_-]{43}$/.test(env.TOKEN_WRAPPING_KEY || "") || typeof env.TOKEN_WRAPPING_AAD !== "string" || !env.TOKEN_WRAPPING_AAD || encoder.encode(env.TOKEN_WRAPPING_AAD).length > 128) {
     throw new RequestError("configuration_invalid", 503);
   }
-  return { mode, origin: origin.origin, issuer: mode === "oidc" ? env.SUBSCRIPTION_ADMIN_ISSUER : issuer.origin, subject: env.SUBSCRIPTION_ADMIN_SUBJECT, audience: env.CF_ACCESS_AUD, admin: env.SUBSCRIPTION_ADMIN_EMAIL };
+  return { mode, dual: env.SUBSCRIPTION_INFERENCE_PROVIDER === "auto", origin: origin.origin, issuer: mode === "oidc" ? env.SUBSCRIPTION_ADMIN_ISSUER : issuer.origin, subject: env.SUBSCRIPTION_ADMIN_SUBJECT, audience: env.CF_ACCESS_AUD, admin: env.SUBSCRIPTION_ADMIN_EMAIL };
 }
 
 async function authenticate(request, config, env) {
@@ -90,7 +90,8 @@ async function body(request) {
 function readiness(status) {
   const identity = status.identityVerified === true ? status.identity : null;
   return { siwcInferenceReady: status.siwcInferenceReady === true, connected: status.connected === true, loginPending: status.loginPending === true, identityVerified: status.identityVerified === true, planUsageConfirmed: status.planUsageConfirmed === true,
-    identity: identity ? { email: identity.email, planType: identity.planType, workspaceName: identity.workspace?.title ?? null } : null };
+    provider: status.provider, inferenceReady: status.inferenceReady === true, codexInferenceReady: status.codexInferenceReady === true, device: status.image?.device ?? null, deviceFailed: status.image?.loginFailed === true,
+    identity: identity ? { name: identity.name, email: identity.email, planType: identity.planType, workspaceName: identity.workspace?.title ?? null, organizationNames: identity.organizations?.map(item => item.title).filter(Boolean) ?? null, verifiedAt: identity.verifiedAt } : null, identityRefreshStatus: status.identityRefreshStatus ?? null, usage: { available: false, reason: "provider_not_supplied" } };
 }
 
 function secure(response, nonce) {
@@ -111,23 +112,44 @@ export default {
       if (!(config.mode === "oidc" && page)) await authenticate(request, config, env);
       if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/gatekeeper/subscription")) {
         const nonce = crypto.randomUUID().replaceAll("-", "");
-        return secure(new Response(subscriptionPage(nonce, config.mode), { headers: { "content-type": "text/html; charset=utf-8" } }), nonce);
+        return secure(new Response(subscriptionPage(nonce, config.mode, config.dual), { headers: { "content-type": "text/html; charset=utf-8" } }), nonce);
       }
-      if (!["/gatekeeper/subscription/status", "/gatekeeper/subscription/start", "/gatekeeper/subscription/complete"].includes(url.pathname)) throw new RequestError("not_found", 404);
+      if (!["/gatekeeper/subscription/status", "/gatekeeper/subscription/start", "/gatekeeper/subscription/complete", "/gatekeeper/subscription/refresh", "/gatekeeper/subscription/device/start", "/gatekeeper/subscription/device/check", "/gatekeeper/subscription/select", "/gatekeeper/subscription/account-info"].includes(url.pathname)) throw new RequestError("not_found", 404);
       if (request.method !== "POST") throw new RequestError("method_not_allowed", 405);
       if (request.headers.get("origin") !== config.origin) throw new RequestError("origin_denied", 403);
       const input = await body(request);
+      if (url.pathname === "/gatekeeper/subscription/account-info") {
+        if (Object.keys(input).length) throw new RequestError("body_invalid");
+        return secure(Response.json(await env.Credentials.getByName("owner").subscriptionAccountInfo()));
+      }
+      if (["/gatekeeper/subscription/device/start", "/gatekeeper/subscription/device/check", "/gatekeeper/subscription/select"].includes(url.pathname)) {
+        if (!config.dual) throw new RequestError("not_found", 404);
+        const credentials = env.Credentials.getByName("owner");
+        if (url.pathname.endsWith("/start")) {
+          if (Object.keys(input).length !== 1 || input.planUsageConfirmed !== true) throw new RequestError("start_input_invalid");
+          const attempt = await credentials.startCodex("connect");
+          if (attempt.verificationUrl !== "https://auth.openai.com/codex/device" || typeof attempt.userCode !== "string" || attempt.userCode.length > 128 || !Number.isFinite(Date.parse(attempt.expiresAt)) || !Number.isFinite(Date.parse(attempt.nextCheckAt))) throw new RequestError("oauth_failed", 502);
+          return secure(Response.json(attempt));
+        }
+        if (url.pathname.endsWith("/check")) {
+          if (Object.keys(input).length) throw new RequestError("body_invalid");
+          await credentials.checkCodex();
+          return secure(Response.json(readiness(await credentials.status())));
+        }
+        if (Object.keys(input).length !== 1 || !["siwc", "codex"].includes(input.provider)) throw new RequestError("body_invalid");
+        return secure(Response.json(readiness(await credentials.selectProvider(input.provider))));
+      }
       if (url.pathname === "/gatekeeper/subscription/status") {
         if (Object.keys(input).length) throw new RequestError("body_invalid");
         return secure(Response.json(readiness(await env.Credentials.getByName("owner").status())));
       }
+      if (url.pathname === "/gatekeeper/subscription/refresh") {
+        if (Object.keys(input).length) throw new RequestError("body_invalid");
+        return secure(Response.json(readiness(await env.Credentials.getByName("owner").refreshStatus())));
+      }
       if (url.pathname === "/gatekeeper/subscription/start") {
-        if (Object.keys(input).some(key => !["email", "planUsageConfirmed"].includes(key)) || input.planUsageConfirmed !== true || typeof input.email !== "string" || input.email.length > 254 || !emailPattern.test(input.email.trim())) throw new RequestError("start_input_invalid");
-        const email = input.email.trim().toLowerCase();
-        const expectedEmailHash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(email)))].map(value => value.toString(16).padStart(2, "0")).join("");
-        const credentials = env.Credentials.getByName("owner");
-        await credentials.configureAccount({ expectedEmailHash, label: "Personal ChatGPT subscription" });
-        const attempt = await credentials.start(true);
+        if (Object.keys(input).length !== 1 || input.planUsageConfirmed !== true) throw new RequestError("start_input_invalid");
+        const attempt = await env.Credentials.getByName("owner").start(true, "connect");
         const authorization = new URL(attempt.authorizationUrl);
         if (authorization.origin !== "https://auth.openai.com" || authorization.pathname !== "/api/accounts/authorize") throw new RequestError("oauth_failed", 502);
         return secure(Response.json({ authorizationUrl: authorization.href, expiresIn: attempt.expiresIn, manualCallbackRequired: true }));
@@ -135,7 +157,7 @@ export default {
       if (Object.keys(input).length !== 1 || typeof input.callbackUrl !== "string" || input.callbackUrl.length > 16384) throw new RequestError("callback_input_invalid");
       return secure(Response.json(readiness(await env.Credentials.getByName("owner").complete(input.callbackUrl))));
     } catch (error) {
-      const code = error instanceof RequestError || safeErrors.has(error?.message) ? error.message : "oauth_failed";
+      const code = error instanceof RequestError || (safeErrors.has(error?.message) || /^(?:codex_image_(?:oauth_http_(?:400|401|403|404|429|500|502|503)|oauth_network_error|remote_denied|attempt_expired|attempt_failed_restart_login|identity_mismatch|identity_policy_changed|auth_busy|login_required|subscription_required|refresh_failed_restart_login)|subscription_connection_unavailable)$/.test(error?.message)) ? error.message : "oauth_failed";
       return secure(Response.json({ error: code }, { status: error instanceof RequestError ? error.status : 400 }));
     }
   },

@@ -39,7 +39,7 @@ function policy(env) {
   const requestEncoding = env.INFERENCE_BRIDGE_REQUEST_ENCODING ?? "native";
   if (!["native", "identity"].includes(requestEncoding)) fail("inference_bridge_not_configured");
   const provider = env.INFERENCE_BRIDGE_PROVIDER ?? "codex";
-  if (!["codex", "siwc"].includes(provider)) fail("inference_bridge_not_configured");
+  if (!["codex", "siwc", "auto"].includes(provider)) fail("inference_bridge_not_configured");
   return { users, accountId: env.INFERENCE_BRIDGE_ACCOUNT_ID, modelId: env.INFERENCE_BRIDGE_MODEL, timeoutMs, requestEncoding, provider };
 }
 
@@ -94,7 +94,7 @@ function terminalDiagnostic({ provider, credentialAccessFailed, fetchAttempted, 
   const category = ["upstream_blocked", "permission_denied", "invalid_response", "success", "auth_required", "rate_limited", "upstream_error"].includes(response?.category) ? response.category : null;
   const contentType = ["json", "html", "sse", "other", "missing"].includes(response?.contentType) ? response.contentType : null;
   return {
-    provider: ["codex", "siwc"].includes(provider) ? provider : null,
+    provider: ["codex", "siwc", "auto"].includes(provider) ? provider : null,
     phase: credentialAccessFailed ? "credential" : !fetchAttempted ? "provider_setup" : responseReceived ? "response" : "fetch",
     credentialAccessFailed, fetchAttempted, responseReceived,
     credentialExpiry: ["future", "expired", "unavailable"].includes(credentialExpiry) ? credentialExpiry : null,
@@ -163,6 +163,10 @@ export class CloudAgentInference extends WorkerEntrypoint {
     if (!configured.users.includes(input.userId)) fail("inference_bridge_user_denied");
     const credentials = this.env.Credentials.getByName(configured.accountId);
     const status = await credentials.status();
+    if (configured.provider === "auto") {
+      if (!["siwc", "codex"].includes(status.provider)) fail("inference_bridge_account_unavailable");
+      configured.provider = status.provider;
+    }
     if (configured.provider === "codex" ? status.codexInferenceReady !== true : status.siwcInferenceReady !== true) fail("inference_bridge_account_unavailable");
     const models = createModels();
     const observed = { provider: configured.provider, credentialAccessFailed: false, fetchAttempted: false, responseReceived: false };

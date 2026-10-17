@@ -71,15 +71,25 @@ function tokenFields(token, previous) {
   return { access: token.access_token, refresh, expiresAt };
 }
 
-async function identity(owner, verifyIdentity, idToken, clientId, pinned, registrationPin) {
+async function identity(owner, verifyIdentity, idToken, clientId, pinned, registrationPin, expectedEmailHash = undefined) {
   check(text(idToken), "codex_image_id_token_missing");
-  const verified = await verifyIdentity(idToken, clientId, await owner.expectedEmailHash(), registrationPin);
+  const verified = await verifyIdentity(idToken, clientId, expectedEmailHash === undefined ? await owner.expectedEmailHash() : expectedEmailHash, registrationPin);
   check(verified && text(verified.subjectHash, 256) && text(verified.accountHash, 256) && text(verified.metadata?.accountId, 256) && text(verified.metadata?.email, 320), "codex_image_identity_invalid");
   check(text(verified.metadata.planType, 64) && verified.metadata.planType.toLowerCase() !== "free", "codex_image_subscription_required");
   check(!pinned || (pinned.subjectHash === verified.subjectHash && pinned.accountHash === verified.accountHash && pinned.metadata.accountId === verified.metadata.accountId), "codex_image_identity_mismatch");
   return verified;
 }
 
+async function policySnapshot(owner, storage = owner.ctx.storage) {
+  return JSON.stringify({ policy: await storage.get("identityPolicy") ?? null, expectedEmailHash: owner.env.OWNER_EMAIL_SHA256 ?? null });
+}
+async function emailPolicy(owner, value) {
+  if (value.migration?.intent === "subscription_setup" && value.migration.automaticIdentity) {
+    check(owner.env.SUBSCRIPTION_INFERENCE_PROVIDER === "auto" && value.migration.policySnapshot === await policySnapshot(owner), "codex_image_identity_policy_changed");
+    return null;
+  }
+  return owner.expectedEmailHash();
+}
 const registrationIdentity = value => value ? { clientId: value.clientId ?? null, subjectHash: value.subjectHash ?? null, accountHash: value.accountHash ?? null } : null;
 const registrationFingerprint = value => JSON.stringify(registrationIdentity(value));
 async function checkRegistration(owner, profile, requireCodexPin = true) {
@@ -88,9 +98,14 @@ async function checkRegistration(owner, profile, requireCodexPin = true) {
     const codexPin = await read(owner, REGISTRATION);
     check(!requireCodexPin || codexPin, "codex_registration_missing");
     check(!codexPin || (codexPin.issuer === ISSUER && codexPin.clientId === profile.clientId && codexPin.expectedEmailHash === profile.expectedEmailHash && codexPin.subjectHash === profile.subjectHash && codexPin.accountHash === profile.accountHash && codexPin.metadata.accountId === profile.metadata.accountId), "codex_image_identity_mismatch");
-    check(profile.migration?.intent === "admin_unified_connection" && profile.migration.registrationFingerprint === registrationFingerprint(pinned), "codex_image_identity_policy_changed");
-    check(!pinned?.accountHash || pinned.accountHash === profile.accountHash, "codex_image_identity_mismatch");
-    check(pinned?.clientId !== profile.clientId || !pinned.subjectHash || pinned.subjectHash === profile.subjectHash, "codex_image_identity_mismatch");
+    if (profile.migration?.intent === "subscription_setup") {
+      check(owner.env.SUBSCRIPTION_INFERENCE_PROVIDER === "auto", "codex_image_identity_policy_changed");
+      check(profile.expectedEmailHash === await emailPolicy(owner, profile), "codex_image_identity_policy_changed");
+    } else {
+      check(profile.migration?.intent === "admin_unified_connection" && profile.migration.registrationFingerprint === registrationFingerprint(pinned), "codex_image_identity_policy_changed");
+      check(!pinned?.accountHash || pinned.accountHash === profile.accountHash, "codex_image_identity_mismatch");
+      check(pinned?.clientId !== profile.clientId || !pinned.subjectHash || pinned.subjectHash === profile.subjectHash, "codex_image_identity_mismatch");
+    }
   } else check((!pinned?.subjectHash || pinned.subjectHash === profile.subjectHash) && (!pinned?.accountHash || pinned.accountHash === profile.accountHash), "codex_image_identity_mismatch");
 }
 function checkAccessAccount(profile) {
@@ -99,23 +114,25 @@ function checkAccessAccount(profile) {
   check(claims?.["https://api.openai.com/auth"]?.chatgpt_account_id === profile.metadata.accountId, "codex_access_account_mismatch");
 }
 
-export function codexImageStart(owner, unified = false) {
+export function codexImageStart(owner, unified = false, subscriptionSetup = false) {
   return exclusive(owner, "start", async () => {
-    const expectedEmailHash = await owner.expectedEmailHash();
+    check(!subscriptionSetup || (unified && owner.env.SUBSCRIPTION_INFERENCE_PROVIDER === "auto"), "account_intent_invalid");
     const previous = await read(owner, PROFILE), codexPin = await read(owner, REGISTRATION);
     check(unified || (!previous?.unified && !codexPin), "codex_unified_connection_required");
     const clientId = codexPin?.clientId ?? previous?.clientId ?? owner.env.CODEX_IMAGE_CLIENT_ID ?? CLIENT_ID;
     check(text(clientId, 255) && /^[A-Za-z0-9._:-]+$/.test(clientId), "codex_image_client_invalid");
     const registration = await owner.ctx.storage.get("registration");
-    const migration = unified ? { intent: "admin_unified_connection", registrationFingerprint: registrationFingerprint(registration), registration: registrationIdentity(registration) } : undefined;
+    const automaticIdentity = subscriptionSetup && (!codexPin || codexPin.identitySelection === "oauth") && (!previous || previous.migration?.intent === "subscription_setup");
+    const expectedEmailHash = automaticIdentity ? null : await owner.expectedEmailHash();
+    const migration = subscriptionSetup ? { intent: "subscription_setup", automaticIdentity, policySnapshot: await policySnapshot(owner), codexFingerprint: JSON.stringify(codexPin) } : unified ? { intent: "admin_unified_connection", registrationFingerprint: registrationFingerprint(registration), registration: registrationIdentity(registration) } : undefined;
     const response = await request(`${ISSUER}/api/accounts/deviceauth/usercode`, { client_id: clientId });
     check(response.ok, `codex_image_oauth_http_${response.status}`);
     const result = await json(response);
     const userCode = result.user_code ?? result.usercode;
     const interval = Number(result.interval);
     check(text(result.device_auth_id, 4096) && text(userCode, 128) && Number.isSafeInteger(interval) && interval >= 1 && interval <= 300, "codex_image_device_response_invalid");
-    check(expectedEmailHash === await owner.expectedEmailHash(), "codex_image_identity_policy_changed");
-    if (unified) check(migration.registrationFingerprint === registrationFingerprint(await owner.ctx.storage.get("registration")), "codex_image_identity_policy_changed");
+    check(expectedEmailHash === await emailPolicy(owner, { migration }), "codex_image_identity_policy_changed");
+    if (unified && !subscriptionSetup) check(migration.registrationFingerprint === registrationFingerprint(await owner.ctx.storage.get("registration")), "codex_image_identity_policy_changed");
     const pending = { unified, migration, type: "codex_image_v1", attemptId: crypto.randomUUID(), phase: "pending", clientId, expectedEmailHash, deviceAuthId: result.device_auth_id, userCode, interval, expiresAt: Date.now() + 900000, nextAt: Date.now() + interval * 1000 };
     await write(owner, PENDING, pending);
     return { verificationUrl: `${ISSUER}/codex/device`, userCode, expiresAt: new Date(pending.expiresAt).toISOString(), nextCheckAt: new Date(pending.nextAt).toISOString() };
@@ -129,14 +146,25 @@ export function codexImageCheck(owner, verifyIdentity) {
     if (pending.attemptId && (await read(owner, PROFILE))?.attemptId === pending.attemptId) { await owner.ctx.storage.delete(PENDING); return codexImageStatus(owner); }
     check(pending.phase === "pending", "codex_image_attempt_failed_restart_login");
     if (pending.expiresAt <= Date.now()) { await owner.ctx.storage.delete(PENDING); throw new Error("codex_image_attempt_expired"); }
-    check(pending.expectedEmailHash === await owner.expectedEmailHash(), "codex_image_identity_policy_changed");
-    if (pending.unified) check(pending.migration?.intent === "admin_unified_connection" && pending.migration.registrationFingerprint === registrationFingerprint(await owner.ctx.storage.get("registration")), "codex_image_identity_policy_changed");
+    check(pending.expectedEmailHash === await emailPolicy(owner, pending), "codex_image_identity_policy_changed");
+    if (pending.migration?.intent === "subscription_setup") check(pending.migration.codexFingerprint === JSON.stringify(await read(owner, REGISTRATION)), "codex_image_identity_policy_changed");
+    else if (pending.unified) check(pending.migration?.intent === "admin_unified_connection" && pending.migration.registrationFingerprint === registrationFingerprint(await owner.ctx.storage.get("registration")), "codex_image_identity_policy_changed");
     if (pending.nextAt > Date.now()) return { pending: true, nextCheckAt: new Date(pending.nextAt).toISOString() };
     // Persist before polling too: a lost successful poll must not replay a consumed code.
     await write(owner, PENDING, { ...pending, phase: "checking" });
     try {
       const response = await request(`${ISSUER}/api/accounts/deviceauth/token`, { device_auth_id: pending.deviceAuthId, user_code: pending.userCode });
       if ([403, 404].includes(response.status)) {
+        check(!/text\/html/i.test(response.headers.get("content-type") || "") && response.headers.get("cf-mitigated") !== "challenge", "codex_image_remote_denied");
+        if (pending.migration?.intent === "subscription_setup") {
+          const bytes = response.body ? await bounded(response, 128 * 1024) : new Uint8Array();
+          let body;
+          try {
+            const content = new TextDecoder("utf-8", { fatal: true }).decode(bytes).trim();
+            body = content ? JSON.parse(content) : {};
+          } catch { throw new Error("codex_image_remote_denied"); }
+          check(body && typeof body === "object" && !Array.isArray(body) && (!Object.hasOwn(body, "error") || body.error === "authorization_pending"), "codex_image_remote_denied");
+        }
         pending.nextAt = Date.now() + pending.interval * 1000;
         await write(owner, PENDING, pending);
         return { pending: true, nextCheckAt: new Date(pending.nextAt).toISOString() };
@@ -153,21 +181,27 @@ export function codexImageCheck(owner, verifyIdentity) {
       const credential = tokenFields(token);
       const previous = await read(owner, PROFILE);
       const legacy = pending.migration?.registration;
-      const registrationPin = pending.unified ? { ...(legacy?.accountHash ? { accountHash: legacy.accountHash } : {}), ...(legacy?.clientId === pending.clientId && legacy.subjectHash ? { subjectHash: legacy.subjectHash } : {}) } : undefined;
-      const verified = await identity(owner, verifyIdentity, token.id_token, pending.clientId, await read(owner, REGISTRATION) ?? (previous?.clientId === pending.clientId ? previous : null), registrationPin);
+      const registrationPin = pending.migration?.intent === "subscription_setup" ? {} : pending.unified ? { ...(legacy?.accountHash ? { accountHash: legacy.accountHash } : {}), ...(legacy?.clientId === pending.clientId && legacy.subjectHash ? { subjectHash: legacy.subjectHash } : {}) } : undefined;
+      const verified = await identity(owner, verifyIdentity, token.id_token, pending.clientId, await read(owner, REGISTRATION) ?? (previous?.clientId === pending.clientId ? previous : null), registrationPin, pending.expectedEmailHash);
       const profile = { type: "codex_image_v1", unified: pending.unified === true, migration: pending.migration, attemptId: pending.attemptId, clientId: pending.clientId, expectedEmailHash: pending.expectedEmailHash, ...credential, ...verified };
       await checkRegistration(owner, profile, false);
       if (profile.unified) checkAccessAccount(profile);
-      check(pending.expectedEmailHash === await owner.expectedEmailHash(), "codex_image_identity_policy_changed");
+      check(pending.expectedEmailHash === await emailPolicy(owner, pending), "codex_image_identity_policy_changed");
       if (profile.unified) {
-        const pin = { type: "codex_registration_v1", issuer: ISSUER, clientId: profile.clientId, expectedEmailHash: profile.expectedEmailHash, subjectHash: profile.subjectHash, accountHash: profile.accountHash, metadata: { accountId: profile.metadata.accountId } };
+        const pin = { type: "codex_registration_v1", issuer: ISSUER, clientId: profile.clientId, expectedEmailHash: profile.expectedEmailHash, subjectHash: profile.subjectHash, accountHash: profile.accountHash, metadata: { accountId: profile.metadata.accountId }, ...(profile.migration?.automaticIdentity ? { identitySelection: "oauth" } : {}) };
         const sealedProfile = await owner.seal(profile), sealedPin = await owner.seal(pin);
         await owner.ctx.storage.transaction(async storage => {
-          check(pending.migration.registrationFingerprint === registrationFingerprint(await storage.get("registration")), "codex_image_identity_policy_changed");
-          check(pending.expectedEmailHash === ((await storage.get("identityPolicy"))?.expectedEmailHash ?? owner.env.OWNER_EMAIL_SHA256), "codex_image_identity_policy_changed");
+          if (pending.migration?.intent === "subscription_setup") {
+            check(pending.migration.policySnapshot === await policySnapshot(owner, storage), "codex_image_identity_policy_changed");
+            check(pending.migration.codexFingerprint === JSON.stringify(await owner.open(await storage.get(REGISTRATION))), "codex_image_identity_policy_changed");
+          } else check(pending.migration.registrationFingerprint === registrationFingerprint(await storage.get("registration")), "codex_image_identity_policy_changed");
+          if (!pending.migration?.automaticIdentity) check(pending.expectedEmailHash === ((await storage.get("identityPolicy"))?.expectedEmailHash ?? owner.env.OWNER_EMAIL_SHA256), "codex_image_identity_policy_changed");
+          const currentAttempt = await owner.open(await storage.get(PENDING));
+          check(currentAttempt?.attemptId === pending.attemptId && currentAttempt.phase === "exchanging", "codex_image_identity_policy_changed");
           const existingPin = await owner.open(await storage.get(REGISTRATION));
           check(!existingPin || JSON.stringify(existingPin) === JSON.stringify(pin), "codex_image_identity_mismatch");
           await storage.put(PROFILE, sealedProfile); await storage.put(REGISTRATION, sealedPin); await storage.delete(PENDING);
+          if (pending.migration?.intent === "subscription_setup") await storage.put("subscriptionProvider", "codex");
         });
       } else { await write(owner, PROFILE, profile); await owner.ctx.storage.delete(PENDING); }
       return codexImageStatus(owner);
@@ -181,8 +215,8 @@ export function codexImageCheck(owner, verifyIdentity) {
 export async function codexImageStatus(owner) {
   const profile = await read(owner, PROFILE), pending = await read(owner, PENDING);
   let valid = !profile?.refreshFailed;
-  if (profile?.unified) { try { await checkRegistration(owner, profile); checkAccessAccount(profile); check(profile.expectedEmailHash === await owner.expectedEmailHash(), "codex_image_identity_policy_changed"); } catch { valid = false; } }
-  return { provider: "codex", unified: profile?.unified === true, inferenceReady: profile?.unified === true && valid, reconnectRequired: !!profile && !valid, connected: profile?.type === "codex_image_v1", identity: profile?.metadata ?? null, expiresAt: profile ? new Date(profile.expiresAt).toISOString() : null, loginPending: pending?.phase === "pending" && pending.expiresAt > Date.now(), loginFailed: !!pending && pending.phase !== "pending", nextCheckAt: pending?.phase === "pending" ? new Date(pending.nextAt).toISOString() : null };
+  if (profile?.unified) { try { await checkRegistration(owner, profile); checkAccessAccount(profile); check(profile.expectedEmailHash === await emailPolicy(owner, profile), "codex_image_identity_policy_changed"); } catch { valid = false; } }
+  return { provider: "codex", unified: profile?.unified === true, inferenceReady: profile?.unified === true && valid, reconnectRequired: !!profile && !valid, connected: profile?.type === "codex_image_v1", identity: profile?.metadata ?? null, expiresAt: profile ? new Date(profile.expiresAt).toISOString() : null, loginPending: pending?.phase === "pending" && pending.expiresAt > Date.now(), loginFailed: !!pending && pending.phase !== "pending", nextCheckAt: pending?.phase === "pending" ? new Date(pending.nextAt).toISOString() : null, ...(pending?.migration?.intent === "subscription_setup" && pending.phase === "pending" && pending.expiresAt > Date.now() ? { device: { verificationUrl: `${ISSUER}/codex/device`, userCode: pending.userCode, expiresAt: new Date(pending.expiresAt).toISOString(), nextCheckAt: new Date(pending.nextAt).toISOString() } } : {}) };
 }
 
 export function codexImageAccess(owner, verifyIdentity, forceRefresh = false, inference = false) {
@@ -190,7 +224,7 @@ export function codexImageAccess(owner, verifyIdentity, forceRefresh = false, in
     const profile = await read(owner, PROFILE);
     check(profile?.type === "codex_image_v1", "codex_image_login_required");
 
-    check(profile.expectedEmailHash === await owner.expectedEmailHash(), "codex_image_identity_policy_changed");
+    check(profile.expectedEmailHash === await emailPolicy(owner, profile), "codex_image_identity_policy_changed");
     await checkRegistration(owner, profile);
     if (profile.unified) checkAccessAccount(profile);
     check(!profile.refreshFailed, "codex_image_refresh_failed_restart_login");
@@ -201,7 +235,7 @@ export function codexImageAccess(owner, verifyIdentity, forceRefresh = false, in
     check(response.ok, `codex_image_oauth_http_${response.status}`);
     const token = await json(response);
     const credential = tokenFields(token, profile);
-    const verified = token.id_token === undefined ? profile : await identity(owner, verifyIdentity, token.id_token, profile.clientId, profile, profile.unified ? {} : undefined);
+    const verified = token.id_token === undefined ? profile : await identity(owner, verifyIdentity, token.id_token, profile.clientId, profile, profile.unified ? {} : undefined, profile.expectedEmailHash);
     const renewed = { ...profile, ...credential, subjectHash: verified.subjectHash, accountHash: verified.accountHash, metadata: verified.metadata, refreshFailed: false };
     await checkRegistration(owner, renewed);
     if (renewed.unified) checkAccessAccount(renewed);

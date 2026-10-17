@@ -62,7 +62,7 @@ const config = {
   compatibilityFlags: ["nodejs_compat"],
   d1Databases: ["CONVERSATIONS"],
   durableObjects: { Assistant: { className: "Assistant", useSQLite: true }, Credentials: { className: "Credentials", useSQLite: true } },
-  bindings: { OWNER_EMAIL_SHA256: createHash("sha256").update(email).digest("hex"), TOKEN_WRAPPING_AAD: "fixture-cloud-agent/v1", PROBE_MODE: "subscription", OPENAI_MODEL: "gpt-6.1-sol", ALLOWED_OPENAI_MODELS:'["gpt-6-luna","gpt-6.1-sol","gpt-6-astra"]', PROBE_DEADLINE_MS: "150", TOKEN_WRAPPING_KEY: randomBytes(32).toString("base64url"), PROBE_KEY_SHA256: createHash("sha256").update(bearer).digest("hex"), PUBLIC_ORIGIN: "https://probe.invalid", PRODUCT_NAME: "Fixture Cloud Agent" },
+  bindings: { SUBSCRIPTION_INFERENCE_PROVIDER: "siwc", OWNER_EMAIL_SHA256: createHash("sha256").update(email).digest("hex"), TOKEN_WRAPPING_AAD: "fixture-cloud-agent/v1", PROBE_MODE: "subscription", OPENAI_MODEL: "gpt-6.1-sol", ALLOWED_OPENAI_MODELS:'["gpt-6-luna","gpt-6.1-sol","gpt-6-astra"]', PROBE_DEADLINE_MS: "150", TOKEN_WRAPPING_KEY: randomBytes(32).toString("base64url"), PROBE_KEY_SHA256: createHash("sha256").update(bearer).digest("hex"), PUBLIC_ORIGIN: "https://probe.invalid", PRODUCT_NAME: "Fixture Cloud Agent" },
   outboundService: async request => {
     if (request.url === "https://auth.openai.com/.well-known/jwks.json") { jwksCalls++; return Response.json({ keys: [jwk] }); }
     if (request.url === "https://auth.openai.com/api/accounts/oauth/token") {
@@ -112,11 +112,22 @@ const inspectCredentials = async () => {
   return (await namespace.get(namespace.idFromName("owner")).fetch("https://probe.invalid/test-state")).json();
 };
 try {
-  const unconfigured = new Miniflare(convertV4MiniflareOptions({ ...config, bindings: { ...config.bindings, OWNER_EMAIL_SHA256: "" } }));
+  const unconfigured = new Miniflare(convertV4MiniflareOptions({ ...config, bindings: { ...config.bindings, OWNER_EMAIL_SHA256: "", SUBSCRIPTION_INFERENCE_PROVIDER: "siwc" } }));
   try {
     const namespace = await unconfigured.getDurableObjectNamespace("Credentials");
     const denied = await namespace.get(namespace.idFromName("owner")).fetch("https://probe.invalid/oauth/start", { method: "POST", body: JSON.stringify({ planUsageConfirmed: true }) });
     assert.equal(denied.status, 400); assert.equal((await denied.json()).error, "account_policy_missing"); assert.equal(tokenCalls, 0);
+    const credentials = namespace.get(namespace.idFromName("owner"));
+    const automatic = new URL((await credentials.start(true, "connect")).authorizationUrl);
+    nonce = automatic.searchParams.get("nonce");
+    claimsOverride = { email: "selected@example.invalid" };
+    const selected = await credentials.fetch("https://probe.invalid/oauth/complete", { method: "POST", body: JSON.stringify({ callbackUrl: callback(automatic) }) });
+    assert.equal(selected.status, 200, await selected.clone().text());
+    assert.equal((await selected.json()).identity.email, "selected@example.invalid", "explicit SIWC connect learns the verified account without an owner-email policy");
+    claimsOverride = {};
+    const unchangedLegacy = await credentials.fetch("https://probe.invalid/oauth/start", { method: "POST", body: JSON.stringify({ planUsageConfirmed: true }) });
+    assert.equal(unchangedLegacy.status, 400);
+    assert.equal((await unchangedLegacy.json()).error, "account_policy_missing", "automatic registration never makes the legacy API optional-email");
   } finally { await unconfigured.dispose(); }
   assert.equal((await post("/oauth/start", { planUsageConfirmed: false })).status,400);
   let auth = await start();
@@ -189,6 +200,15 @@ try {
   claimsOverride = {};
   const namespace = await mf.getDurableObjectNamespace("Credentials");
   const owner = namespace.get(namespace.idFromName("owner"));
+  const legacyReconnect = new URL((await owner.start(true, "connect")).authorizationUrl);
+  nonce = legacyReconnect.searchParams.get("nonce");
+  claimsOverride = { email: "other@example.invalid" };
+  const legacyMismatch = await complete(legacyReconnect);
+  assert.equal(legacyMismatch.status, 400);
+  assert.equal((await legacyMismatch.json()).error, "selected_email_mismatch", "connect preserves an existing legacy registration's email policy");
+  assert.equal((await inspectCredentials()).registration.identitySelection, undefined);
+  assert.deepEqual((await inspectCredentials()).credential, stored.credential);
+  claimsOverride = {};
   const refreshed = await Promise.all([owner.access(), owner.access(), owner.access()]);
   assert.deepEqual(refreshed, Array(3).fill("fake-renewed-access"));
   assert.equal(refreshCalls, 1);
