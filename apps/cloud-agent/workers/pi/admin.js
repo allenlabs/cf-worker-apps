@@ -348,11 +348,16 @@ export class ManagementCredentials extends DurableObject {
       exactKeys(input, ["expectedEmail"]);
       const email = string(input.expectedEmail, 254).toLowerCase();
       requireValue(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email), "account_email_invalid");
-      const rows = await this.accountInventory(); requireValue(rows.length < 20, "account_limit", 409);
+      requireValue((await this.accountInventory()).length < 20, "account_limit", 409);
       const id = `account-${crypto.randomUUID()}`;
       await this.env.Credentials.getByName(id).configureAccount({ expectedEmailHash: await hash(email), label: id });
-      rows.push({ id, label: id, expectedEmail: email, createdAt: new Date().toISOString(), createdBy: actor.subject });
-      await this.ctx.storage.put("adminAccounts", rows); await this.audit(actor, action, id); return { id };
+      await this.ctx.storage.transaction(async transaction => {
+        const rows = await transaction.get("adminAccounts") || [{ id: "owner", label: "owner", createdAt: null }];
+        requireValue(rows.length < 20, "account_limit", 409);
+        rows.push({ id, label: id, expectedEmail: email, createdAt: new Date().toISOString(), createdBy: actor.subject });
+        await transaction.put("adminAccounts", rows);
+      });
+      await this.audit(actor, action, id); return { id };
     }
     if (action === "account.selection") {
       exactKeys(input, ["mode", "defaultAccountId", "poolAccountIds"]);

@@ -24,6 +24,41 @@ import { Route } from './providers'
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 describe('Models selection on the providers route', () => {
+
+  it('keeps catalog failures closed and offers a reload action', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await render(new Error('Catalog unavailable'))
+    expect(document.body.textContent).toContain('Something went wrong loading your models.')
+    expect(document.body.querySelector('[aria-label="Default model"]')).toBeNull()
+    expect(document.body.textContent).not.toContain('Add provider')
+    expect(document.body.querySelectorAll('[aria-label="Provider actions"]')).toHaveLength(0)
+    expect(Array.from(document.body.querySelectorAll('button')).some(button => button.textContent === 'Try again')).toBe(true)
+  })
+
+
+  it('offers both shared objects as distinct quick and default choices', async () => {
+    const { setQuickModel, setPreferredModel, getModelConfig } = await render(subscription)
+    const id = 'subscription-account-22222222-2222-4222-8222-222222222222'
+    const row = Array.from(document.body.querySelectorAll<HTMLElement>('[role="button"]'))
+      .find(element => element.textContent?.includes('Writing subscription'))!
+    expect(row.textContent).toContain('shared')
+    await act(async () => row.click())
+    expect(setQuickModel).toHaveBeenCalledExactlyOnceWith(id)
+    const trigger = document.body.querySelector<HTMLButtonElement>('[aria-label="Default model"]')!
+    await act(async () => trigger.click())
+    const options = Array.from(document.body.querySelectorAll<HTMLElement>('[role="option"]'))
+    expect(options.map(option => option.textContent)).toContain('Codex subscription')
+    const option = options.find(element => element.textContent === 'Writing subscription')!
+    const view: { PointerEvent?: typeof MouseEvent } = window
+    view.PointerEvent = MouseEvent
+    try {
+      await act(async () => option.focus())
+      await act(async () => option.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })))
+    } finally { delete view.PointerEvent }
+    expect(setPreferredModel).toHaveBeenCalledExactlyOnceWith(id)
+    expect(getModelConfig).not.toHaveBeenCalled()
+  })
+
   let root: Root | undefined
   afterEach(async () => {
     await act(async () => root?.unmount())
@@ -34,13 +69,14 @@ describe('Models selection on the providers route', () => {
     vi.restoreAllMocks()
   })
 
-  const render = async (config: AiGatewayInfo | Promise<AiGatewayInfo>, management = 'admin') => {
+  const render = async (config: AiGatewayInfo | Promise<AiGatewayInfo> | Error, management = 'admin') => {
     vi.stubEnv('VITE_CODEX_BRIDGE_MANAGEMENT', management)
     const setQuickModel = vi.fn<AuthenticatedApi['setQuickModel']>(async () => {})
     const setPreferredModel = vi.fn<AuthenticatedApi['setPreferredModel']>(async () => {})
     const modelList = [
       { type: 'agent' as const, id: 'codex-subscription', name: 'Codex subscription' },
       { type: 'agent' as const, id: 'old-personal', name: 'Old personal model' },
+      { type: 'agent' as const, id: 'subscription-account-22222222-2222-4222-8222-222222222222', name: 'Writing subscription' },
     ]
     const getModelConfig = vi.fn<AuthenticatedApi['getModelConfig']>(async id => ({
       profile: modelList.find(model => model.id === id)!,
@@ -54,7 +90,7 @@ describe('Models selection on the providers route', () => {
       getModelConfig, deleteModel,
       getQuickModel: async () => null,
       getPreferredModel: async () => null,
-      getAiConfig: async () => config,
+      getAiConfig: async () => { if (config instanceof Error) throw config; return config },
       setQuickModel,
       setPreferredModel,
     } as unknown as RpcStub<AuthenticatedApi>
@@ -67,7 +103,7 @@ describe('Models selection on the providers route', () => {
 
   const subscription: AiGatewayInfo = {
     enabled: true, transport: 'subscription', userModelsEnabled: false,
-    enabledProviders: ['openai'], builtInModelIds: ['codex-subscription'],
+    enabledProviders: ['openai'], builtInModelIds: ['codex-subscription', 'subscription-account-22222222-2222-4222-8222-222222222222'],
   }
 
   const actions = async (index = 0) => {

@@ -170,6 +170,40 @@ export class Credentials extends ManagementCredentials {
   commandStartStatus(target, operationId) { return startStatus(this, target, operationId); }
   threadStartPreferences(target) { return threadStartPreferences(this, target); }
 
+  async #subscriptionInventory() {
+    requireCondition(["siwc", "auto"].includes(this.env.SUBSCRIPTION_INFERENCE_PROVIDER) && this.env.INFERENCE_BRIDGE_PROVIDER === this.env.SUBSCRIPTION_INFERENCE_PROVIDER && this.env.INFERENCE_BRIDGE_ACCOUNT_ID === "owner" && /^[a-zA-Z0-9._-]{1,128}$/.test(this.env.INFERENCE_BRIDGE_MODEL || ""), "subscription_configuration_invalid");
+    const rows = await this.accountInventory();
+    return [{ id: "owner", label: rows.find(row => row.id === "owner")?.label ?? "owner" }, ...rows.filter(row => row.subscriptionSetup === true && /^account-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(row.id))];
+  }
+
+  async resolveSubscriptionAccount(id) {
+    requireCondition(typeof id === "string" && /^(?:owner|account-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/.test(id), "subscription_account_not_found");
+    requireCondition((await this.#subscriptionInventory()).some(row => row.id === id), "subscription_account_not_found");
+    return id;
+  }
+
+  async subscriptionConnections() {
+    const rows = await this.#subscriptionInventory();
+    return Promise.all(rows.map(async ({ id, label }) => {
+      const status = await (id === "owner" ? this : this.env.Credentials.getByName(id)).status();
+      return { id, label, provider: status.provider, ready: status.inferenceReady === true };
+    }));
+  }
+
+  async createSubscriptionConnection(input) {
+    await this.#subscriptionInventory();
+    requireCondition(input && typeof input === "object" && !Array.isArray(input) && Object.keys(input).length === 1 && typeof input.label === "string" && input.label.trim() && encoder.encode(input.label).length <= 128 && !/[\x00-\x1f\x7f]/.test(input.label), "subscription_label_invalid");
+    const id = `account-${crypto.randomUUID()}`;
+    await this.ctx.storage.transaction(async transaction => {
+      const rows = await transaction.get("adminAccounts") || [{ id: "owner", label: "owner", createdAt: null }];
+      if (!rows.some(row => row.id === "owner")) rows.unshift({ id: "owner", label: "owner", createdAt: null });
+      requireCondition(rows.length < 20, "account_limit");
+      rows.push({ id, label: input.label.trim(), subscriptionSetup: true, createdAt: new Date().toISOString() });
+      await transaction.put("adminAccounts", rows);
+    });
+    return { id };
+  }
+
   async expectedEmailHash() {
     const value = (await this.ctx.storage.get("identityPolicy"))?.expectedEmailHash ?? this.env.OWNER_EMAIL_SHA256;
     requireCondition(typeof value === "string" && /^[a-f0-9]{64}$/.test(value), "account_policy_missing");

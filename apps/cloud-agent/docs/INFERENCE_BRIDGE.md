@@ -38,14 +38,17 @@ Identity encoding is a controlled transport comparison supported by the [officia
   version: 1,
   requestId: string, // UUID
   userId: string,   // server-authenticated, allowlisted ID
+  subscriptionAccountId?: string, // known OS subscription catalog ID; omitted uses configured account
   context: { systemPrompt?: string, messages: Message[], tools?: Tool[] },
   options: { reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh", maxTokens?: number }
 }
 ```
 
+The trusted binding also exposes `subscriptionConnections()` with no user argument. It validates runtime configuration and returns only `{id, label, provider, ready}` rows from the OS subscription catalog. This metadata call does not require the administrator to be in the model-user allowlist. It excludes provider identities, tokens, pending device codes and quota data. Explicit selectors accept only `owner` or a catalogued `account-<uuid>`; unknown accounts fail before target-object or credential access. A request captures its chosen Credentials stub for the full stream. Omitted selectors preserve existing configured-account behavior, and a failed selection never falls back to another account.
+
 It returns `{stream, cancellation}`. `stream` is a byte-oriented ReadableStream of UTF-8 NDJSON `{version: 1, event}` envelopes. `cancellation` is a per-call RPC capability with `cancel()`. The adapter explicitly cancels the provider and disposes this capability; transferred stream cancellation alone did not stop the provider promptly in the native fixture. There is no global request registry.
 
-The bridge validates input before credential access, fixes the account and model on the server, and emits only validated Pi event fields. Provider failures become generic error codes. Request IDs are correlation values, not replay or idempotency keys.
+The bridge validates input before credential access, validates an optional account selector against the owner-held OS subscription catalog after the user allowlist, fixes the model on the server, and emits only validated Pi event fields. Provider failures become generic error codes. Request IDs are correlation values, not replay or idempotency keys.
 
 `AssistantMessage.model` remains the configured, requested model ID. For SIWC, terminal `done` or `error` messages can also include `responseModel`: the provider-reported `response.model` observed through the installed SDK's read-only parsed-event hook on `response.completed` or `response.incomplete`. The bridge accepts only 1–128 ASCII letters, digits, dots, underscores or hyphens. A different or dated model ID is preserved as metadata; it does not change the request, model allowlist, account or grant policy. The existing OS adapter forwards this optional field without a protocol-version change.
 

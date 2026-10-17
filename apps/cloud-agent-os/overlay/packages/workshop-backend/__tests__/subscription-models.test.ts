@@ -7,6 +7,7 @@ import { env } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
 import { describe, expect, it } from "vitest";
 import type { AiModelConfig, PublicApi } from "@gadgets/workshop-shared/api";
+import { SubscriptionModels, readSubscriptionConnections, type SubscriptionConnections } from "../src/subscription-models.js";
 import { getGatewayModels as getDeploymentModels } from "../src/ai-gateway.js";
 import { AdminSettings } from "../src/admin-settings.js";
 import { serializeAdminConfig } from "../src/admin-config.js";
@@ -28,18 +29,27 @@ const MODEL = "gpt-6.1-sol",
   USER = "one@example.invalid",
   OTHER = "two@example.invalid";
 const PROFILE = { type: "agent" as const, id: MODEL, name: "Codex subscription" };
-const CONFIG: AiModelConfig = { provider: "openai", model: MODEL, apiToken: "", transport: "subscription" };
+const CONFIG: AiModelConfig = { provider: "openai", model: MODEL, apiToken: "", transport: "subscription", subscriptionAccountId: "owner" };
 const PERSONAL = { provider: "anthropic", model: "personal-model", apiToken: "fixture-api-token",
   apiUrl: "https://personal.example.invalid", extraHeaders: { "X-Personal-Key": "fixture-header" } } satisfies AiModelConfig;
+const ACCOUNT_A = "account-11111111-1111-4111-8111-111111111111";
+const ACCOUNT_B = "account-22222222-2222-4222-8222-222222222222";
+const OWNER = { id: "owner", label: "Codex subscription", provider: "siwc" as const, ready: true };
+const CONNECTIONS = [OWNER,
+  { id: ACCOUNT_A, label: "Research", provider: "codex" as const, ready: true },
+  { id: ACCOUNT_B, label: "Writing", provider: "siwc" as const, ready: false }];
+const A = `subscription-${ACCOUNT_A}`, B = `subscription-${ACCOUNT_B}`;
 let count = 0;
-function managed(config: Partial<AdminConfig> = {}) {
+function managed(config: Partial<AdminConfig> = {}, connections: SubscriptionConnections = [OWNER]) {
   const values = new Map<string, string>([
     [".adminConfig", serializeAdminConfig({ ...DEFAULT_ADMIN_CONFIG, ...config })],
   ]);
   return {
     ...env,
     CODEX_BRIDGE_MANAGEMENT: "admin",
+    CODEX_BRIDGE_SETUP: "siwc",
     CODEX_BRIDGE: {
+      async subscriptionConnections() { return connections; },
       infer() {
         throw Error("Unexpected inference");
       },
@@ -64,11 +74,12 @@ async function inUser<T>(
   f: (u: import("../src/user.js").UserDurableObject) => Promise<T>,
   config: Partial<AdminConfig> = {},
   legacy = false,
+  connections: SubscriptionConnections = [OWNER],
 ) {
   if (!legacy)
     await runInDurableObject(env.TEST_ADMIN_SETTINGS.getByName(""), async (admin) => {
       const original = admin.env;
-      admin.env = managed(config);
+      admin.env = managed(config, connections);
       try {
         await admin.updateAdminConfig({ ...DEFAULT_ADMIN_CONFIG, ...config });
       } finally {
@@ -77,7 +88,7 @@ async function inUser<T>(
     });
   return runInDurableObject(env.TEST_USER.getByName(id), async (user) => {
     const original = user.env;
-    user.env = legacy ? env : managed(config);
+    user.env = legacy ? env : managed(config, connections);
     try {
       await user.loginOrCreateViaGatekeeper(id, true);
       return await f(user);
@@ -86,12 +97,12 @@ async function inUser<T>(
     }
   });
 }
-function settings() {
+function settings(connections: SubscriptionConnections = [OWNER]) {
   const stub = env.TEST_USER_DIRECTORY.getByName(`subscription-admin-${++count}`);
   let current: string | null = null,
     fail = false;
   const deployment = {
-    ...managed(),
+    ...managed({}, connections),
     BLUEPRINTS: {
       get: async () => current,
       put: async (_key: string, value: string) => {
@@ -111,6 +122,127 @@ function settings() {
   };
 }
 describe("admin-managed subscription models", () => {
+
+  it("preserves the configured legacy account without calling the optional setup catalog or emitting a selector", async () => {
+    const calls: unknown[] = [];
+    let catalogCalls = 0;
+    const deployment = { ...managed(), CODEX_BRIDGE_SETUP: undefined, CODEX_BRIDGE: {
+      async subscriptionConnections() { ++catalogCalls; throw Error("Legacy service has no setup catalog"); },
+      async infer(input: unknown) { calls.push(input); throw Error("Fixture stream stopped"); },
+    } };
+    const models = await getGatewayModels(deployment, USER);
+    expect(models?.list()).toEqual([PROFILE]);
+    const record = models!.resolve(MODEL)!;
+    expect(record.config).toEqual({ provider: "openai", model: MODEL, apiToken: "", transport: "subscription" });
+    const handle = getModel(deployment, record.config, { type: "user", id: USER, name: "One" });
+    expect((await handle.stream(handle.model, { messages: [] }).result()).stopReason).toBe("error");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).not.toHaveProperty("subscriptionAccountId");
+    expect(catalogCalls).toBe(0);
+    const fixture = settings();
+    await fixture.inDo(async admin => {
+      admin.env = deployment;
+      expect((await admin.getSettings(USER)).subscriptionModel?.connections).toEqual([
+        { id: MODEL, accountId: "owner", name: PROFILE.name, provider: null, ready: null, enabled: true },
+      ]);
+      await admin.setSubscriptionModelEnabled(false);
+      expect(admin.getAdminConfig().modelModes).toEqual({ [MODEL]: "disabled" });
+      expect(catalogCalls).toBe(0);
+    });
+  });
+
+
+  it("validates the private catalog before constructing model profiles and exposes safe metadata to other administrators", async () => {
+    for (const invalid of [[], [OWNER, OWNER], [{ ...OWNER, id: ACCOUNT_A }],
+      [{ ...OWNER, label: "bad\nlabel" }], [{ ...OWNER, ready: "yes" }],
+      [{ ...OWNER, token: "fixture-only" }], [{ ...OWNER, label: "é".repeat(65) }]]) {
+      const deployment = { ...managed(), CODEX_BRIDGE: { async subscriptionConnections() { return invalid; } } };
+      await expect(readSubscriptionConnections(deployment)).rejects.toThrow();
+    }
+    const failure = { ...managed(), CODEX_BRIDGE: { async subscriptionConnections() { throw Error("Catalog unavailable"); } } };
+    await expect(getGatewayModels(failure, USER)).rejects.toThrow("Catalog unavailable");
+    const fixture = settings(CONNECTIONS);
+    await fixture.inDo(async admin => {
+      const descriptor = (await admin.getSettings("admin-outside-allowlist@example.invalid")).subscriptionModel!;
+      expect(descriptor.connections.map(row => [row.name, row.ready])).toEqual([
+        ["Codex subscription", true], ["Research", true], ["Writing", false],
+      ]);
+      expect(descriptor.connections.every(row => !Object.hasOwn(row, "token"))).toBe(true);
+    });
+  });
+
+  it("keeps logical profiles separate while resolving their shared physical model and own object selector", async () => {
+    const models = await getGatewayModels(managed({}, CONNECTIONS), USER);
+    expect(models).toBeInstanceOf(SubscriptionModels);
+    expect(models?.list().map(profile => [profile.id, profile.name])).toEqual([
+      [MODEL, "Codex subscription"], [A, "Research"], [B, "Writing"],
+    ]);
+    expect(models?.resolve(A)?.config).toEqual({ ...CONFIG, subscriptionAccountId: ACCOUNT_A });
+    expect(models?.resolve(B)?.config).toEqual({ ...CONFIG, subscriptionAccountId: ACCOUNT_B });
+    expect(models?.resolve(`subscription-account-33333333-3333-4333-8333-333333333333`)).toBeUndefined();
+    await inUser(USER, async user => {
+      await user.setPreferredModel(B);
+      await user.setQuickModel(A);
+      expect((await user.getExternalMessageChatContext(null)).aiModel?.profile.id).toBe(B);
+      expect((await user.getChatContext(B)).aiModel?.config.subscriptionAccountId).toBe(ACCOUNT_B);
+    }, {}, false, CONNECTIONS);
+    await inUser(USER, async user => {
+      expect(await user.getPreferredModel()).toBe(B);
+      expect(await user.getQuickModel()).toBe(A);
+      expect((await user.getChatContext(A)).quickModel?.subscriptionAccountId).toBe(ACCOUNT_A);
+    }, {}, false, CONNECTIONS);
+  });
+
+  it("changes only the selected connection mode and never falls back for an unknown object", async () => {
+    const fixture = settings(CONNECTIONS);
+    await fixture.inDo(async admin => {
+      await admin.setSubscriptionModelEnabled(false, ACCOUNT_B);
+      expect(admin.getAdminConfig().modelModes).toEqual({ [B]: "disabled" });
+      expect((await admin.getSettings(USER)).subscriptionModel?.connections.map(row => row.enabled)).toEqual([true, true, false]);
+      await expect(admin.setSubscriptionModelEnabled(false, "account-33333333-3333-4333-8333-333333333333"))
+        .rejects.toThrow("Unknown subscription");
+      expect(admin.getAdminConfig().modelModes).toEqual({ [B]: "disabled" });
+      await admin.setSubscriptionModelEnabled(false);
+      await admin.setSubscriptionModelEnabled(true, ACCOUNT_B);
+      expect(admin.getAdminConfig().modelModes).toEqual({ [MODEL]: "disabled" });
+    });
+  });
+
+  it("revokes B bindings by their logical profile while A remains usable with the same physical model", async () => {
+    await inUser(USER, async () => {}, { modelModes: { [B]: "disabled" } }, false, CONNECTIONS);
+    for (const [accountId, outcome] of [[ACCOUNT_A, "allowed"], [ACCOUNT_B, "disabled"],
+      ["account-33333333-3333-4333-8333-333333333333", "Unknown subscription"]]) {
+      await runInDurableObject(env.TEST_USER_DIRECTORY.getByName(`multi-binding-${++count}`), async (_u, state) => {
+        Object.defineProperty(state, "props", { configurable: true, value: {
+          displayName: "Shared", config: { ...CONFIG, subscriptionAccountId: accountId },
+          initiator: { type: "user", id: USER, name: "One" },
+        } });
+        const binding = new LanguageModelGatekeeper(state, managed({}, CONNECTIONS));
+        if (outcome === "allowed") await expect(binding.startSession(undefined!)).resolves.toBeDefined();
+        else await expect(binding.startSession(undefined!)).rejects.toThrow(outcome);
+      });
+    }
+  });
+
+  it("captures each server-owned account selector for concurrent bridge streams", async () => {
+    const calls: unknown[] = [];
+    const deployment = { ...managed({}, CONNECTIONS), CODEX_BRIDGE: {
+      async subscriptionConnections() { return CONNECTIONS; },
+      async infer(input: unknown) { calls.push(input); throw Error("Fixture stream stopped"); },
+    } };
+    const models = await getGatewayModels(deployment, USER);
+    await Promise.all([A, B].map(async id => {
+      const record = models!.resolve(id)!;
+      const handle = getModel(deployment, record.config, { type: "user", id: USER, name: "One" });
+      expect((await handle.stream(handle.model, { messages: [] }).result()).stopReason).toBe("error");
+    }));
+    expect(calls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ subscriptionAccountId: ACCOUNT_A }),
+      expect.objectContaining({ subscriptionAccountId: ACCOUNT_B }),
+    ]));
+    expect(calls).toHaveLength(2);
+  });
+
   it("uses the persisted verified actor when a user DO is reopened from its serialized ID", async () => {
     const actor = `restored-${crypto.randomUUID()}@example.invalid`;
     const namedId = env.TEST_USER.idFromName(actor);
@@ -293,6 +425,9 @@ describe("admin-managed subscription models", () => {
         name: PROFILE.name,
         enabled: false,
         userModelsEnabled: true,
+        connections: [{ id: MODEL, accountId: "owner", name: PROFILE.name, provider: "siwc", ready: true,
+          enabled: false }],
+        setupUrl: "/gatekeeper/subscription",
       });
     });
     expect(JSON.parse(fixture.current()!).modelModes).toEqual({ [MODEL]: "disabled" });
@@ -313,6 +448,9 @@ describe("admin-managed subscription models", () => {
         name: PROFILE.name,
         enabled: true,
         userModelsEnabled: true,
+        connections: [{ id: MODEL, accountId: "owner", name: PROFILE.name, provider: "siwc", ready: true,
+          enabled: true }],
+        setupUrl: "/gatekeeper/subscription",
       });
     });
     await runInDurableObject(
@@ -374,6 +512,8 @@ describe("admin-managed subscription models", () => {
         const forged = { ...PERSONAL, transport: "subscription" as const };
         await expect(authenticated.addModel({ ...PROFILE, id: "rpc-forgery" }, forged))
           .rejects.toThrow("transport");
+        await expect(authenticated.addModel({ ...PROFILE, id: "rpc-selector-forgery" },
+          { ...PERSONAL, subscriptionAccountId: ACCOUNT_B })).rejects.toThrow("server-owned");
         using adminApi = (await authenticated.getAdminApi())!;
         await adminApi.setSubscriptionModelEnabled(false);
         expect(admin.getAdminConfig().modelModes).toEqual({ [MODEL]: "disabled" });
@@ -382,6 +522,9 @@ describe("admin-managed subscription models", () => {
           name: PROFILE.name,
           enabled: false,
           userModelsEnabled: true,
+          connections: [{ id: MODEL, accountId: "owner", name: PROFILE.name, provider: "siwc", ready: true,
+            enabled: false }],
+          setupUrl: "/gatekeeper/subscription",
         });
         await adminApi.setSubscriptionModelEnabled(true);
         expect(admin.getAdminConfig().modelModes).toEqual({});
@@ -487,7 +630,13 @@ describe("admin-managed subscription models", () => {
         await expect(user.addModel(profile, { ...PERSONAL, transport } as AiModelConfig))
           .rejects.toThrow("transport");
       }
+      for (const subscriptionAccountId of [ACCOUNT_A, "owner", undefined]) {
+        await expect(user.addModel(profile, { ...PERSONAL, subscriptionAccountId }))
+          .rejects.toThrow("server-owned");
+      }
       await user.addModel(profile, PERSONAL);
+      await expect(user.updateModel(profile, { ...PERSONAL, subscriptionAccountId: ACCOUNT_B }))
+        .rejects.toThrow("server-owned");
       await expect(user.updateModel(profile, { ...PERSONAL, transport: "subscription" } as AiModelConfig))
         .rejects.toThrow("transport");
       expect((await user.getChatContext(profile.id)).aiModel?.config).toEqual(PERSONAL);
@@ -496,6 +645,7 @@ describe("admin-managed subscription models", () => {
   it("changes the personal provider policy and exposes only the configured SIWC setup path", async () => {
     const fixture = settings();
     await fixture.inDo(async admin => {
+      admin.env = { ...fixture.deployment, CODEX_BRIDGE_SETUP: undefined };
       expect((await admin.getSettings(USER)).subscriptionModel?.setupUrl).toBeUndefined();
       const setup = { ...fixture.deployment, CODEX_BRIDGE_SETUP: "siwc" };
       admin.env = setup;
@@ -531,6 +681,7 @@ describe("admin-managed subscription models", () => {
     const deployment = managed();
     const personal = { ...CONFIG, apiToken: "fixture-personal-key", apiUrl: "https://api.example.invalid/v1" };
     delete personal.transport;
+    delete personal.subscriptionAccountId;
     const actor = { type: "user" as const, id: "denied@example.invalid", name: "Denied shared" };
     const handle = getModel(deployment, personal, actor, {
       userGateway: { accountId: "fixture-account", apiKey: "fixture-gateway-key" },
@@ -621,13 +772,15 @@ describe("admin-managed subscription models", () => {
     await runInDurableObject(env.TEST_USER.getByName(actor), async (user, state) => {
       await user.loginOrCreateViaGatekeeper(actor, true);
       makeUserStorage(state.storage).aiModels.put({ profile: { type: "agent", id, name: "Historical" },
-        config: CONFIG });
+        config: { ...CONFIG, subscriptionAccountId: ACCOUNT_B } });
     });
     await inUser(actor, async user => {
       expect((await user.getChatContext(id)).aiModel?.config).toEqual({ provider: "openai", model: MODEL, apiToken: "" });
       await user.setQuickModel(id);
       expect((await user.getChatContext(null)).quickModel?.transport).toBeUndefined();
       expect((await user.getModelConfig(id)).config).not.toHaveProperty("transport");
+      expect((await user.getModelConfig(id)).config).not.toHaveProperty("subscriptionAccountId");
+      expect((await user.getChatContext(null)).quickModel).not.toHaveProperty("subscriptionAccountId");
     });
   });
   it("requires rebinding an old untagged credential-free subscription binding", async () => {

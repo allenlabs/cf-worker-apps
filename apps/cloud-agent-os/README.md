@@ -98,7 +98,7 @@ model availability is checked against the runtime catalogs. `modelBridge.allowed
 must contain 1–20 pinned lowercase email identities, each at most 254 characters.
 These bridge limits do not reduce the separate login or administrator identity limits.
 
-Set `modelBridge.management` to `"admin"` to manage that existing connection centrally.
+Set `modelBridge.management` to `"admin"` to manage named subscription connections centrally.
 Admin's **Providers** tab manages the organization subscription and whether users may add
 personal providers. When SIWC setup is configured, its connection button opens the protected
 subscription setup page. Administrators also get this connection button in the initial
@@ -110,8 +110,24 @@ Disabling the shared subscription prevents its new requests, including calls thr
 model bindings, while independently authenticated personal providers remain usable.
 Shared configs carry a server-owned subscription transport tag; personal CRUD rejects that tag.
 Older untagged shared model bindings must be reconnected and do not fall back to a paid API.
-No provider credential or account selection is stored in admin configuration: the deployment's
-service binding and the existing runtime's account/model/actor policy remain authoritative.
+Each connection appears as its own model choice, with independent availability, default and
+quick-model selection. The owner keeps its existing physical-model profile ID. Added objects use
+`subscription-account-<UUID>` profile IDs, while inference still uses the configured physical model.
+Admin's Providers card shows each connection's name and readiness, with its own toggle and protected
+setup link. Add subscription opens the setup page's add form. Unconnected objects remain visible;
+inference requires that object's own connected grant and never falls back to another connection.
+
+With SIWC setup enabled, the Workshop validates the private binding's safe catalog before building profiles.
+Without setup, the existing single model keeps the runtime's configured account. The Workshop neither
+calls the setup catalog RPC nor sends an object selector in that mode. Shared configs from
+the catalog carry a server-owned `subscriptionAccountId` as well as the subscription transport tag.
+Personal-provider CRUD rejects both fields and strips them from historical personal records.
+Previously minted shared bindings check the selected logical profile's current mode on each call,
+so disabling one connection also revokes its bindings without disabling another connection that
+uses the same physical model. An unknown object ID fails closed.
+
+No provider credential or global account selection is stored in admin configuration. The deployment's
+service binding and the existing runtime's per-object account/model/actor policy remain authoritative.
 Omitting `management`, or setting it to `"user"`, preserves the original per-user setup flow.
 This subscription catalog does not require or emulate a Cloudflare AI Gateway.
 
@@ -125,10 +141,10 @@ configure the subscription Worker's `OS_SESSION` service binding to the Workshop
 `SubscriptionSetupSession` entrypoint and pin its administrator issuer, subject and email. The
 static setup page uses the existing OS session for every same-origin POST. See
 [subscription setup configuration](subscription/README.md) for both examples and session lifetime. The wrapper does
-not deploy the subscription Worker or create its provider connection. Create a fresh provider
-connection with provider `siwc` in that service; use its SIWC login flow, with no native Codex
-device login or paid API fallback. Omitting `setup` preserves
-the existing generated configuration.
+not deploy the subscription Worker or create its provider connections. Open the protected setup
+page to add a named connection and connect its SIWC or native Codex provider. Each object keeps
+its own login flow and grant. Inference uses the selected protocol without paid API fallback.
+Omitting `setup` preserves the existing generated configuration.
 
 ## Native OpenCode agent loop
 

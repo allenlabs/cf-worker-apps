@@ -4,6 +4,7 @@ import type { AssistantMessage, AssistantMessageEvent, Context, Model, Api } fro
 import type { AiChatAuthorInfo, AiModelConfig } from "@gadgets/workshop-shared/api";
 import type { ModelHandle, ModelStreamOptions } from "./ai-models";
 import { z } from "zod";
+import { subscriptionAccountIdSchema } from "./subscription-models.js";
 
 type BridgeEnvironment = {
   CODEX_BRIDGE?: { infer(input: unknown): Promise<{ stream: ReadableStream<Uint8Array>; cancellation: { cancel(): Promise<void>; [Symbol.dispose](): void } }> };
@@ -40,9 +41,15 @@ function failedMessage(model: Model<Api>, aborted: boolean): AssistantMessage {
 
 /** Server-owned subscription transport enabled by an explicit service binding. */
 export function cloudAgentModel(env: Cloudflare.Env & BridgeEnvironment, config: AiModelConfig, initiator: AiChatAuthorInfo): ModelHandle | undefined {
+  if (config.subscriptionAccountId !== undefined && config.transport !== "subscription")
+    throw Error("inference_bridge_model_denied");
   // Legacy user-managed deployments select their sole bridge through deployment configuration.
   if (config.transport !== "subscription" &&
       !(env.CODEX_BRIDGE && env.CODEX_BRIDGE_MANAGEMENT !== "admin")) return undefined;
+  const subscriptionAccountId = config.subscriptionAccountId === undefined ? undefined
+    : subscriptionAccountIdSchema.parse(config.subscriptionAccountId);
+  if (subscriptionAccountId !== undefined && env.CODEX_BRIDGE_MANAGEMENT !== "admin")
+    throw Error("inference_bridge_model_denied");
   const bridge = env.CODEX_BRIDGE;
   if (!bridge) throw Error("inference_bridge_not_configured");
   let users: unknown;
@@ -84,6 +91,7 @@ export function cloudAgentModel(env: Cloudflare.Env & BridgeEnvironment, config:
           const reasoning = requested === "off" ? "minimal" : requested;
           if (!["minimal", "low", "medium", "high", "xhigh"].includes(reasoning)) throw Error("inference_bridge_reasoning_denied");
           const input = { version: 1, requestId: crypto.randomUUID(), userId: initiator.id, context,
+            ...(subscriptionAccountId === undefined ? {} : { subscriptionAccountId }),
             options: { reasoning, maxTokens: Math.min(options.maxTokens ?? config.outputLimit ?? 4096, 8192) } };
           if (encoder.encode(JSON.stringify(input)).length > limit) throw Error("inference_bridge_input_too_large");
           const call = await bridge.infer(input);

@@ -1,0 +1,187 @@
+diff --git a/packages/workshop-backend/src/admin-settings.ts b/packages/workshop-backend/src/admin-settings.ts
+--- a/packages/workshop-backend/src/admin-settings.ts
++++ b/packages/workshop-backend/src/admin-settings.ts
+@@ -9,7 +9,7 @@
+ import { MAX_AGENT_HINT, defaultOutputFormatId, listPromotedFormats, normalizeAdminConfig, reorderFormats, sanitizeAddedModel, sanitizeModelSettings, sanitizeOutputOverrides, serializeAdminConfig } from './admin-config.js';
+ import { makeAdminSettingsStorage, type AdminConfig, type AdminSettingsStorage, type FormatCuration } from './storage-schema/admin-settings-storage.js';
+ import { getModelTokenLimits } from './agent-compaction.js';
+-import { isAdminManagedSubscription, SubscriptionModels } from "./subscription-models.js";
++import { isAdminManagedSubscription, readSubscriptionConnections, SubscriptionModels } from "./subscription-models.js";
+ import { AiGatewayConfig, GatewayModels, assertGatewayProvider, gatewayModelConfig, gatewayRunConfig, getAiGatewayConfig, isCatalogModel } from './ai-gateway.js';
+ import { AgentTurnError, completeText } from './ai-invoke.js';
+ import { gatewayBuiltInReasoning, gatewayReasoningLevels, getModel, isRuntimeModel } from './ai-models.js';
+@@ -344,7 +344,7 @@
+       formats: await this.#listFormatConfig(config),
+       gatewayModels: this.#listGatewayModels(config),
+       subscriptionModel: isAdminManagedSubscription(this.env)
+-          ? this.#subscriptionDescriptor(config) : undefined,
++          ? await this.#subscriptionDescriptor(config) : undefined,
+     };
+   }
+ 
+@@ -447,20 +447,27 @@
+     await this.#mutateFormats(formats => reorderFormats(formats, blueprintIds));
+   }
+ 
+-  #subscriptionDescriptor(config: AdminConfig): NonNullable<AdminSettingsView["subscriptionModel"]> {
+-    const models = new SubscriptionModels(this.env, config);
+-    const [model] = models.all;
++  async #subscriptionDescriptor(config: AdminConfig): Promise<NonNullable<AdminSettingsView["subscriptionModel"]>> {
++    if (!isAdminManagedSubscription(this.env)) throw new Error("This subscription is not admin-managed.");
++    const models = new SubscriptionModels(this.env, config, undefined, await readSubscriptionConnections(this.env));
++    const model = models.all.find(connection => connection.accountId === "owner");
++    if (!model) throw new Error("inference_bridge_not_configured");
+     return { id: model.id, name: model.name, enabled: model.mode !== "disabled",
+       userModelsEnabled: config.userModelsEnabled,
++      connections: models.all.map(connection => ({ id: connection.id, accountId: connection.accountId,
++        name: connection.name, provider: connection.subscriptionProvider, ready: connection.ready,
++        enabled: connection.mode !== "disabled" })),
+       ...(models.setupUrl ? { setupUrl: models.setupUrl } : {}),
+     };
+   }
+ 
+-  /** Change only the fixed subscription model's availability, using the existing atomic config mirror. */
+-  async setSubscriptionModelEnabled(enabled: boolean): Promise<void> {
++  /** Change one registered subscription profile through the existing atomic config mirror. */
++  async setSubscriptionModelEnabled(enabled: boolean, accountId = "owner"): Promise<void> {
+     if (typeof enabled !== "boolean") throw new Error("Subscription availability must be a boolean.");
++    const descriptor = await this.#subscriptionDescriptor(this.#config());
++    const model = descriptor.connections.find(connection => connection.accountId === accountId);
++    if (!model) throw new Error("Unknown subscription connection.");
+     await this.#mutateAdminConfig(config => {
+-      const model = this.#subscriptionDescriptor(config);
+       const modes = Object.fromEntries(entriesWithout(config.modelModes, model.id));
+       if (!enabled) modes[model.id] = "disabled";
+       return { ...config, modelModes: modes };
+@@ -1004,8 +1011,8 @@
+     return this.admin.setFormatOrder(blueprintIds);
+   }
+ 
+-  setSubscriptionModelEnabled(enabled: boolean): Promise<void> {
+-    return this.admin.setSubscriptionModelEnabled(enabled);
++  setSubscriptionModelEnabled(enabled: boolean, accountId?: string): Promise<void> {
++    return this.admin.setSubscriptionModelEnabled(enabled, accountId);
+   }
+ 
+   setGatewayModelMode(modelId: string, mode: GatewayModelMode): Promise<void> {
+diff --git a/packages/workshop-backend/src/ai-gateway.ts b/packages/workshop-backend/src/ai-gateway.ts
+--- a/packages/workshop-backend/src/ai-gateway.ts
++++ b/packages/workshop-backend/src/ai-gateway.ts
+@@ -5,7 +5,7 @@
+ import { readAdminConfig } from "./admin-config.js";
+ import type { AdminConfig } from "./storage-schema/admin-settings-storage.js";
+ import type { UserAiModelRecord } from "./storage-schema/user-storage.js";
+-import { isAdminManagedSubscription, SubscriptionModels } from "./subscription-models.js";
++import { isAdminManagedSubscription, readSubscriptionConnections, SubscriptionModels } from "./subscription-models.js";
+ 
+ // The model used for quick tasks like title generation when AI Gateway mode is active.
+ //
+@@ -327,7 +327,8 @@
+     readAuthoritativeConfig?: () => Promise<AdminConfig>): Promise<DeploymentModels | null> {
+   if (isAdminManagedSubscription(env)) {
+     if (!readAuthoritativeConfig) throw new Error("Admin-managed subscriptions require authoritative configuration.");
+-    return new SubscriptionModels(env, await readAuthoritativeConfig(), userId);
++    const [config, connections] = await Promise.all([readAuthoritativeConfig(), readSubscriptionConnections(env)]);
++    return new SubscriptionModels(env, config, userId, connections);
+   }
+   let gateway = getAiGatewayConfig(env);
+   if (!gateway) return null;
+diff --git a/packages/workshop-backend/src/ai-models.ts b/packages/workshop-backend/src/ai-models.ts
+--- a/packages/workshop-backend/src/ai-models.ts
++++ b/packages/workshop-backend/src/ai-models.ts
+@@ -922,8 +922,13 @@
+         config.apiUrl === undefined && !Object.keys(config.extraHeaders ?? {}).length) {
+       throw new Error("Please rebind this subscription model to establish its transport.");
+     }
+-    if ((!(models instanceof SubscriptionModels) || config.transport === "subscription") &&
+-        models?.get(config.model)?.provider === config.provider) {
++    if (config.transport === "subscription") {
++      if (!(models instanceof SubscriptionModels)) throw new Error("inference_bridge_not_configured");
++      const model = models.all.find(model => model.accountId === (config.subscriptionAccountId ?? "owner"));
++      if (!model || model.provider !== config.provider)
++        throw new Error("Unknown subscription connection.");
++      models.refuseDisabled(model.id);
++    } else if (!(models instanceof SubscriptionModels) && models?.get(config.model)?.provider === config.provider) {
+       models.refuseDisabled(config.model);
+     } else {
+       models?.refuseUserModel(this.ctx.props.displayName);
+diff --git a/packages/workshop-backend/src/user.ts b/packages/workshop-backend/src/user.ts
+--- a/packages/workshop-backend/src/user.ts
++++ b/packages/workshop-backend/src/user.ts
+@@ -68,7 +68,7 @@
+ 
+ /** Withholds the non-empty secrets of `config`, for returning it to a client. */
+ function redactModelConfig(config: AiModelConfig): RedactedAiModelConfig {
+-  let {apiToken, extraHeaders, transport, ...rest} = config;
++  let {apiToken, extraHeaders, transport, subscriptionAccountId, ...rest} = config;
+   return {
+     ...rest,
+     apiToken: withholdSecret(apiToken),
+@@ -84,7 +84,7 @@
+  */
+ function resolveWithheldSecrets(
+     config: RedactedAiModelConfig, source?: AiModelConfig): AiModelConfig {
+-  if (Object.hasOwn(config, "transport"))
++  if (Object.hasOwn(config, "transport") || Object.hasOwn(config, "subscriptionAccountId"))
+     throw new Error("Personal model transport is server-owned.");
+   let resolve = (secret: string | null, stored: string | undefined, what: string) => {
+     if (secret !== null) return secret;
+@@ -604,7 +604,7 @@
+ 
+     // capnweb-validate lets through properties that RedactedAiModelConfig omits, and these are a
+     // deployment's to set on its own models.
+-    let {reasoning, compactionInputBudget, behavesLike, capabilities, transport, ...own} = config;
++    let {reasoning, compactionInputBudget, behavesLike, capabilities, transport, subscriptionAccountId, ...own} = config;
+ 
+     profile.type = "agent";
+     this.storage.aiModels.put({profile, config: own});
+@@ -818,7 +818,7 @@
+     let record = models && !models.userModels ? undefined : this.storage.aiModels.get(id);
+     if (!record) return undefined;
+     // Older personal records can contain extra RPC fields; only the shared resolver grants transport.
+-    let {transport, ...config} = record.config;
++    let {transport, subscriptionAccountId, ...config} = record.config;
+     return {...record, config};
+   }
+ 
+diff --git a/packages/workshop-shared/src/api.ts b/packages/workshop-shared/src/api.ts
+--- a/packages/workshop-shared/src/api.ts
++++ b/packages/workshop-shared/src/api.ts
+@@ -1060,6 +1060,9 @@
+     enabled: boolean;
+     /** Whether users may configure personal providers beside the shared subscription. */
+     userModelsEnabled: boolean;
++    /** Named subscription objects with independent availability and safe connection status. */
++    connections: { id: string; accountId: string; name: string; provider: "siwc" | "codex" | null;
++      ready: boolean | null; enabled: boolean }[];
+     /** Same-origin setup path, present only when the deployment configures SIWC setup. */
+     setupUrl?: string;
+   };
+@@ -1243,7 +1246,7 @@
+    * Enable or disable the deployment's fixed admin-managed subscription model.
+    * Changes no credentials or account/model policy; throws outside admin-managed mode.
+    */
+-  setSubscriptionModelEnabled(enabled: boolean): Promise<void>;
++  setSubscriptionModelEnabled(enabled: boolean, accountId?: string): Promise<void>;
+ 
+   // --- AI Gateway models ---
+   //
+@@ -1748,6 +1751,9 @@
+ 
+ /** Configuration specifying how to connect to an AI model provider. */
+ export type AiModelConfig = {
++  /** Server-owned object selector, accepted only through the shared subscription catalog. */
++  subscriptionAccountId?: string;
++
+   /** Server-owned subscription routing provenance; never accepted from personal provider forms. */
+   transport?: "subscription";
+ 
+@@ -1832,7 +1838,7 @@
+  */
+ export type RedactedAiModelConfig = Omit<AiModelConfig,
+     "apiToken" | "extraHeaders" | "reasoning" | "compactionInputBudget" | "behavesLike" |
+-    "capabilities" | "transport"> & {
++    "capabilities" | "transport" | "subscriptionAccountId"> & {
+   /** `AiModelConfig.apiToken`, or null if withheld. */
+   apiToken: string | null;
+ 

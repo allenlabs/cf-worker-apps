@@ -6,7 +6,7 @@ const encoder = new TextEncoder();
 const jwks = new Map();
 const BODY_LIMIT = 20480;
 const emailPattern = /^[^\s@\x00-\x1f]+@[^\s@\x00-\x1f]+\.[^\s@\x00-\x1f]+$/;
-const safeErrors = new Set(["account_identity_policy_pinned", "account_provider_conflict", "account_registration_changed", "account_selection_changed", "oauth_busy", "selected_email_mismatch", "selected_user_mismatch", "selected_workspace_mismatch", "oauth_attempt_expired", "callback_state_mismatch", "authorization_declined", "plan_usage_scope_missing", "callback_uri_mismatch", "callback_parameter_repeated", "callback_issuer_mismatch", "callback_registration_incomplete", "callback_client_mismatch"]);
+const safeErrors = new Set(["account_identity_policy_pinned", "account_provider_conflict", "account_registration_changed", "account_selection_changed", "oauth_busy", "selected_email_mismatch", "selected_user_mismatch", "selected_workspace_mismatch", "oauth_attempt_expired", "callback_state_mismatch", "authorization_declined", "plan_usage_scope_missing", "callback_uri_mismatch", "callback_parameter_repeated", "callback_issuer_mismatch", "callback_registration_incomplete", "callback_client_mismatch", "subscription_account_not_found", "subscription_label_invalid", "subscription_configuration_invalid", "account_limit"]);
 
 class RequestError extends Error {
   constructor(code, status = 400) { super(code); this.status = status; }
@@ -114,48 +114,53 @@ export default {
         const nonce = crypto.randomUUID().replaceAll("-", "");
         return secure(new Response(subscriptionPage(nonce, config.mode, config.dual), { headers: { "content-type": "text/html; charset=utf-8" } }), nonce);
       }
-      if (!["/gatekeeper/subscription/status", "/gatekeeper/subscription/start", "/gatekeeper/subscription/complete", "/gatekeeper/subscription/refresh", "/gatekeeper/subscription/device/start", "/gatekeeper/subscription/device/check", "/gatekeeper/subscription/select", "/gatekeeper/subscription/account-info"].includes(url.pathname)) throw new RequestError("not_found", 404);
+      if (!["/gatekeeper/subscription/connections", "/gatekeeper/subscription/connections/create", "/gatekeeper/subscription/status", "/gatekeeper/subscription/start", "/gatekeeper/subscription/complete", "/gatekeeper/subscription/refresh", "/gatekeeper/subscription/device/start", "/gatekeeper/subscription/device/check", "/gatekeeper/subscription/select", "/gatekeeper/subscription/account-info"].includes(url.pathname)) throw new RequestError("not_found", 404);
       if (request.method !== "POST") throw new RequestError("method_not_allowed", 405);
       if (request.headers.get("origin") !== config.origin) throw new RequestError("origin_denied", 403);
-      const input = await body(request);
-      if (url.pathname === "/gatekeeper/subscription/account-info") {
-        if (Object.keys(input).length) throw new RequestError("body_invalid");
-        return secure(Response.json(await env.Credentials.getByName("owner").subscriptionAccountInfo()));
+      const supplied = await body(request);
+      if (url.pathname === "/gatekeeper/subscription/connections") {
+        if (Object.keys(supplied).length) throw new RequestError("body_invalid");
+        return secure(Response.json({ connections: await env.Credentials.getByName("owner").subscriptionConnections() }));
       }
-      if (["/gatekeeper/subscription/device/start", "/gatekeeper/subscription/device/check", "/gatekeeper/subscription/select"].includes(url.pathname)) {
-        if (!config.dual) throw new RequestError("not_found", 404);
-        const credentials = env.Credentials.getByName("owner");
-        if (url.pathname.endsWith("/start")) {
-          if (Object.keys(input).length !== 1 || input.planUsageConfirmed !== true) throw new RequestError("start_input_invalid");
-          const attempt = await credentials.startCodex("connect");
-          if (attempt.verificationUrl !== "https://auth.openai.com/codex/device" || typeof attempt.userCode !== "string" || attempt.userCode.length > 128 || !Number.isFinite(Date.parse(attempt.expiresAt)) || !Number.isFinite(Date.parse(attempt.nextCheckAt))) throw new RequestError("oauth_failed", 502);
-          return secure(Response.json(attempt));
-        }
-        if (url.pathname.endsWith("/check")) {
-          if (Object.keys(input).length) throw new RequestError("body_invalid");
-          await credentials.checkCodex();
-          return secure(Response.json(readiness(await credentials.status())));
-        }
-        if (Object.keys(input).length !== 1 || !["siwc", "codex"].includes(input.provider)) throw new RequestError("body_invalid");
-        return secure(Response.json(readiness(await credentials.selectProvider(input.provider))));
+      if (url.pathname === "/gatekeeper/subscription/connections/create") {
+        if (Object.keys(supplied).length !== 1 || typeof supplied.label !== "string" || !supplied.label.trim() || encoder.encode(supplied.label).length > 128 || /[\x00-\x1f\x7f]/.test(supplied.label)) throw new RequestError("subscription_label_invalid");
+        const owner = env.Credentials.getByName("owner");
+        const { id } = await owner.createSubscriptionConnection(supplied);
+        return secure(Response.json({ id, connections: await owner.subscriptionConnections() }));
       }
-      if (url.pathname === "/gatekeeper/subscription/status") {
-        if (Object.keys(input).length) throw new RequestError("body_invalid");
-        return secure(Response.json(readiness(await env.Credentials.getByName("owner").status())));
+      const { accountId, ...input } = supplied;
+      const code = url.pathname.endsWith("/start") ? "start_input_invalid" : url.pathname.endsWith("/complete") ? "callback_input_invalid" : "body_invalid";
+      if (Object.hasOwn(supplied, "accountId") && (typeof accountId !== "string" || !/^(?:owner|account-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/.test(accountId))) throw new RequestError(code);
+      if (url.pathname.endsWith("/start")) {
+        if (Object.keys(input).length !== 1 || input.planUsageConfirmed !== true) throw new RequestError(code);
+      } else if (url.pathname.endsWith("/complete")) {
+        if (Object.keys(input).length !== 1 || typeof input.callbackUrl !== "string" || input.callbackUrl.length > 16384) throw new RequestError(code);
+      } else if (url.pathname.endsWith("/select")) {
+        if (Object.keys(input).length !== 1 || !["siwc", "codex"].includes(input.provider)) throw new RequestError(code);
+      } else if (Object.keys(input).length) throw new RequestError(code);
+      if (["/gatekeeper/subscription/device/start", "/gatekeeper/subscription/device/check", "/gatekeeper/subscription/select"].includes(url.pathname) && !config.dual) throw new RequestError("not_found", 404);
+      const target = accountId === undefined ? "owner" : await env.Credentials.getByName("owner").resolveSubscriptionAccount(accountId);
+      const credentials = env.Credentials.getByName(target);
+      if (url.pathname.endsWith("/account-info")) return secure(Response.json(await credentials.subscriptionAccountInfo()));
+      if (url.pathname.endsWith("/device/start")) {
+        const attempt = await credentials.startCodex("connect");
+        if (attempt.verificationUrl !== "https://auth.openai.com/codex/device" || typeof attempt.userCode !== "string" || attempt.userCode.length > 128 || !Number.isFinite(Date.parse(attempt.expiresAt)) || !Number.isFinite(Date.parse(attempt.nextCheckAt))) throw new RequestError("oauth_failed", 502);
+        return secure(Response.json(attempt));
       }
-      if (url.pathname === "/gatekeeper/subscription/refresh") {
-        if (Object.keys(input).length) throw new RequestError("body_invalid");
-        return secure(Response.json(readiness(await env.Credentials.getByName("owner").refreshStatus())));
+      if (url.pathname.endsWith("/device/check")) {
+        await credentials.checkCodex();
+        return secure(Response.json(readiness(await credentials.status())));
       }
-      if (url.pathname === "/gatekeeper/subscription/start") {
-        if (Object.keys(input).length !== 1 || input.planUsageConfirmed !== true) throw new RequestError("start_input_invalid");
-        const attempt = await env.Credentials.getByName("owner").start(true, "connect");
+      if (url.pathname.endsWith("/select")) return secure(Response.json(readiness(await credentials.selectProvider(input.provider))));
+      if (url.pathname.endsWith("/status")) return secure(Response.json(readiness(await credentials.status())));
+      if (url.pathname.endsWith("/refresh")) return secure(Response.json(readiness(await credentials.refreshStatus())));
+      if (url.pathname.endsWith("/start")) {
+        const attempt = await credentials.start(true, "connect");
         const authorization = new URL(attempt.authorizationUrl);
         if (authorization.origin !== "https://auth.openai.com" || authorization.pathname !== "/api/accounts/authorize") throw new RequestError("oauth_failed", 502);
         return secure(Response.json({ authorizationUrl: authorization.href, expiresIn: attempt.expiresIn, manualCallbackRequired: true }));
       }
-      if (Object.keys(input).length !== 1 || typeof input.callbackUrl !== "string" || input.callbackUrl.length > 16384) throw new RequestError("callback_input_invalid");
-      return secure(Response.json(readiness(await env.Credentials.getByName("owner").complete(input.callbackUrl))));
+      return secure(Response.json(readiness(await credentials.complete(input.callbackUrl))));
     } catch (error) {
       const code = error instanceof RequestError || (safeErrors.has(error?.message) || /^(?:codex_image_(?:oauth_http_(?:400|401|403|404|429|500|502|503)|oauth_network_error|oauth_response_invalid|remote_denied|attempt_expired|attempt_failed_restart_login|identity_mismatch|identity_policy_changed|auth_busy|login_required|subscription_required|refresh_failed_restart_login)|subscription_connection_unavailable)$/.test(error?.message)) ? error.message : "oauth_failed";
       return secure(Response.json({ error: code }, { status: error instanceof RequestError ? error.status : 400 }));

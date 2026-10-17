@@ -65,6 +65,7 @@ export class Probe extends WorkerEntrypoint {
 `);
 await writeFile(join(work, "client.js"), `export default { async fetch(request, env) {
   const path=new URL(request.url).pathname;
+  if(path==='/connections')return Response.json(await env.BRIDGE.subscriptionConnections());
   if(path==='/events')return Response.json(await env.PROBE.events());
   if(path==='/session-calls')return Response.json(await env.SESSION.count());
   if(path==='/fail'){await env.PROBE.fail((await request.json()).value);return Response.json({ok:true});}
@@ -208,8 +209,8 @@ const inspect = async () => {
   const namespace = await mf.getDurableObjectNamespace("Credentials", "subscription");
   return (await namespace.get(namespace.idFromName("owner")).fetch("https://fixture.invalid/fixture-state")).json();
 };
-const start = async () => {
-  const response = await send("/gatekeeper/subscription/start", { planUsageConfirmed: true });
+const start = async (accountId) => {
+  const response = await send("/gatekeeper/subscription/start", { planUsageConfirmed: true, ...(accountId && {accountId}) });
   assert.equal(response.status, 200, await response.clone().text());
   const result = await response.json();
   assert.deepEqual(Object.keys(result).sort(), ["authorizationUrl", "expiresIn", "manualCallbackRequired"]);
@@ -239,6 +240,7 @@ try {
   const shell = await publicShell.text();
   assert.ok(shell.includes('id="setup-start" disabled') && shell.includes('id="setup-complete" disabled'));
   assert.ok(!shell.includes(email) && !shell.includes(oidcSubject) && !shell.includes(oidcIssuer) && !shell.includes(osToken));
+  for (const path of ["connections", "connections/create"]) await assertError(await oidcSend(null, {label:'Denied'}, path),401,"access_denied");
   for (const token of [null, "invalid", "x".repeat(300), sessionToken(5), sessionToken(6)]) await assertError(await oidcSend(token), 401, "access_denied");
   for (const token of [osOtherToken, sessionToken(3), sessionToken(4)]) await assertError(await oidcSend(token), 403, "admin_denied");
   await assertError(await oidcSend(null, {}, "status", { "cf-access-jwt-assertion": accessJwt(), "x-auth-email": email, "x-auth-subject": oidcSubject, "x-auth-issuer": oidcIssuer }), 401, "access_denied");
@@ -262,7 +264,7 @@ try {
   const freshProduction = await production.fetch(origin + "/gatekeeper/subscription/start", { method: "POST", headers: headers(), body: JSON.stringify({ planUsageConfirmed: true }) });
   assert.equal(freshProduction.status, 200);
   assert.equal(new URL((await freshProduction.json()).authorizationUrl).searchParams.get("client_id"), "dynamic_agent_client", "unmodified production starts a new namespace grant");
-  for (const path of ["/gatekeeper/subscription/device/start", "/gatekeeper/subscription/device/check", "/gatekeeper/subscription/select", "/gatekeeper/subscription/account-info", "/gatekeeper/subscription", "/gatekeeper/subscription/status", "/gatekeeper/subscription/start", "/gatekeeper/subscription/complete", "/gatekeeper/subscription/refresh"]) {
+  for (const path of ["/gatekeeper/subscription/connections", "/gatekeeper/subscription/connections/create", "/gatekeeper/subscription/device/start", "/gatekeeper/subscription/device/check", "/gatekeeper/subscription/select", "/gatekeeper/subscription/account-info", "/gatekeeper/subscription", "/gatekeeper/subscription/status", "/gatekeeper/subscription/start", "/gatekeeper/subscription/complete", "/gatekeeper/subscription/refresh"]) {
     await assertError(await send(path, {}, { headers: { origin, "content-type": "application/json" } }), 401, "access_denied");
   }
   for (const token of ["invalid", accessJwt({ iss: "https://wrong.example.invalid" }), accessJwt({ aud: "wrong" }), accessJwt({ exp: 1 }), accessJwt({ nbf: Math.floor(Date.now() / 1000) + 3600 }), accessJwt({}, openaiKeys), accessJwt({ exp: undefined }), accessJwt({ sub: undefined }), accessJwt({ iat: "invalid" }), accessJwt({ iat: Math.floor(Date.now() / 1000) + 3600 })]) {
@@ -553,11 +555,77 @@ try {
   await send('/gatekeeper/subscription/device/start',{planUsageConfirmed:true}); await deviceTime({nextAt:Date.now()-1});
   const reconnectedDevice=await send('/gatekeeper/subscription/device/check'); assert.equal(reconnectedDevice.status,200); assert.equal((await reconnectedDevice.json()).inferenceReady,true,'same-account reconnect works after disconnect');
   claimsOverride={};
+  const readsBeforeNamed = {account:accountReads,usage:usageReads};
+  const excludedId = 'account-00000000-0000-0000-0000-000000000001';
+  const unknownId = 'account-00000000-0000-0000-0000-000000000002';
+  const fixedSelection = {mode:'fixed',defaultAccountId:'owner',poolAccountIds:[]};
+  await put({adminAccounts:[{id:'owner',label:'owner',createdAt:null},{id:excludedId,label:'Other inventory account'}], accountSelection:fixedSelection, defaultAccountId:'owner'});
+  const create = async label => {
+    const response=await send('/gatekeeper/subscription/connections/create',{label});
+    assert.equal(response.status,200,await response.clone().text());return response.json();
+  };
+  for (const label of ['', 'x'.repeat(129), '한'.repeat(43), 'bad\nlabel']) await assertError(await send('/gatekeeper/subscription/connections/create',{label}),400,'subscription_label_invalid');
+  await assertError(await send('/gatekeeper/subscription/connections/create',{label:'Named',email}),400,'subscription_label_invalid');
+  const createdA=await create('Connection A'), connectionA=createdA.id;
+  const createdB=await create('Connection B'), connectionB=createdB.id;
+  assert.match(connectionA,/^account-/);assert.notEqual(connectionA,connectionB);
+  assert.deepEqual(createdB.connections.map(row=>row.id),['owner',connectionA,connectionB],'unrelated inventory accounts do not enter the subscription catalog');
+  assert.deepEqual((await inspect()).accountSelection,fixedSelection);assert.equal((await inspect()).defaultAccountId,'owner');
+  const catalogRows=(await inspect()).adminAccounts;
+  assert.equal(catalogRows.find(row=>row.id===connectionA).subscriptionSetup,true);
+  assert.ok(!Object.hasOwn(catalogRows.find(row=>row.id===connectionA),'expectedEmail'),'named setup creates no email policy');
+  const beforeUnknownEvents=(await events()).length, beforeUnknownOutbound=outboundUrls.length;
+  for (const accountId of [unknownId,excludedId]) {
+    await assertError(await send('/gatekeeper/subscription/status',{accountId}),400,'subscription_account_not_found');
+    await assertError(await send('/gatekeeper/subscription/start',{accountId,planUsageConfirmed:true}),400,'subscription_account_not_found');
+    const denied=await privateClient.fetch('https://fixture.invalid/infer',{method:'POST',body:JSON.stringify(wire({subscriptionAccountId:accountId}))});
+    assert.equal(denied.status,403);
+  }
+  assert.equal((await events()).length,beforeUnknownEvents,'unknown selectors never construct or inspect a target object');
+  assert.equal(outboundUrls.length,beforeUnknownOutbound,'unknown selectors never make outbound calls');
+  const targetObject=id=>namespace.get(namespace.idFromName(id));
+  const targetState=async id=>(await targetObject(id).fetch('https://fixture.invalid/fixture-state')).json();
+  const ownerBeforeNamed=await inspect();
+  claimsOverride={sub:'synthetic-openai-A',email:'subscriber-a@example.invalid','https://api.openai.com/auth':{chatgpt_plan_type:'pro',chatgpt_account_id:'synthetic-account-A'}};
+  const authorizationA=await start(connectionA);
+  assert.equal((await targetState(connectionB)).pending,undefined);
+  const completeA=await send('/gatekeeper/subscription/complete',{accountId:connectionA,callbackUrl:callback(authorizationA)});
+  assert.equal(completeA.status,200,await completeA.clone().text());assert.equal((await completeA.json()).provider,'siwc');
+  claimsOverride={};
+  const deviceAccountBeforeNamed=deviceAccount, deviceSubjectBeforeNamed=deviceSubject;
+  deviceAccount='synthetic-account-B';deviceSubject='synthetic-openai-B';
+  assert.equal((await send('/gatekeeper/subscription/device/start',{accountId:connectionB,planUsageConfirmed:true})).status,200);
+  await targetObject(connectionB).fetch('https://fixture.invalid/fixture-device-time',{method:'POST',body:JSON.stringify({nextAt:Date.now()-1})});
+  assert.equal((await send('/gatekeeper/subscription/device/check',{accountId:connectionB})).status,200);
+  const namedCatalog=(await (await send('/gatekeeper/subscription/connections')).json()).connections;
+  assert.deepEqual(namedCatalog.map(row=>[row.id,row.provider,row.ready]),[['owner','codex',true],[connectionA,'siwc',true],[connectionB,'codex',true]]);
+  for (const row of namedCatalog) assert.deepEqual(Object.keys(row).sort(),['id','label','provider','ready']);
+  assert.deepEqual({account:accountReads,usage:usageReads},readsBeforeNamed,'catalog reads local readiness without usage requests');
+  assert.deepEqual(await (await privateClient.fetch('https://fixture.invalid/connections')).json(),namedCatalog,'trusted catalog needs no user ID');
+  for (const accountId of [connectionA,connectionB,'owner',undefined]) {
+    if(accountId==='owner'||accountId===undefined) deviceAccount=deviceAccountBeforeNamed;
+    const response=await privateClient.fetch('https://fixture.invalid/infer',{method:'POST',body:JSON.stringify(wire(accountId?{subscriptionAccountId:accountId}:{}))});
+    assert.equal(response.status,200);assert.ok((await response.text()).includes('"type":"done"'));
+  }
+  const outboundBeforeDenied=outboundUrls.length, eventsBeforeDenied=(await events()).length;
+  assert.equal((await privateClient.fetch('https://fixture.invalid/infer',{method:'POST',body:JSON.stringify(wire({userId:other,subscriptionAccountId:connectionA}))})).status,403);
+  assert.equal(outboundUrls.length,outboundBeforeDenied);assert.equal((await events()).length,eventsBeforeDenied,'allowlist is checked before catalog, object and credential access');
+  const namedA=await targetState(connectionA),namedB=await targetState(connectionB);
+  assert.ok(namedA.credential.ciphertext && namedB.codexImageProfile.ciphertext);
+  assert.equal(namedA.codexImageProfile,undefined);assert.equal(namedB.credential,undefined);
+  const ownerAfterNamed=await inspect();
+  for(const key of ['credential','registration','codexImageProfile','codexRegistration','subscriptionProvider','subscriptionAccountInfo']) assert.deepEqual(ownerAfterNamed[key],ownerBeforeNamed[key],'named connections preserve legacy owner state');
+  const storedInventory=ownerAfterNamed.adminAccounts;
+  await put({adminAccounts:[...storedInventory,...Array.from({length:20-storedInventory.length},(_,i)=>({id:`account-00000000-0000-0000-0000-${String(i+10).padStart(12,'0')}`,label:'Inventory fixture'}))]});
+  await assertError(await send('/gatekeeper/subscription/connections/create',{label:'Over limit'}),400,'account_limit');
+  await put({adminAccounts:storedInventory});
+  deviceAccount=deviceAccountBeforeNamed;deviceSubject=deviceSubjectBeforeNamed;
+  const browserConnections={connections:[{id:'owner',label:'owner',provider:'siwc',ready:true}]};
   const posted = [];
   const dom = new JSDOM(subscriptionPage("synthetic-nonce"), { url: origin + "/gatekeeper/subscription", runScripts: "dangerously", beforeParse(window) {
     window.fetch = async (url, options) => {
       posted.push({ url, options });
-      return { ok: true, json: async () => url.endsWith("/start") ? { authorizationUrl: "https://auth.openai.com/api/accounts/authorize?synthetic" } : ready };
+      return { ok: true, json: async () => url.endsWith("/connections") ? browserConnections : url.endsWith("/start") ? { authorizationUrl: "https://auth.openai.com/api/accounts/authorize?synthetic" } : ready };
     };
   } });
   try {
@@ -596,7 +664,7 @@ try {
   const browserCodex = {...ready,provider:'codex',codexInferenceReady:true,device:null,identity:{...ready.identity,email:'device@example.invalid'}};
   const deviceDom = new JSDOM(subscriptionPage('synthetic-nonce','access',true),{url:origin+'/gatekeeper/subscription',runScripts:'dangerously',beforeParse(window){
     window.setTimeout=(callback,delay)=>{const id=++timerId;timers.set(id,{callback,delay});return id;};window.clearTimeout=id=>timers.delete(id);
-    window.fetch=async(url,options)=>{devicePosts.push({url,options});const value=url.endsWith('/device/start')?browserAttempt:url.endsWith('/device/check')?browserCodex:url.endsWith('/account-info')?{checkedAt:new Date().toISOString(),account:{status:'available',workspaceName:'Selected browser workspace',planType:'plus'},usage:{status:'available',planType:'plus',primaryWindow:{usedPercent:12,resetAt:1800000000}}}:ready;return{ok:true,status:200,json:async()=>value};};
+    window.fetch=async(url,options)=>{devicePosts.push({url,options});const value=url.endsWith('/connections')?browserConnections:url.endsWith('/device/start')?browserAttempt:url.endsWith('/device/check')?browserCodex:url.endsWith('/account-info')?{checkedAt:new Date().toISOString(),account:{status:'available',workspaceName:'Selected browser workspace',planType:'plus'},usage:{status:'available',planType:'plus',primaryWindow:{usedPercent:12,resetAt:1800000000}}}:ready;return{ok:true,status:200,json:async()=>value};};
   }});
   try {
     await new Promise(resolve=>setImmediate(resolve));
@@ -625,6 +693,58 @@ try {
     assert.equal(deviceDom.window.localStorage.length,0); assert.equal(deviceDom.window.sessionStorage.length,0);
     assert.deepEqual(JSON.parse(devicePosts.find(item=>item.url.endsWith('/device/start')).options.body),{planUsageConfirmed:true});
   } finally {deviceDom.window.close();}
+  const namedPosts=[], namedTimers=new Map(), held=new Map();let namedTimerId=0;
+  const browserA='account-00000000-0000-0000-0000-000000000011',browserB='account-00000000-0000-0000-0000-000000000012',browserC='account-00000000-0000-0000-0000-000000000013';
+  const namedConnections=[{id:'owner',label:'owner',provider:'siwc',ready:true},{id:browserA,label:'Connection A',provider:'siwc',ready:true},{id:browserB,label:'Connection B',provider:'siwc',ready:true}];
+  const namedStatus=id=>({...ready,provider:'siwc',codexInferenceReady:true,identity:{...ready.identity,email:id+'@example.invalid'}});
+  const hold=(path,id)=>{let release;const promise=new Promise(resolve=>release=resolve);held.set(path+':'+id,promise);return release;};
+  const flush=()=>new Promise(resolve=>setImmediate(resolve));
+  const namedDom=new JSDOM(subscriptionPage('synthetic-nonce','access',true),{url:origin+'/gatekeeper/subscription#add',runScripts:'dangerously',beforeParse(window){
+    window.setTimeout=(callback,delay)=>{const id=++namedTimerId;namedTimers.set(id,{callback,delay});return id;};window.clearTimeout=id=>namedTimers.delete(id);
+    window.fetch=async(url,options)=>{
+      const input=JSON.parse(options.body),id=input.accountId??'owner',path=url.slice('/gatekeeper/subscription/'.length);namedPosts.push({path,input});
+      let value;
+      const waiting=held.get(path+':'+id);
+      if(waiting){held.delete(path+':'+id);value=await waiting;}
+      else if(path==='connections') value={connections:namedConnections};
+      else if(path==='connections/create'){namedConnections.push({id:browserC,label:input.label,provider:'siwc',ready:false});value={id:browserC,connections:namedConnections};}
+      else if(path==='account-info')value={account:{status:'available',workspaceName:id},usage:{status:'unavailable'}};
+      else if(path==='device/start')value=browserAttempt;
+      else value=namedStatus(id);
+      return{ok:true,status:200,json:async()=>value};
+    };
+  }});
+  try{
+    await flush();const document=namedDom.window.document,Event=namedDom.window.Event;
+    assert.equal(document.activeElement.id,'connection-label','#add focuses the named add form');
+    assert.equal(document.getElementById('connection-select').options.length,3);
+    document.getElementById('connection-label').value='Connection C';document.getElementById('add-connection').dispatchEvent(new Event('submit',{cancelable:true}));await flush();
+    assert.equal(document.getElementById('connection-select').value,browserC);assert.equal(document.getElementById('connection-select').options.length,4);
+    assert.deepEqual(namedPosts.find(item=>item.path==='connections/create').input,{label:'Connection C'});
+    const select=id=>{document.getElementById('connection-select').value=id;document.getElementById('connection-select').dispatchEvent(new Event('change'));};
+    const releaseInfo=hold('account-info',browserA);select(browserA);await flush();
+    const releaseStart=hold('start',browserA),releaseComplete=hold('complete',browserA),releaseRefresh=hold('refresh',browserA),releaseDevice=hold('device/start',browserA);
+    document.getElementById('approval').checked=true;document.getElementById('start').dispatchEvent(new Event('submit',{cancelable:true}));
+    document.getElementById('callback').value='http://127.0.0.1:1455/auth/callback?synthetic';document.getElementById('complete').dispatchEvent(new Event('submit',{cancelable:true}));
+    document.getElementById('metadata-refresh').click();document.getElementById('device-approval').checked=true;document.getElementById('device-start').dispatchEvent(new Event('submit',{cancelable:true}));
+    document.getElementById('callback').value='discard-on-switch';select(browserB);await flush();
+    releaseInfo({account:{status:'available',workspaceName:'Stale A workspace'},usage:{status:'available',primaryWindow:{usedPercent:99}}});
+    releaseStart({authorizationUrl:'https://auth.openai.com/api/accounts/authorize?stale'});releaseComplete(namedStatus(browserA));releaseRefresh(namedStatus(browserA));releaseDevice(browserAttempt);await flush();
+    assert.ok(document.getElementById('identity').textContent.includes(browserB));assert.ok(!document.getElementById('identity').textContent.includes(browserA),'same-provider stale identity is ignored');
+    assert.ok(document.getElementById('account-info').textContent.includes(browserB));assert.ok(!document.getElementById('account-info').textContent.includes('99%'));
+    assert.equal(document.getElementById('authorization').hidden,true);assert.equal(document.getElementById('login').hasAttribute('href'),false);
+    assert.equal(document.getElementById('callback').value,'');assert.equal(document.getElementById('device').hidden,true);assert.equal(namedTimers.size,0);
+    for(const path of ['start','complete','refresh','device/start','account-info'])assert.ok(namedPosts.some(item=>item.path===path&&item.input.accountId===browserA),'every request captures its target');
+    select(browserA);await flush();document.getElementById('device-approval').checked=true;document.getElementById('device-start').dispatchEvent(new Event('submit',{cancelable:true}));await flush();
+    assert.equal(namedTimers.size,1);const releasePoll=hold('device/check',browserA),poll=[...namedTimers.values()][0].callback();await flush();select(browserB);await flush();
+    releasePoll(namedStatus(browserA));await poll;assert.equal(namedTimers.size,0);assert.ok(document.getElementById('identity').textContent.includes(browserB),'late poll never changes selected identity');
+    const releaseStatus=hold('status',browserA);select(browserA);select(browserB);await flush();releaseStatus(namedStatus(browserA));await flush();
+    assert.ok(document.getElementById('identity').textContent.includes(browserB),'late status never changes selected identity');
+    namedDom.window.location.hash='connection='+browserA;namedDom.window.dispatchEvent(new namedDom.window.HashChangeEvent('hashchange'));await flush();assert.equal(document.getElementById('connection-select').value,browserA,'known hash selects its connection');
+    namedDom.window.location.hash='connection='+unknownId;namedDom.window.dispatchEvent(new namedDom.window.HashChangeEvent('hashchange'));await flush();assert.equal(document.getElementById('connection-select').value,browserA,'unknown hash does not select a target');
+    select(browserB);await flush();document.getElementById('refresh').click();await flush();assert.equal(document.getElementById('connection-select').value,browserB,'refresh preserves the current editor selection');
+    assert.equal(namedDom.window.localStorage.length,0);assert.equal(namedDom.window.sessionStorage.length,0);
+  }finally{namedDom.window.close();}
   for (const failureAt of ['initial', 'start', 'complete']) {
     const unauthorized = failureAt === 'initial';
     let denied = unauthorized;
@@ -638,7 +758,7 @@ try {
       window.fetch = async (url, options) => {
         postedOidc.push({ url, options });
         if (postedOidc.length === 1) await statusWait;
-        return { ok: !denied, status: denied ? 401 : 200, json: async () => denied ? { error: "access_denied" } : ready };
+        return { ok: !denied, status: denied ? 401 : 200, json: async () => denied ? { error: "access_denied" } : url.endsWith("/connections") ? browserConnections : ready };
       };
     } });
     try {
@@ -693,5 +813,5 @@ try {
   assert.equal(oidcConfig.vars.CF_ACCESS_AUD, undefined);
   assert.deepEqual(oidcConfig.durable_objects, config.durable_objects);
   assert.deepEqual(oidcConfig.migrations, config.migrations);
-  console.log(JSON.stringify({ result: "PASS", nativeRuntime: "Miniflare/workerd", checks: ["Access signature/issuer/audience/expiry/admin", "OIDC private session and exact issuer/subject/email pins before Credentials", "OIDC static shell and authenticated UI gating", "same-origin JSON bounded requests before DO", "automatic verified SIWC identity, legacy pins and concurrent registration conflicts", "independent encrypted SIWC and Codex completion in either order", "device empty/arbitrary pending objects, interval, expiry and terminal denial or invalid response", "explicit active transport and unavailable selection fails closed", "account cache privacy and in-flight selection change", "both login choices and bounded device polling with navigation guard", "automatic metadata and manual callback UI with no browser persistence"], tokenCalls, inferenceCalls, temporaryBuild: work }));
+  console.log(JSON.stringify({ result: "PASS", nativeRuntime: "Miniflare/workerd", checks: ["Access signature/issuer/audience/expiry/admin", "OIDC private session and exact issuer/subject/email pins before Credentials", "OIDC static shell and authenticated UI gating", "same-origin JSON bounded requests before DO", "automatic verified SIWC identity, legacy pins and concurrent registration conflicts", "independent encrypted SIWC and Codex completion in either order", "device empty/arbitrary pending objects, interval, expiry and terminal denial or invalid response", "explicit active transport and unavailable selection fails closed", "account cache privacy and in-flight selection change", "both login choices and bounded device polling with navigation guard", "automatic metadata and manual callback UI with no browser persistence", "owner plus two named isolated connections, bounded catalog and explicit private inference selectors", "rendered add/list/switch ignores late status, login, metadata and device-poll responses"], tokenCalls, inferenceCalls, temporaryBuild: work }));
 } finally { await mf.dispose(); }

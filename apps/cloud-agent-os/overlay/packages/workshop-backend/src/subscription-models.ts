@@ -11,7 +11,7 @@ import type { UserAiModelRecord } from "./storage-schema/user-storage.js";
 type SubscriptionEnvironment = {
   CODEX_BRIDGE_MANAGEMENT?: string;
   CODEX_BRIDGE_SETUP?: string;
-  CODEX_BRIDGE?: unknown;
+  CODEX_BRIDGE?: { subscriptionConnections(): Promise<unknown> };
   CODEX_BRIDGE_MODEL?: string;
   CODEX_BRIDGE_ALLOWED_USER_IDS?: string;
 };
@@ -21,19 +21,45 @@ export function isAdminManagedSubscription(env: Cloudflare.Env & SubscriptionEnv
   return env.CODEX_BRIDGE_MANAGEMENT === "admin";
 }
 
-/** A fixed, credential-free catalog; the existing bridge retains account and inference authority. */
+export const subscriptionAccountIdSchema = z.union([
+  z.literal("owner"),
+  z.string().regex(/^account-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
+]);
+const subscriptionConnectionsSchema = z.array(z.object({
+  id: subscriptionAccountIdSchema,
+  label: z.string().trim().min(1).max(128).refine(value => new TextEncoder().encode(value).length <= 128 && !/[\u0000-\u001f\u007f]/.test(value)),
+  provider: z.enum(["siwc", "codex"]),
+  ready: z.boolean(),
+}).strict()).min(1).max(20).refine(connections =>
+  connections.some(connection => connection.id === "owner") &&
+  new Set(connections.map(connection => connection.id)).size === connections.length,
+);
+export type SubscriptionConnections = z.infer<typeof subscriptionConnectionsSchema>;
+
+/** Parse the private binding's safe catalog without granting model access to its caller. */
+export async function readSubscriptionConnections(env: Cloudflare.Env & SubscriptionEnvironment): Promise<SubscriptionConnections | undefined> {
+  if (env.CODEX_BRIDGE_SETUP !== "siwc") return undefined;
+  if (!env.CODEX_BRIDGE) throw new Error("inference_bridge_not_configured");
+  return subscriptionConnectionsSchema.parse(await env.CODEX_BRIDGE.subscriptionConnections());
+}
+
+/** A credential-free catalog; the bridge retains account and inference authority. */
 export class SubscriptionModels {
   readonly transport = "subscription";
   readonly providers: ReadonlySet<AiModelProvider> = new Set(["openai"]);
   readonly userModels: boolean;
   readonly setupUrl?: string;
-  readonly all: readonly { id: string; name: string; provider: "openai"; mode: GatewayModelMode }[];
+  readonly all: readonly { id: string; name: string; provider: "openai"; mode: GatewayModelMode;
+    accountId: string; subscriptionProvider: SubscriptionConnections[number]["provider"] | null; ready: boolean | null }[];
+  readonly #selectable: boolean;
+  readonly #physicalModel: string;
   readonly #authorized: boolean;
 
   constructor(
     env: Cloudflare.Env & SubscriptionEnvironment,
     config: Pick<AdminConfig, "modelModes" | "userModelsEnabled">,
-    userId?: string,
+    userId: string | undefined,
+    connections: SubscriptionConnections | undefined,
   ) {
     if (!isAdminManagedSubscription(env))
       throw new Error("This subscription is not admin-managed.");
@@ -56,10 +82,14 @@ export class SubscriptionModels {
     this.userModels = config.userModelsEnabled;
     this.setupUrl = env.CODEX_BRIDGE_SETUP === "siwc" ? "/gatekeeper/subscription" : undefined;
     this.#authorized = userId !== undefined && allowed.data.includes(userId);
-    const mode = Object.hasOwn(config.modelModes, catalog.id)
-      ? config.modelModes[catalog.id]
-      : "enabled";
-    this.all = [{ id: catalog.id, name: "Codex subscription", provider: "openai", mode }];
+    this.#physicalModel = catalog.id;
+    this.#selectable = connections !== undefined;
+    this.all = (connections ?? [{ id: "owner", label: "Codex subscription", provider: null, ready: null }]).map(connection => {
+      const id = connection.id === "owner" ? catalog.id : `subscription-${connection.id}`;
+      const mode = Object.hasOwn(config.modelModes, id) ? config.modelModes[id] : "enabled";
+      return { id, name: connection.label, provider: "openai", mode, accountId: connection.id,
+        subscriptionProvider: connection.provider, ready: connection.ready };
+    });
   }
 
   get(id: string) {
@@ -78,7 +108,8 @@ export class SubscriptionModels {
     if (!this.#authorized || !model || model.mode === "disabled") return undefined;
     return {
       profile: { type: "agent", id: model.id, name: model.name },
-      config: { provider: "openai", model: model.id, apiToken: "", transport: "subscription" },
+      config: { provider: "openai", model: this.#physicalModel, apiToken: "", transport: "subscription",
+        ...(this.#selectable ? { subscriptionAccountId: model.accountId } : {}) },
     };
   }
 

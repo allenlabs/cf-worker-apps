@@ -25,6 +25,7 @@ const message = z.discriminatedUnion("role", [
 ]);
 const requestSchema = z.object({
   version: z.literal(1), requestId: z.uuid(), userId: z.email().max(254),
+  subscriptionAccountId: z.string().regex(/^(?:owner|account-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/).optional(),
   context: z.object({ systemPrompt: text.optional(), messages: z.array(message).min(1).max(256), tools: z.array(tool).max(64).optional() }).strict(),
   options: z.object({ reasoning: z.enum(["minimal", "low", "medium", "high", "xhigh"]).optional(), maxTokens: z.number().int().min(1).max(8192).optional() }).strict()
 }).strict();
@@ -152,6 +153,11 @@ class InferenceCancellation extends RpcTarget {
 
 /** Inference capability for a trusted Worker binding; deliberately has no HTTP handler. */
 export class CloudAgentInference extends WorkerEntrypoint {
+  async subscriptionConnections() {
+    policy(this.env);
+    return this.env.Credentials.getByName("owner").subscriptionConnections();
+  }
+
   async infer(value) {
     const configured = policy(this.env);
     let size;
@@ -161,7 +167,8 @@ export class CloudAgentInference extends WorkerEntrypoint {
     if (!parsed.success) fail("inference_bridge_input_invalid");
     const input = parsed.data;
     if (!configured.users.includes(input.userId)) fail("inference_bridge_user_denied");
-    const credentials = this.env.Credentials.getByName(configured.accountId);
+    const accountId = input.subscriptionAccountId === undefined ? configured.accountId : await this.env.Credentials.getByName("owner").resolveSubscriptionAccount(input.subscriptionAccountId);
+    const credentials = this.env.Credentials.getByName(accountId);
     const status = await credentials.status();
     if (configured.provider === "auto") {
       if (!["siwc", "codex"].includes(status.provider)) fail("inference_bridge_account_unavailable");
