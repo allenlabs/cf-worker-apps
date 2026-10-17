@@ -38,10 +38,28 @@ let tokenFailure = null, providerFailure = null, malformedToken = false, provide
 let outboundCalls = 0;
 const providerCalls = [];
 const privateFailure = "fixture-private-code-token-nonce-email-url-stack";
+const diagnosticMessages = [];
 async function expectFailure(response, code, status = 400) {
   assert.equal(response.status, status, `HTTP status for ${code}`);
-  assert.equal(await response.text(), `Sign-in failed (${code}). Restart sign-in from the application.`,
-    `fixed, credential-free diagnostic for ${code}`);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+  assert.match(response.headers.get("content-type"), /^text\/html;/);
+  const html = await response.text();
+  assert.ok(html.includes(`<h1>Sign-in failed (${code})</h1>`), `fixed diagnostic for ${code}`);
+  assert.ok(html.includes(`<a href="${origin}/" target="_blank" rel="noopener noreferrer">Restart sign-in</a>`),
+    "recovery opens the configured application root in a fresh tab");
+  for (const value of [privateFailure, email, subject, clientId, secret, "fixture-code", "fixture-refresh-token"])
+    assert.ok(!html.includes(value), "failure page exposes no request, identity or provider credentials");
+  assert.equal((html.match(/href=/g) ?? []).length, 1, "only the fixed recovery destination is linked");
+}
+async function expectExpiry(phase, reason, request) {
+  const before = diagnosticMessages.length, exchanges = calls;
+  await expectFailure(await request(), "sign_in_attempt_expired");
+  for (let count = 0; diagnosticMessages.length === before && count < 20; count++)
+    await new Promise(resolve => setTimeout(resolve, 5));
+  assert.deepEqual(diagnosticMessages.slice(before).map(message => JSON.parse(message)),
+    [{event: "sign_in_attempt_expired", phase, reason}], "only fixed expiry classifications are logged");
+  assert.equal(calls, exchanges, "rejected attempts never exchange a code");
 }
 const jwt = () => {
   const header = Buffer.from(JSON.stringify({ alg, kid: "fixture", ...headerOverride })).toString("base64url");
@@ -101,6 +119,12 @@ export class OidcLogin extends BaseLogin {
       const nonce = this.ctx.storage.kv.get('nonce');
       if(nonce) this.ctx.storage.kv.put('nonce', {...nonce, expiresAt: 0});
     }
+    if(path === '/missing-nonce') this.ctx.storage.kv.delete('nonce');
+    if(path === '/wrong-stage') {
+      const nonce = this.ctx.storage.kv.get('nonce');
+      if(nonce) this.ctx.storage.kv.put('nonce', {...nonce, stage: nonce.stage === 'oauth' ? 'initiation' : 'oauth'});
+    }
+    if(path === '/missing-callback') this.ctx.storage.kv.delete('callback');
     return Response.json({keys: [...(await this.ctx.storage.list()).keys()], email: await this.email()});
   }
 }
@@ -171,7 +195,7 @@ export default {
     const auth = {...options, bindings:{...bindings,...changes},
       ...(providerService && !Object.hasOwn(changes,"IDENTITY_PROVIDER")
         ? {serviceBindings:{IDENTITY_PROVIDER:"identity-provider-check"}} : {})};
-    return new Miniflare(convertV4MiniflareOptions({cf:false,...(providerService ? {workers:[auth, {
+    return new Miniflare(convertV4MiniflareOptions({cf:false, handleStructuredLogs:log=>{ diagnosticMessages.push(log.message); },...(providerService ? {workers:[auth, {
       name:"identity-provider-check", modules:true, compatibilityDate:"2026-10-04",
       script:`export default { fetch(request,env) {
         request = new Request(request);
@@ -181,10 +205,13 @@ export default {
     }]} : auth)}));
   };
   const mf = make({});
-  const start = async (instance = mf,delay=0) => {
+  const initiate = async (instance = mf,delay=0) => {
     const response = await instance.dispatchFetch(`${origin}/test/start`,{method:"POST",body:JSON.stringify({scopes:"auth",delay})});
     assert.equal(response.status,200,await response.clone().text());
-    const {url} = await response.json();
+    return response.json();
+  };
+  const start = async (instance = mf,delay=0) => {
+    const {url} = await initiate(instance,delay);
     const begun = await instance.dispatchFetch(url,{redirect:"manual"});
     return {url,begun};
   };
@@ -208,11 +235,11 @@ export default {
   const complete = attempt => mf.dispatchFetch(callback(attempt.authorization));
   const inspect = async (attempt,path="/state") => {
     const namespace = await mf.getDurableObjectNamespace("OidcLogin");
-    return (await namespace.get(namespace.idFromString(attempt.authorization.searchParams.get("state").split(":")[0])).fetch(`https://test.invalid${path}`)).json();
+    return (await namespace.get(namespace.idFromString(new URL(attempt.url).pathname.split("/")[3])).fetch(`https://test.invalid${path}`)).json();
   };
   try {
     let attempt = await authorize();
-    await expectFailure(await mf.dispatchFetch(attempt.url),"sign_in_attempt_expired");
+    await expectExpiry("begin", "wrong_stage", () => mf.dispatchFetch(attempt.url));
     let result = await complete(attempt);
     assert.equal(result.status,200,await result.clone().text());
     const html = await result.text();
@@ -227,7 +254,25 @@ export default {
       {url:`${issuer}/token`,method:"POST"}, {url:`${issuer}/jwks`,method:"GET"}], "canonical metadata, token and JWKS request URLs");
     assert.equal(outboundCalls,0,"service-bound provider requests never use global outbound fetch");
     const count = calls;
-    await expectFailure(await complete(attempt),"sign_in_attempt_expired"); assert.equal(calls,count,"no repeated code exchange");
+    await expectExpiry("callback", "state_missing", () => complete(attempt)); assert.equal(calls,count,"no repeated code exchange");
+    for (const phase of ["begin", "callback"]) {
+      for (const [path, reason] of [["/missing-nonce", "state_missing"], ["/wrong-stage", "wrong_stage"], ["/expire", "expired"], [null, "state_mismatch"]]) {
+        const rejected = phase === "begin" ? await initiate() : await authorize();
+        if (path) await inspect(rejected, path);
+        const request = new URL(phase === "begin" ? rejected.url : callback(rejected.authorization));
+        if (!path) {
+          if (phase === "begin") request.pathname = request.pathname.slice(0,-1) + (request.pathname.endsWith("0") ? "1" : "0");
+          else {
+            const state = request.searchParams.get("state");
+            request.searchParams.set("state", state.slice(0,-1) + (state.endsWith("0") ? "1" : "0"));
+          }
+        }
+        await expectExpiry(phase, reason, () => mf.dispatchFetch(request));
+      }
+    }
+    const missingCallback = await authorize(); await inspect(missingCallback, "/missing-callback");
+    await expectExpiry("callback", "callback_missing", () => complete(missingCallback));
+    assert.deepEqual(await inspect(missingCallback), {keys:[],email:null}, "claimed callbacks still clear transient state");
 
     const invalidClaims = oauthJwt ? [
       {iss:"https://other.example.invalid"}, {iss:undefined}, {aud:"other-resource"}, {aud:undefined}, {aud:[resource]}, {aud:[resource,"another"]},
@@ -378,12 +423,32 @@ export default {
         assert.equal(providerCalls.length,before,"malformed provider binding is rejected before requests");
       } finally { await invalidInstance.dispose(); }
     }
+    const invalidOrigin = make({PUBLIC_BASE_URL: `${origin}/?returnTo=https://other.example.invalid/`});
+    try {
+      const response = await invalidOrigin.dispatchFetch(`${origin}/gatekeeper/oidc/oauth?code=${privateFailure}`);
+      assert.equal(response.status, 503);
+      assert.equal(response.headers.get("cache-control"), "no-store");
+      const html = await response.text();
+      assert.ok(html.includes("Sign-in failed (invalid_sign_in_configuration)"));
+      assert.ok(!html.includes("href="), "invalid configuration never supplies a recovery destination");
+      assert.ok(!html.includes(privateFailure), "invalid configuration never reflects callback parameters");
+      assert.ok(!html.includes("other.example.invalid"), "unvalidated configured URLs are never linked");
+    } finally { await invalidOrigin.dispose(); }
     const loginInstance=make({OIDC_LOGIN_URL:"https://login.example.invalid/sign-in",OIDC_LOGIN_SITE:"example"});
     try {
       const login=await start(loginInstance); const entry=new URL(login.begun.headers.get("location"));
       assert.equal(entry.origin,"https://login.example.invalid"); assert.equal(entry.searchParams.get("sitename"),"example");
       assert.equal(new URL(entry.searchParams.get("callbackURL")).origin,new URL(issuer).origin);
     } finally {await loginInstance.dispose();}
+    for (const message of diagnosticMessages) {
+      const diagnostic = JSON.parse(message);
+      assert.deepEqual(Object.keys(diagnostic).sort(), ["event", "phase", "reason"]);
+      assert.equal(diagnostic.event, "sign_in_attempt_expired");
+      assert.ok(["begin", "callback"].includes(diagnostic.phase));
+      assert.ok(["state_missing", "wrong_stage", "expired", "state_mismatch", "callback_missing"].includes(diagnostic.reason));
+      for (const value of [privateFailure, email, subject, clientId, secret, "fixture-code", "fixture-refresh-token"])
+        assert.ok(!message.includes(value), "expiry logs contain no request, identity or provider credentials");
+    }
     console.log(`${oauthJwt ? "OAuth JWT RS256" : "OIDC EdDSA"}${providerService ? " service binding" : ""} native workerd checks passed: signed login, fixed RPC failure categories/statuses, credential-free token/JWT/handoff/cleanup failures, replay, PKCE, issuer/audience, verified email, subject allowlist, expiry and auth-only scope.`);
   } finally { await mf.dispose(); }
 } finally { await rm(output,{recursive:true,force:true}); }

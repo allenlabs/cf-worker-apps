@@ -24,6 +24,10 @@ Sign-in failures return a fixed category and HTTP status. The DO's `begin()` and
 | `sign_in_cleanup_failed` | 502 | Transient state cleanup failed; no successful handoff page is returned. |
 | `invalid_sign_in_configuration`, `sign_in_failed` | 503, 400 | Invalid configuration or an otherwise unclassified failure. |
 
+Failure pages keep the fixed category visible and offer **Restart sign-in**, opening only the validated application's root in a new tab. Invalid configuration supplies no recovery link. Pages remain uncacheable and send no referrer, so recovery does not copy callback parameters or reuse a consumed attempt.
+
+Expiry emits a JSON warning with exactly `event: "sign_in_attempt_expired"`, `phase` (`begin` or `callback`) and a fixed `reason`: `state_missing`, `wrong_stage`, `expired`, `state_mismatch` or `callback_missing`. No identifiers, values or timestamps are included. Missing state may mean cleanup, consumption or an absent attempt; this diagnostic does not distinguish those causes or prove a lifetime bug. Nonce validation and all attempt lifetimes remain unchanged.
+
 Callback claims remain single-use, including failed exchanges. Cleanup runs after every claimed callback; a failure to clean up replaces the result with the fixed cleanup category. Browser handoff confirmation remains required for session delivery. Diagnostic categories do not authorize a session or relax verification.
 
 The explicit OAuth JWT profile also accepts an optional `IDENTITY_PROVIDER` HTTP service binding.

@@ -1,8 +1,8 @@
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
-import { advanceToOAuth, claimOAuth, putInitiation } from "@gadgets/gatekeeper-kit/connect-handshake";
+import { advanceToOAuth, claimOAuth, putInitiation, NONCE_KEY, type ConnectNonceKv, type StoredNonce } from "@gadgets/gatekeeper-kit/connect-handshake";
 import { generateNonce, OAUTH_NONCE_LIFETIME_MS } from "@gadgets/gatekeeper-kit/connect-nonce";
 import { createPkce, OAuthResponseError } from "@gadgets/gatekeeper-kit/oauth-client";
-import { connectHandoffPageHtml, htmlResponse } from "@gadgets/gatekeeper-kit/connect-pages";
+import { connectHandoffPageHtml, escapeHtml, htmlResponse, PAGE_STYLE } from "@gadgets/gatekeeper-kit/connect-pages";
 import type { AccountDescription, ConnectHandoff, GatekeeperConnectCallback, GatekeeperConnectOptions,
   GatekeeperUser, GatekeeperVendor as Vendor, SupportedResource, VendorDescription,
   VerifiedAuthIdentity } from "@gadgets/workshop-shared/gatekeeper";
@@ -13,10 +13,24 @@ const PREFIX = "/gatekeeper/oidc";
 const HEX = /^[a-f0-9]{64}$/;
 type Attempt = { codeVerifier: string; nonce: string };
 
-function failureResponse(failure: SignInFailure): Response {
-  return new Response(`Sign-in failed (${failure.code}). Restart sign-in from the application.`, {
-    status: failure.status, headers: { "cache-control": "no-store", "content-type": "text/plain; charset=utf-8", "referrer-policy": "no-referrer" },
-  });
+function failureResponse(failure: SignInFailure, origin?: string): Response {
+  return htmlResponse(`<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign-in failed</title><style>${PAGE_STYLE} a { color: inherit; }</style></head>
+<body><main><h1>Sign-in failed (${escapeHtml(failure.code)})</h1>
+<p class="sub">Restart sign-in from the application. You can close this window.</p>
+${origin ? `<a href="${escapeHtml(origin)}/" target="_blank" rel="noopener noreferrer">Restart sign-in</a>` : ""}
+</main></body></html>`, failure.status);
+}
+
+function expiredAttempt(phase: "begin" | "callback", kv: ConnectNonceKv, now: number): SignInError {
+  const stored = kv.get<StoredNonce>(NONCE_KEY);
+  const reason = !stored ? "state_missing" : stored.stage !== (phase === "begin" ? "initiation" : "oauth")
+    ? "wrong_stage" : !Number.isFinite(stored.expiresAt) || !Number.isFinite(now) || now >= stored.expiresAt
+      ? "expired" : "state_mismatch";
+  console.warn(JSON.stringify({ event: "sign_in_attempt_expired", phase, reason }));
+  return new SignInError("sign_in_attempt_expired");
 }
 
 export class GatekeeperVendor extends WorkerEntrypoint<Env> implements Vendor {
@@ -51,9 +65,10 @@ export class OidcLogin extends DurableObject<Env> {
       const config = configuration(this.env);
       const pkce = await createPkce();
       const idNonce = generateNonce();
-      const oauthNonce = advanceToOAuth(this.ctx.storage.kv, nonce, Date.now(),
+      const now = Date.now();
+      const oauthNonce = advanceToOAuth(this.ctx.storage.kv, nonce, now,
         { codeVerifier: pkce.codeVerifier, nonce: idNonce });
-      if (!oauthNonce) throw new SignInError("sign_in_attempt_expired");
+      if (!oauthNonce) throw expiredAttempt("begin", this.ctx.storage.kv, now);
       await this.ctx.storage.setAlarm(Date.now() + OAUTH_NONCE_LIFETIME_MS);
       stage = "identity_provider_unavailable";
       const endpoints = await discover(config);
@@ -72,13 +87,17 @@ export class OidcLogin extends DurableObject<Env> {
     let result: SignInResult<ConnectHandoff>;
     let claimed = false;
     try {
-      const attempt = claimOAuth<Attempt>(this.ctx.storage.kv, state, Date.now());
-      if (!attempt) throw new SignInError("sign_in_attempt_expired");
+      const now = Date.now();
+      const attempt = claimOAuth<Attempt>(this.ctx.storage.kv, state, now);
+      if (!attempt) throw expiredAttempt("callback", this.ctx.storage.kv, now);
       claimed = true;
       const config = configuration(this.env);
       if (denied || !code || code.length > 8192 || issuer !== config.issuer && (config.mode === "oauth-jwt" || issuer !== null)) throw new SignInError("invalid_sign_in_callback");
       const callback = this.ctx.storage.kv.get<Fetcher<GatekeeperConnectCallback>>("callback");
-      if (!callback) throw new SignInError("sign_in_attempt_expired");
+      if (!callback) {
+        console.warn(JSON.stringify({ event: "sign_in_attempt_expired", phase: "callback", reason: "callback_missing" }));
+        throw new SignInError("sign_in_attempt_expired");
+      }
       stage = "identity_provider_unavailable";
       const endpoints = await discover(config);
       stage = "token_exchange_failed";
@@ -149,8 +168,10 @@ export class GatekeeperUserImpl extends WorkerEntrypoint<Env, { loginId: string 
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    let origin: string | undefined;
     try {
       const config = configuration(env);
+      origin = config.origin;
       const url = new URL(request.url);
       if (request.method !== "GET" || url.origin !== config.origin || !url.pathname.startsWith(`${PREFIX}/`)) return new Response("Not found", { status: 404 });
       const path = url.pathname.slice(PREFIX.length + 1).split("/");
@@ -158,7 +179,7 @@ export default {
       if (path.length === 2 && HEX.test(loginId) && HEX.test(initiationNonce)) {
         const attempt = ctx.exports.OidcLogin.get(ctx.exports.OidcLogin.idFromString(loginId));
         const result = await attempt.begin(initiationNonce);
-        if (!result.ok) return failureResponse(result.error);
+        if (!result.ok) return failureResponse(result.error, origin);
         return new Response(null, { status: 302, headers: { location: result.value,
           "cache-control": "no-store", "referrer-policy": "no-referrer" } });
       }
@@ -169,10 +190,10 @@ export default {
       if (!state || state.length !== 2 || !HEX.test(id) || !HEX.test(oauthNonce)) throw new SignInError("invalid_sign_in_callback");
       const attempt = ctx.exports.OidcLogin.get(ctx.exports.OidcLogin.idFromString(id));
       const result = await attempt.complete(url.searchParams.get("code"), oauthNonce, url.searchParams.get("iss"), url.searchParams.has("error"));
-      if (!result.ok) return failureResponse(result.error);
+      if (!result.ok) return failureResponse(result.error, origin);
       return htmlResponse(connectHandoffPageHtml(result.value));
     } catch (error) {
-      return failureResponse(signInFailure(error, "sign_in_failed").error);
+      return failureResponse(signInFailure(error, "sign_in_failed").error, origin);
     }
   },
 };

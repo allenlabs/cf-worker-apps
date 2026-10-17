@@ -151,7 +151,10 @@ try {
   assert.deepEqual(cleaned,{keys:[],hasIdentity:false});
   if(failure) {
     assert.equal(completed.status,502,'Failed Workshop callback must not emit successful handoff');
-    assert.equal(html,'Sign-in failed (sign_in_handoff_failed). Restart sign-in from the application.');
+    assert.ok(html.includes('<h1>Sign-in failed (sign_in_handoff_failed)</h1>'));
+    assert.ok(html.includes(`<a href="${origin}/" target="_blank" rel="noopener noreferrer">Restart sign-in</a>`));
+    assert.equal(completed.headers.get('cache-control'),'no-store');
+    assert.equal(completed.headers.get('referrer-policy'),'no-referrer');
     assert.equal(html.includes('<title>Connected</title>'),false);
     assert.equal((await call('/inspect',{nonce:attempt.nonce})).outcome,'error');
     const reason=failure==='no-email' ? "This account has no verified email, so it can't be used to sign in."
