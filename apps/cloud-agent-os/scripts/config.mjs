@@ -9,6 +9,11 @@ export const packages = Object.freeze({
   router: 'packages/router',
 });
 
+export function deploymentOrder(config) {
+  return Object.keys(packages).filter(key => (key !== 'mcp' || config.mcp)
+    && (key !== 'oidc' || config.auth.mode !== 'access'));
+}
+
 function object(value, keys, name) {
   assert(value && typeof value === 'object' && !Array.isArray(value), `${name} must be an object`);
   assert(Object.keys(value).every(key => keys.includes(key)), `${name} contains an unsupported field`);
@@ -49,7 +54,9 @@ export function parseDeployment(value) {
     assert(value.mcp, 'mcpScopes requires mcp=true');
     configuredOAuthScope(JSON.stringify(value.mcpScopes), 'https://validation.example.invalid/mcp');
   }
-  const names = value.mcp ? Object.keys(packages) : Object.keys(packages).filter(key => key !== 'mcp');
+  const access = value.auth?.mode === 'access';
+  const names = deploymentOrder(value);
+  assert(!access || value.workers.oidc === undefined, 'workers.oidc requires OIDC authentication');
   assert(value.mcp || value.workers.mcp === undefined, 'workers.mcp requires mcp=true');
   for (const key of names) text(value.workers[key], `workers.${key}`, /^[a-z][a-z0-9-]{0,62}$/);
   assert(new Set(names.map(key => value.workers[key])).size === names.length, 'Worker names must be unique');
@@ -60,33 +67,49 @@ export function parseDeployment(value) {
   assert(new Set(['blueprintsKvNamespaceId', 'avatarsKvNamespaceId', 'contextKvNamespaceId']
     .map(key => value.resources[key])).size === 3, 'KV namespaces must be separate');
   text(value.resources.blueprintContentBucket, 'blueprintContentBucket', /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/);
-  object(value.auth, ['issuer', 'clientId', 'displayName', 'allowedIdentities', 'loginUrl', 'loginSite'], 'auth');
+  object(value.auth, access ? ['mode', 'issuer', 'audience', 'allowedEmails']
+    : ['mode', 'issuer', 'clientId', 'displayName', 'allowedIdentities', 'loginUrl', 'loginSite'], 'auth');
+  assert(value.auth.mode === undefined || ['oidc', 'access'].includes(value.auth.mode),
+    'auth.mode must be oidc or access');
   const issuer = https(value.auth.issuer, 'auth.issuer');
   assert(issuer.href.replace(/\/$/, '') === value.auth.issuer, 'auth.issuer must be canonical without a trailing slash');
-  text(value.auth.clientId, 'auth.clientId');
-  text(value.auth.displayName, 'auth.displayName');
-  assert(value.auth.clientId.length <= 255 && value.auth.displayName.length <= 128, 'OIDC client or display name is too long');
-  assert(Array.isArray(value.auth.allowedIdentities) && value.auth.allowedIdentities.length > 0
-    && value.auth.allowedIdentities.length <= 100, 'auth.allowedIdentities must pin 1–100 emails and subjects');
-  for (const identity of value.auth.allowedIdentities) {
-    object(identity, ['email', 'subject'], 'auth.allowedIdentities[]');
-    text(identity.subject, 'auth.allowedIdentities[].subject');
-    assert(identity.subject.length <= 255, 'OIDC subject is too long');
-  }
-  const allowed = value.auth.allowedIdentities.map(identity => identity.email);
-  emails(allowed, 'auth.allowedIdentities[].email');
-  assert(new Set(value.auth.allowedIdentities.map(identity => identity.subject)).size === allowed.length,
-    'OIDC subjects must be unique');
-  if (value.auth.loginUrl !== undefined) https(value.auth.loginUrl, 'auth.loginUrl');
-  if (value.auth.loginSite !== undefined) {
-    text(value.auth.loginSite, 'auth.loginSite', /^[A-Za-z0-9_-]{1,96}$/);
-    assert(value.auth.loginUrl !== undefined, 'auth.loginSite requires auth.loginUrl');
+  let allowed;
+  if (access) {
+    assert(issuer.origin === value.auth.issuer && !issuer.port && issuer.hostname.endsWith('.cloudflareaccess.com'),
+      'Access auth.issuer must be a Cloudflare Access team origin');
+    text(value.auth.audience, 'auth.audience', /^[A-Za-z0-9_-]{1,255}$/);
+    allowed = value.auth.allowedEmails;
+    assert(Array.isArray(allowed) && allowed.length <= 100, 'auth.allowedEmails must pin 1–100 emails');
+    emails(allowed, 'auth.allowedEmails');
+  } else {
+    text(value.auth.clientId, 'auth.clientId');
+    text(value.auth.displayName, 'auth.displayName');
+    assert(value.auth.clientId.length <= 255 && value.auth.displayName.length <= 128, 'OIDC client or display name is too long');
+    assert(Array.isArray(value.auth.allowedIdentities) && value.auth.allowedIdentities.length > 0
+      && value.auth.allowedIdentities.length <= 100, 'auth.allowedIdentities must pin 1–100 emails and subjects');
+    for (const identity of value.auth.allowedIdentities) {
+      object(identity, ['email', 'subject'], 'auth.allowedIdentities[]');
+      text(identity.subject, 'auth.allowedIdentities[].subject');
+      assert(identity.subject.length <= 255, 'OIDC subject is too long');
+    }
+    allowed = value.auth.allowedIdentities.map(identity => identity.email);
+    emails(allowed, 'auth.allowedIdentities[].email');
+    assert(new Set(value.auth.allowedIdentities.map(identity => identity.subject)).size === allowed.length,
+      'OIDC subjects must be unique');
+    if (value.auth.loginUrl !== undefined) https(value.auth.loginUrl, 'auth.loginUrl');
+    if (value.auth.loginSite !== undefined) {
+      text(value.auth.loginSite, 'auth.loginSite', /^[A-Za-z0-9_-]{1,96}$/);
+      assert(value.auth.loginUrl !== undefined, 'auth.loginSite requires auth.loginUrl');
+    }
   }
   emails(value.admins, 'admins');
   assert(value.admins.every(email => allowed.includes(email)), 'Every admin must be allowed to sign in');
-  object(value.modelBridge, ['service', 'model', 'allowedUserIds', 'management'], 'modelBridge');
+  object(value.modelBridge, ['service', 'model', 'allowedUserIds', 'management', 'setup'], 'modelBridge');
   assert(value.modelBridge.management === undefined || ['user', 'admin'].includes(value.modelBridge.management),
     'modelBridge.management must be user or admin');
+  assert(value.modelBridge.setup === undefined || value.modelBridge.setup === 'siwc',
+    'modelBridge.setup must be siwc');
+  assert(value.modelBridge.setup === undefined || access, 'modelBridge.setup requires Access authentication');
   text(value.modelBridge.service, 'modelBridge.service', /^[a-z][a-z0-9-]{0,62}$/);
   assert(!names.some(key => value.workers[key] === value.modelBridge.service), 'Model service must be a separate runtime');
   text(value.modelBridge.model, 'modelBridge.model', /^[a-zA-Z0-9._-]{1,128}$/);
@@ -97,6 +120,7 @@ export function parseDeployment(value) {
   assert(value.modelBridge.allowedUserIds.every(email => allowed.includes(email)),
     'Every model user must be allowed to sign in');
   if (value.siteLaunch !== undefined) {
+    assert(!access, 'siteLaunch requires OIDC verified principal identity');
     object(value.siteLaunch, ['parentOrigins'], 'siteLaunch');
     const parents = value.siteLaunch.parentOrigins;
     assert(Array.isArray(parents) && parents.length >= 1 && parents.length <= 10,
@@ -114,7 +138,8 @@ export function parseDeployment(value) {
 /** Preserve upstream migrations/build rules; replace deployment-owned routes and bindings. */
 export function generateConfigs(input, bases) {
   const config = parseDeployment(input);
-  const keys = Object.keys(packages).filter(key => key !== 'mcp' || config.mcp);
+  const access = config.auth.mode === 'access';
+  const keys = deploymentOrder(config);
   const result = {};
   for (const key of keys) {
     assert(bases[key] && typeof bases[key].main === 'string', `Missing upstream ${key} base config`);
@@ -128,16 +153,19 @@ export function generateConfigs(input, bases) {
       observability: { enabled: true, head_sampling_rate: 1, logs: { invocation_logs: false } },
     };
   }
-  const vendors = ['context', 'oidc', ...(config.mcp ? ['mcp'] : [])];
+  const vendors = ['context', ...(access ? [] : ['oidc']), ...(config.mcp ? ['mcp'] : [])];
   result.router.routes = [{ pattern: new URL(config.origin).hostname, custom_domain: true }];
   result.router.services = [
     { binding: 'WORKSHOP_BACKEND', service: config.workers.workshop },
     ...vendors.map(key => ({ binding: `GATEKEEPER_${key.toUpperCase()}`, service: config.workers[key] })),
+    ...(config.modelBridge.setup === 'siwc'
+      ? [{ binding: 'GATEKEEPER_SUBSCRIPTION', service: config.modelBridge.service }] : []),
   ];
   result.workshop.vars = {
     PUBLIC_BASE_URL: config.origin,
     ADMINS: config.admins,
-    AUTH_GATEKEEPERS: 'oidc',
+    ...(access ? { CF_ACCESS_AUD: config.auth.audience, CF_ACCESS_ISS: config.auth.issuer }
+      : { AUTH_GATEKEEPERS: 'oidc' }),
     DISABLE_PASSWORD_AUTH: 'true',
     CODEX_BRIDGE_MODEL: config.modelBridge.model,
     CODEX_BRIDGE_MANAGEMENT: config.modelBridge.management ?? 'user',
@@ -166,16 +194,18 @@ export function generateConfigs(input, bases) {
   delete result.workshop.assets;
   result.context.kv_namespaces = [{ binding: 'CONTEXT_COLLECTIONS', id: config.resources.contextKvNamespaceId }];
   delete result.context.artifacts;
-  result.oidc.vars = {
-    PUBLIC_BASE_URL: config.origin,
-    OIDC_ISSUER: config.auth.issuer,
-    OIDC_CLIENT_ID: config.auth.clientId,
-    OIDC_DISPLAY_NAME: config.auth.displayName,
-    OIDC_ALLOWED_IDENTITIES: JSON.stringify(config.auth.allowedIdentities),
-    ...(config.auth.loginUrl ? { OIDC_LOGIN_URL: config.auth.loginUrl } : {}),
-    ...(config.auth.loginSite ? { OIDC_LOGIN_SITE: config.auth.loginSite } : {}),
-  };
-  result.oidc.secrets = { required: ['OIDC_CLIENT_SECRET'] };
+  if (result.oidc) {
+    result.oidc.vars = {
+      PUBLIC_BASE_URL: config.origin,
+      OIDC_ISSUER: config.auth.issuer,
+      OIDC_CLIENT_ID: config.auth.clientId,
+      OIDC_DISPLAY_NAME: config.auth.displayName,
+      OIDC_ALLOWED_IDENTITIES: JSON.stringify(config.auth.allowedIdentities),
+      ...(config.auth.loginUrl ? { OIDC_LOGIN_URL: config.auth.loginUrl } : {}),
+      ...(config.auth.loginSite ? { OIDC_LOGIN_SITE: config.auth.loginSite } : {}),
+    };
+    result.oidc.secrets = { required: ['OIDC_CLIENT_SECRET'] };
+  }
   if (result.mcp) result.mcp.vars = {
     BASE_URL: `${config.origin}/gatekeeper/mcp`,
     MCP_CLIENT_NAME: 'Cloud Agent OS',
@@ -196,7 +226,7 @@ export function buildCommands(config) {
     task('@gadgets/gatekeeper-context'),
     ...(config.mcp ? [task('@gadgets/mcp-shared'), task('@gadgets/mcp-gatekeeper', 'build:configurator')] : []),
     task('@gadgets/workshop-frontend', 'build', {
-      VITE_CF_ACCESS_MODE: 'false', VITE_CODEX_BRIDGE_MODEL: config.modelBridge.model,
+      VITE_CF_ACCESS_MODE: String(config.auth.mode === 'access'), VITE_CODEX_BRIDGE_MODEL: config.modelBridge.model,
       VITE_CODEX_BRIDGE_MANAGEMENT: config.modelBridge.management ?? 'user',
       VITE_SITE_LAUNCH_PARENT_ORIGINS: JSON.stringify(config.siteLaunch?.parentOrigins ?? []),
     }),

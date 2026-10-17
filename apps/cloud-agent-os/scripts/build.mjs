@@ -3,7 +3,7 @@ import { readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { buildCommands, generateConfigs, packages, parseDeployment } from './config.mjs';
+import { buildCommands, deploymentOrder, generateConfigs, packages, parseDeployment } from './config.mjs';
 import { prepare, run } from './prepare.mjs';
 
 const { values } = parseArgs({ options: {
@@ -18,13 +18,14 @@ try {
     'Choose exactly one of --check, --deploy, or --plan');
   const config = parseDeployment(JSON.parse(await readFile(resolve(values.config), 'utf8')));
   const oidcSecrets = values['oidc-secrets'] ? resolve(values['oidc-secrets']) : undefined;
-  if (values.deploy) {
+  assert(config.auth.mode !== 'access' || !oidcSecrets, '--oidc-secrets requires OIDC authentication');
+  if (values.deploy && config.auth.mode !== 'access') {
     assert(oidcSecrets, '--deploy requires --oidc-secrets <private secret JSON or env file>');
     const metadata = await stat(oidcSecrets);
     assert(metadata.isFile() && metadata.size > 0 && (metadata.mode & 0o077) === 0,
       'The OIDC secrets file must be nonempty and accessible only by its owner');
   } else assert(!oidcSecrets, '--oidc-secrets is only used with --deploy');
-  const order = Object.keys(packages).filter(key => key !== 'mcp' || config.mcp);
+  const order = deploymentOrder(config);
   if (values.plan) {
     console.log(JSON.stringify({ upstream: 'upstream.json', order, builds: buildCommands(config) }, null, 2));
   } else {
@@ -51,16 +52,22 @@ try {
         run('pnpm', args, { cwd: checkout, env: { ...process.env, ...env } });
       }
       if (values.check) {
-        run(process.execPath, [join(checkout, packages.oidc, 'tests/check.mjs'), checkout], { cwd: checkout });
+        if (config.auth.mode !== 'access') {
+          run(process.execPath, [join(checkout, packages.oidc, 'tests/check.mjs'), checkout], { cwd: checkout });
+        }
         if (config.mcp) run('pnpm', ['exec', 'vitest', 'run', '__tests__/account-endpoint.test.ts'], {
           cwd: join(checkout, 'packages/mcp-shared'),
         });
-        run('pnpm', ['exec', 'vitest', 'run', '__tests__/subscription-models.test.ts',
+        run('pnpm', ['exec', 'vitest', 'run',
+          ...(config.auth.mode === 'access' ? ['__tests__/access.test.ts', '__tests__/client-errors.test.ts'] : []),
+          '__tests__/subscription-models.test.ts',
           '__tests__/user-models.test.ts', '__tests__/admin-settings-models.test.ts',
           '__tests__/site-launch.test.ts', '__tests__/site-launch-agent.test.ts'], {
           cwd: join(checkout, packages.workshop),
         });
-        run('pnpm', ['exec', 'vitest', 'run', 'src/AddModelModal.test.tsx',
+        run('pnpm', ['exec', 'vitest', 'run',
+          ...(config.auth.mode === 'access' ? ['src/useAuth.test.tsx'] : []),
+          'src/AddModelModal.test.tsx',
           'src/features/ai-models/AdminModelsPanel.test.tsx',
           'src/features/ai-models/AdminModelsPanel.subscription.test.tsx',
           'src/routes/-providers.test.tsx', 'src/OnboardingWizard.test.tsx',

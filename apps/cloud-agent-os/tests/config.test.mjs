@@ -1,17 +1,22 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { buildCommands, generateConfigs, packages, parseDeployment } from '../scripts/config.mjs';
+import { buildCommands, deploymentOrder, generateConfigs, packages, parseDeployment } from '../scripts/config.mjs';
 
 const example = JSON.parse(await readFile(new URL('../deployment.example.json', import.meta.url), 'utf8'));
+const accessExample = JSON.parse(await readFile(new URL('../deployment.access.example.json', import.meta.url), 'utf8'));
 const bases = Object.fromEntries(Object.keys(packages).map(key => [key, {
   main: 'src/index.ts', workers_dev: true, preview_urls: true,
   routes: [{ pattern: 'old.example.com' }],
   migrations: [{ tag: 'v0', new_sqlite_classes: ['ExistingObject'] }],
   vars: { CF_ACCESS_AUD: 'old', CF_ACCESS_ISS: 'https://old.example.com' },
-  ...(key === 'router' ? { assets: { binding: 'ASSETS', directory: '../workshop-frontend/dist' } } : {}),
+  ...(key === 'router' ? { assets: {
+    binding: 'ASSETS', directory: '../workshop-frontend/dist', run_worker_first: ['/gatekeeper/*'],
+  } } : {}),
 } ]));
 
 test('native SSO is the only sign-in path; router alone owns a public custom domain', () => {
@@ -234,4 +239,196 @@ test('deployment cannot start without a private OIDC secret file', () => {
   });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /--deploy requires --oidc-secrets/);
+});
+
+
+test('explicit OIDC mode preserves legacy generated configuration and build commands', () => {
+  const explicit = structuredClone(example);
+  explicit.auth.mode = 'oidc';
+  assert.deepEqual(generateConfigs(explicit, bases), generateConfigs(example, bases));
+  assert.deepEqual(buildCommands(explicit), buildCommands(example));
+  assert.deepEqual(deploymentOrder(explicit), ['context', 'oidc', 'mcp', 'workshop', 'router']);
+});
+
+test('Access uses native authentication without an OIDC worker, binding or secret', () => {
+  const accessBases = structuredClone(bases);
+  delete accessBases.oidc;
+  const configs = generateConfigs(accessExample, accessBases);
+  assert.deepEqual(Object.keys(configs), ['context', 'mcp', 'workshop', 'router']);
+  assert.deepEqual(deploymentOrder(accessExample), Object.keys(configs));
+  assert.equal(configs.workshop.vars.CF_ACCESS_AUD, accessExample.auth.audience);
+  assert.equal(configs.workshop.vars.CF_ACCESS_ISS, accessExample.auth.issuer);
+  assert.equal(configs.workshop.vars.AUTH_GATEKEEPERS, undefined);
+  assert.equal(configs.workshop.vars.DISABLE_PASSWORD_AUTH, 'true');
+  assert.equal(configs.workshop.vars.SITE_LAUNCH_ISSUER, undefined);
+  assert.deepEqual(configs.workshop.vars.ADMINS, accessExample.admins);
+  assert.deepEqual(JSON.parse(configs.workshop.vars.CODEX_BRIDGE_ALLOWED_USER_IDS), accessExample.modelBridge.allowedUserIds);
+  for (const config of Object.values(configs)) {
+    assert.equal(config.workers_dev, false);
+    assert.equal(config.preview_urls, false);
+    assert(!config.services?.some(binding => binding.binding === 'GATEKEEPER_OIDC'));
+    assert(!config.secrets?.required?.includes('OIDC_CLIENT_SECRET'));
+  }
+  const frontend = buildCommands(accessExample).find(step => step.env.VITE_CF_ACCESS_MODE).env;
+  assert.equal(frontend.VITE_CF_ACCESS_MODE, 'true');
+  assert.equal(frontend.VITE_SITE_LAUNCH_PARENT_ORIGINS, '[]');
+  assert(!JSON.stringify(frontend).includes(accessExample.auth.allowedEmails[0]));
+  assert(!buildCommands(accessExample).some(step => step.args.some(arg => arg.includes('oidc'))));
+  const noMcp = structuredClone(accessExample);
+  noMcp.mcp = false;
+  delete noMcp.workers.mcp;
+  assert.deepEqual(deploymentOrder(noMcp), ['context', 'workshop', 'router']);
+  assert.deepEqual(Object.keys(generateConfigs(noMcp, accessBases)), deploymentOrder(noMcp));
+});
+
+test('Access requires bounded explicit email policy, issuer and audience, and rejects OIDC-only features', () => {
+  for (const mutate of [
+    c => { c.auth.mode = 'unknown'; },
+    c => { delete c.auth.mode; },
+    c => { delete c.auth.audience; },
+    c => { c.auth.audience = ''; },
+    c => { c.auth.audience = 'with whitespace'; },
+    c => { c.auth.audience = 'a'.repeat(256); },
+    c => { c.auth.issuer = 'http://example.cloudflareaccess.com'; },
+    c => { c.auth.issuer = 'https://auth.example.com'; },
+    c => { c.auth.issuer = 'https://example.cloudflareaccess.com/path'; },
+    c => { c.auth.issuer = 'https://example.cloudflareaccess.com:443'; },
+    c => { c.auth.issuer = 'https://example.cloudflareaccess.com:8443'; },
+    c => { c.auth.issuer = 'https://example.cloudflareaccess.com/'; },
+    c => { c.auth.issuer = 'https://example.cloudflareaccess.com?query=1'; },
+    c => { c.auth.issuer = 'https://user:pass@example.cloudflareaccess.com'; },
+    c => { delete c.auth.allowedEmails; },
+    c => { c.auth.allowedEmails = []; },
+    c => { c.auth.allowedEmails = modelUsers(101); },
+    c => { c.auth.allowedEmails.push(c.auth.allowedEmails[0]); },
+    c => { c.auth.allowedEmails[0] = 'ADMIN@example.com'; },
+    c => { c.admins = ['stranger@example.com']; },
+    c => { c.modelBridge.allowedUserIds = ['stranger@example.com']; },
+    c => { delete c.modelBridge; },
+    c => { c.auth.clientId = 'oidc-client'; },
+    c => { c.auth.allowedIdentities = example.auth.allowedIdentities; },
+    c => { c.auth.loginUrl = 'https://auth.example.com/login'; },
+    c => { c.workers.oidc = 'example-os-oidc'; },
+    c => { c.siteLaunch = { parentOrigins: ['https://portal.example.com'] }; },
+  ]) {
+    const candidate = structuredClone(accessExample);
+    mutate(candidate);
+    assert.throws(() => parseDeployment(candidate));
+  }
+  const bounded = structuredClone(accessExample);
+  bounded.auth.allowedEmails = [accessExample.admins[0], ...modelUsers(99)];
+  assert.equal(parseDeployment(bounded).auth.allowedEmails.length, 100);
+});
+
+test('omitting SIWC setup preserves the existing model bridge and router services', () => {
+  for (const candidate of [example, accessExample]) {
+    assert.deepEqual(parseDeployment(candidate), candidate);
+    const configs = generateConfigs(candidate, bases);
+    assert(!configs.router.services.some(binding => binding.binding === 'GATEKEEPER_SUBSCRIPTION'));
+    assert.deepEqual(configs.workshop.services.find(binding => binding.binding === 'CODEX_BRIDGE'), {
+      binding: 'CODEX_BRIDGE', service: candidate.modelBridge.service, entrypoint: 'CloudAgentInference',
+    });
+  }
+});
+
+test('SIWC setup adds only a native router binding and preserves all worker permissions and variables', () => {
+  for (const mcp of [true, false]) {
+    const baseline = structuredClone(accessExample);
+    baseline.mcp = mcp;
+    if (!mcp) delete baseline.workers.mcp;
+    const enabled = structuredClone(baseline);
+    enabled.modelBridge.setup = 'siwc';
+    const configs = generateConfigs(enabled, bases);
+    assert.deepEqual(configs.router.services.at(-1), {
+      binding: 'GATEKEEPER_SUBSCRIPTION', service: enabled.modelBridge.service,
+    });
+    assert(!configs.workshop.services.some(binding => binding.binding === 'GATEKEEPER_SUBSCRIPTION'));
+    assert.deepEqual(configs.router.assets.run_worker_first, ['/gatekeeper/*']);
+    for (const config of Object.values(configs)) {
+      assert.equal(config.workers_dev, false);
+      assert.equal(config.preview_urls, false);
+      assert(!config.services?.some(binding => binding.binding === 'GATEKEEPER_OIDC'));
+      assert(!config.secrets?.required?.includes('OIDC_CLIENT_SECRET'));
+    }
+    configs.router.services.pop();
+    assert.equal(JSON.stringify(configs), JSON.stringify(generateConfigs(baseline, bases)));
+    assert.deepEqual(buildCommands(enabled), buildCommands(baseline));
+    assert.deepEqual(deploymentOrder(enabled), deploymentOrder(baseline));
+  }
+});
+
+test('SIWC setup rejects every other setup value and OIDC authentication', () => {
+  for (const setup of ['', 'SIWC', 'codex', 'device', 'api', null, true, {}, []]) {
+    const candidate = structuredClone(accessExample);
+    candidate.modelBridge.setup = setup;
+    assert.throws(() => parseDeployment(candidate), /modelBridge.setup must be siwc/);
+  }
+  for (const mode of [undefined, 'oidc']) {
+    const candidate = structuredClone(example);
+    candidate.auth.mode = mode;
+    candidate.modelBridge.setup = 'siwc';
+    assert.throws(() => generateConfigs(candidate, bases), /modelBridge.setup requires Access authentication/);
+  }
+  const shared = structuredClone(accessExample);
+  shared.modelBridge.setup = 'siwc';
+  shared.modelBridge.service = shared.workers.workshop;
+  assert.throws(() => parseDeployment(shared), /Model service must be a separate runtime/);
+});
+
+test('Access CLI plans omit OIDC and reject irrelevant OIDC secret exports', () => {
+  const cwd = fileURLToPath(new URL('..', import.meta.url));
+  const plan = spawnSync(process.execPath, ['scripts/build.mjs', '--config', 'deployment.access.example.json', '--plan'], {
+    cwd, encoding: 'utf8',
+  });
+  assert.equal(plan.status, 0, plan.stderr);
+  assert.deepEqual(JSON.parse(plan.stdout).order, ['context', 'mcp', 'workshop', 'router']);
+  const rejected = spawnSync(process.execPath, ['scripts/build.mjs', '--config', 'deployment.access.example.json',
+    '--deploy', '--oidc-secrets', 'not-a-secret-file'], { cwd, encoding: 'utf8' });
+  assert.equal(rejected.status, 1);
+  assert.match(rejected.stderr, /--oidc-secrets requires OIDC authentication/);
+});
+
+test('Access check and deployment omit OIDC commands and need no OIDC secret file', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cloud-agent-os-access-'));
+  try {
+    // Replace only external commands and upstream preparation. The real build script still parses
+    // configuration, generates Wrangler files, selects checks and constructs deployment commands.
+    await mkdir(join(dir, 'scripts'));
+    const parser = join(dir, 'node_modules/jsonc-parser');
+    await mkdir(parser, { recursive: true });
+    await writeFile(join(parser, 'index.js'), 'exports.parse = JSON.parse;');
+    for (const [key, pkg] of Object.entries(packages)) {
+      await mkdir(join(dir, pkg), { recursive: true });
+      await writeFile(join(dir, pkg, 'wrangler.jsonc'), JSON.stringify(bases[key]));
+    }
+    const loader = join(dir, 'loader.mjs');
+    const replacement = `export async function prepare() { return ${JSON.stringify(dir)}; }
+      export function run(command, args, options) { console.log(JSON.stringify({command, args, cwd: options.cwd})); }`;
+    await writeFile(loader, `import { registerHooks } from 'node:module';
+      registerHooks({ resolve(specifier, context, nextResolve) {
+        if (specifier === './prepare.mjs' && context.parentURL.endsWith('/scripts/build.mjs')) {
+          return { url: ${JSON.stringify('data:text/javascript,' + encodeURIComponent(replacement))}, shortCircuit: true };
+        }
+        return nextResolve(specifier, context);
+      }});`);
+    for (const mode of ['--check', '--deploy']) {
+      const result = spawnSync(process.execPath, ['--import', loader, 'scripts/build.mjs', '--config',
+        'deployment.access.example.json', mode], {
+        cwd: fileURLToPath(new URL('..', import.meta.url)), encoding: 'utf8',
+      });
+      assert.equal(result.status, 0, result.stderr);
+      const commands = result.stdout.trim().split('\n').map(line => JSON.parse(line));
+      assert(!commands.some(command => command.args.some(arg => arg.includes('oidc'))));
+      const deployments = commands.filter(command => command.args.includes('wrangler'));
+      assert.deepEqual(deployments.map(command => command.cwd), deploymentOrder(accessExample).map(key => join(dir, packages[key])));
+      assert(deployments.every(command => !command.args.includes('--secrets-file')));
+      assert(deployments.every(command => command.args.includes('--dry-run') === (mode === '--check')));
+      if (mode === '--check') {
+        assert(commands.some(command => command.args.includes('__tests__/access.test.ts')));
+        assert(commands.some(command => command.args.includes('src/useAuth.test.tsx')));
+      }
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

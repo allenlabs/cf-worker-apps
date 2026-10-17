@@ -1,10 +1,10 @@
 # Cloud Agent OS deployment wrapper
 
-Deploy a pinned [Cloudflare OS](https://github.com/cloudflare/cloudflare-os) with native OpenID Connect
-sign-in (Ed25519 issuer with PKCE S256) and an existing Cloud Agent inference service. This package follows the official
-[Starter](https://github.com/cloudflare/cloudflare-os-starter)'s private-Worker deployment pattern,
-but uses an Auth Gatekeeper instead of Cloudflare Access. It does not copy upstream history or
-replace an existing Cloud Agent installation.
+Deploy a pinned [Cloudflare OS](https://github.com/cloudflare/cloudflare-os) with Cloudflare Access
+or OpenID Connect sign-in (Ed25519 issuer with PKCE S256), plus an existing Cloud Agent inference
+service. This package follows the official
+[Starter](https://github.com/cloudflare/cloudflare-os-starter)'s private-Worker deployment pattern.
+It does not copy upstream history or replace an existing Cloud Agent installation.
 
 The upstream SHA lives in `upstream.json`. All reusable adapters, reviewed patches, tests and build
 instructions live here. Customer identities, domains, resource IDs and runtime account selection
@@ -17,16 +17,26 @@ secret manager and Worker secret bindings.
 | --- | --- | --- |
 | Router | One custom domain | Static frontend; internal Workshop and Gatekeeper service bindings |
 | Workshop | None | Upstream DO migrations, two KV namespaces, one R2 bucket, Worker Loader and Browser bindings |
-| OIDC Gatekeeper | Through router only | New login state; its own client secret and issuer/subject allowlist |
+| OIDC Gatekeeper, OIDC mode only | Through router only | New login state; its own client secret and issuer/subject allowlist |
 | Context Gatekeeper | Through router only | Upstream DO migrations and a separate KV namespace |
 | MCP Gatekeeper, optional | Through router only | Upstream MCP account DOs; separate user-authorized connector grants |
 
 Every Worker has `workers_dev` and preview URLs disabled. The router owns the only custom domain.
-The Workshop frontend is built with `VITE_CF_ACCESS_MODE=false`; the backend sets
+OIDC is the default when `auth.mode` is omitted, or set it explicitly to `"oidc"`.
+Its Workshop frontend is built with `VITE_CF_ACCESS_MODE=false`; the backend sets
 `AUTH_GATEKEEPERS=oidc` and `DISABLE_PASSWORD_AUTH=true`. Password sign-up/login remain disabled
 while the OIDC vendor is configured. The OIDC Gatekeeper verifies identity before the Workshop
 creates its email-keyed account. Admin and model-user lists must be subsets of the pinned login
 allowlist. Login authorization does not grant access to business data.
+
+Set `auth.mode` to `"access"` for upstream's native Cloudflare Access authentication. Copy
+`deployment.access.example.json` and set the Access team origin in `auth.issuer`, the application's
+AUD tag in `auth.audience`, and 1–100 unique lowercase emails in `auth.allowedEmails`. The wrapper
+sets `CF_ACCESS_ISS`, `CF_ACCESS_AUD` and `VITE_CF_ACCESS_MODE=true`, and omits the OIDC Worker,
+bindings, checks and secret requirement. Omit `workers.oidc`. The native backend verifies Access
+JWTs and refuses password login/signup. `allowedEmails` validates administrator and model-user
+subsets; it does not install or enforce an Access policy. Configure permitted identities in
+Cloudflare Access separately. The model bridge remains required in both modes.
 
 The model binding is `CODEX_BRIDGE`, targeting the existing runtime's `CloudAgentInference`
 entrypoint. The runtime retains its own encrypted account grants. Read the [inference protocol and tests](../cloud-agent/docs/INFERENCE_BRIDGE.md) for limits and cancellation behavior. It must separately set
@@ -56,7 +66,21 @@ service binding and the existing runtime's account/model/actor policy remain aut
 Omitting `management`, or setting it to `"user"`, preserves the original per-user setup flow.
 This subscription catalog does not require or emulate a Cloudflare AI Gateway.
 
+For optional SIWC subscription setup in Access mode, set `modelBridge.setup` to `"siwc"` and
+point `modelBridge.service` at a separately deployed SIWC subscription Worker. That Worker must
+provide the `CloudAgentInference` entrypoint and handle login and API requests beneath
+`/gatekeeper/subscription`. The router adds `GATEKEEPER_SUBSCRIPTION` for this service through its
+existing `/gatekeeper/*` routing. It adds no Workshop Gatekeeper vendor or authentication grant.
+Protect this path with the same Cloudflare Access application as the router. The wrapper does
+not deploy the subscription Worker or create its provider connection. Create a fresh provider
+connection with provider `siwc` in that service; use its SIWC login flow, with no native Codex
+device login or paid API fallback. OIDC mode rejects this setup option. Omitting `setup` preserves
+the existing generated configuration.
+
 ## Internal site-aware launch
+
+Site launch requires OIDC. Access mode rejects `siteLaunch` because the native Access login does
+not supply the verified issuer/subject principal required by launch tickets.
 
 An authenticated host can embed `/launch` inside its existing site route. Set optional
 `siteLaunch.parentOrigins` to the exact HTTPS host origins, for example
@@ -137,9 +161,10 @@ checkout remains unchanged. Do not edit generated build trees; change the review
 
 The build adds the overlay workspace importer to a disposable lockfile while reusing upstream's
 locked dependencies. It runs upstream's uncached Context, frontend, router and backend builds,
-and the MCP library/configurator builds when enabled. `--check` also drives the OIDC Worker/DO flow
-under Miniflare, runs the MCP account OAuth regression suite, and tests model configuration,
-admin-managed subscription authorization, restored-user identity, model preferences and the
+and the MCP library/configurator builds when enabled. In OIDC mode, `--check` also drives the OIDC
+Worker/DO flow under Miniflare. Access mode runs the upstream Access verification and frontend
+authentication tests instead. Both modes run the MCP account OAuth regression suite when enabled
+and test model configuration, admin-managed subscription authorization, restored-user identity, model preferences and the
 selection-only UI alongside the existing Gateway behavior. Site launch checks cover one-use
 identity-bound tickets, workspace ownership and agent context, iframe handshakes, scoped
 navigation, reload and workspace recovery.
@@ -149,7 +174,7 @@ Workers with Wrangler `--dry-run`; it does not create cloud resources or verify 
 
 ## Deploy and verify
 
-Register a dedicated confidential OIDC client with PKCE. Its callback is
+For OIDC, register a dedicated confidential client with PKCE. Its callback is
 `https://os.example.com/gatekeeper/oidc/oauth`. Export `OIDC_CLIENT_SECRET` from the secret manager
 into an owner-only (`0600`) temporary JSON or env file. The deployment passes its path only to the
 OIDC Worker's Wrangler `--secrets-file`, so the first Worker version and its required secret are
@@ -160,12 +185,28 @@ authentication from the secret manager, not a tracked configuration file.
 node scripts/build.mjs --config /private/path/deployment.json --deploy --oidc-secrets /private/path/oidc-secrets.json
 ```
 
-Deployment order is Context, OIDC, optional MCP, Workshop, then Router. The runtime inference
+OIDC deployment order is Context, OIDC, optional MCP, Workshop, then Router. The runtime inference
 entrypoint must already exist. The wrapper deliberately does not deploy or reconfigure that runtime.
-Remove the temporary secret export after deployment. Every explicit deployment requires the secret
+Remove the temporary secret export after deployment. Every OIDC deployment requires that secret
 file; this avoids an interactive first-deployment prompt or a dummy Worker bootstrap.
 
-1. Confirm `/api` rejects an unauthenticated session and login offers only the configured SSO.
+For Access, first create a self-hosted Cloudflare Access application covering the router hostname
+and all paths, including `/api` and its WebSocket connections. Set its Allow policy to the intended
+identities and use an identity provider that supplies email claims. The wrapper neither provisions
+the Access application nor changes its policies. Copy the application's team origin and AUD tag
+into the Access deployment configuration. Supply Cloudflare deployment authentication as above.
+
+```sh
+node scripts/build.mjs --config /private/path/deployment.access.json --plan
+node scripts/build.mjs --config /private/path/deployment.access.json --check
+node scripts/build.mjs --config /private/path/deployment.access.json --deploy
+```
+
+Access deployment order is Context, optional MCP, Workshop, then Router. It needs no OIDC secret
+export and rejects `--oidc-secrets`. Confirm the Access policy before exposing the router domain.
+
+1. Confirm `/api` rejects an unauthenticated session. OIDC offers only the configured SSO; Access
+   redirects an unauthenticated browser to its configured identity provider and rejects denied identities.
 2. Sign in as an allowed identity, reload, and confirm `/admin` is restricted to configured admins.
 3. In admin management mode, confirm the configured subscription in Admin's Providers tab and
    choose its model as a user; in user management mode, create a model profile first. Test one
