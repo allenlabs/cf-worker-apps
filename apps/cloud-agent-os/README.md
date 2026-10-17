@@ -29,6 +29,14 @@ while the OIDC vendor is configured. The OIDC Gatekeeper verifies identity befor
 creates its email-keyed account. Admin and model-user lists must be subsets of the pinned login
 allowlist. Login authorization does not grant access to business data.
 
+The Workshop releases a login token once, after the popup confirms its matching ticket and nonce.
+It then retains only the ticket hash until the original two-minute delivery expiry. A popup whose
+confirmation reply was lost can repeat that confirmation after the login tab receives its token;
+the retry never releases another token or extends the expiry. Wrong tickets, wrong nonces and
+expired attempts remain denied. The existing alarm clears the proof and preserves any account link.
+If session creation fails, the callback throws rather than returning a successful handoff page,
+while the login tab can still receive the recorded failure reason.
+
 Use `auth.mode: "oauth-jwt"` only for a provider with the signed access-token contract below.
 Copy `deployment.oauth-jwt.example.json`, then set the exact HTTPS resource origin, explicit scopes
 and `tokenEndpointAuthMethod` to `"none"` for a public PKCE client or `"client_secret_post"` for a
@@ -57,9 +65,12 @@ The bearer access token must use RS256 with one matching public RSA verification
 `email`, `emailVerified: true` and `banned: false`. The exact issuer/subject/email allowlist still
 authorizes login. `iat` may be at most five minutes old or 60 seconds ahead; `exp` must follow `iat`
 and must not have elapsed. Alternate algorithms, ambiguous keys and audience arrays are rejected.
-This profile does not request OpenID or offline access scopes and does not read an ID token or
-userinfo, send a nonce, persist provider tokens or refresh a grant. Provider expiry bounds the
-handoff identity. The preexisting Workshop session lifetime is independent of provider-token expiry.
+This profile rejects the `openid` scope and does not read an ID token or userinfo or send a nonce.
+Explicitly include `offline_access` in `auth.scopes` when the identity provider requires it to issue
+refresh grants. Sign-in discards provider access, ID and refresh tokens after verifying identity;
+it never persists them, displays them, sends them to the model bridge or refreshes a grant.
+Provider expiry bounds the handoff identity. The preexisting Workshop session lifetime is
+independent of provider-token expiry.
 
 Set `auth.mode` to `"access"` for upstream's native Cloudflare Access authentication. Copy
 `deployment.access.example.json` and set the Access team origin in `auth.issuer`, the application's

@@ -91,7 +91,7 @@ export function configuration(env: Env) {
       if (!Array.isArray(rawScopes) || rawScopes.length === 0 || rawScopes.length > 32) throw Error();
       const scopes = rawScopes.map(scope => text(scope, 128));
       if (scopes.some(scope => !/^[\x21\x23-\x5b\x5d-\x7e]+$/.test(scope)
-          || scope === "openid" || scope === "offline_access") || new Set(scopes).size !== scopes.length) throw Error();
+          || scope === "openid") || new Set(scopes).size !== scopes.length) throw Error();
       const method = env.OAUTH_JWT_TOKEN_ENDPOINT_AUTH_METHOD;
       if (method !== "none" && method !== "client_secret_post") throw Error();
       const client: OAuthClientAuth = method === "none" ? { method: "none", id: clientId }

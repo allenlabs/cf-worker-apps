@@ -57,6 +57,9 @@ try {
           run(process.execPath, [join(checkout, packages.oidc, 'tests/check.mjs'), checkout], { cwd: checkout });
           run(process.execPath, [join(checkout, packages.oidc, 'tests/check.mjs'), checkout, 'oauth-jwt'], { cwd: checkout });
           run(process.execPath, [join(checkout, packages.oidc, 'tests/check.mjs'), checkout, 'oauth-jwt-service'], { cwd: checkout });
+          for (const failure of ['', 'session', 'no-email', 'signups-disabled']) {
+            run(process.execPath, [join(checkout, packages.oidc, 'tests/workshop-handoff.mjs'), checkout, failure], { cwd: checkout });
+          }
         }
         if (config.mcp) run('pnpm', ['exec', 'vitest', 'run', '__tests__/account-endpoint.test.ts'], {
           cwd: join(checkout, 'packages/mcp-shared'),
@@ -64,6 +67,7 @@ try {
         run('pnpm', ['exec', 'vitest', 'run',
           ...(config.auth.mode === 'access' ? ['__tests__/access.test.ts', '__tests__/client-errors.test.ts'] : []),
           '__tests__/subscription-models.test.ts', '__tests__/subscription-setup-session.test.ts',
+          '__tests__/pending-login.test.ts',
           '__tests__/user-models.test.ts', '__tests__/admin-settings-models.test.ts',
           '__tests__/site-launch.test.ts', '__tests__/site-launch-agent.test.ts',
           '__tests__/opencode-loop.test.ts', '__tests__/agent-retry.test.ts',

@@ -34,9 +34,15 @@ redirect handling and endpoint/identity checks still apply. A present malformed 
 configuration error, and a failed binding request never falls back to public HTTP. OIDC rejects
 the binding. Omission preserves the public HTTP transport.
 
+OAuth JWT scopes are explicit in `OAUTH_JWT_SCOPES`, generated from `auth.scopes`. The `openid`
+scope is rejected. Include `offline_access` only when the identity provider requires it to issue
+refresh grants. This sign-in flow discards provider access, ID and refresh tokens after identity
+verification. It never persists them, displays them, sends them to the model bridge or uses a
+refresh grant. The Workshop's existing session behavior is unchanged.
+
 Run `node tests/check.mjs /absolute/path/to/cloudflare-os oauth-jwt-service` to exercise the
 OAuth JWT profile through a second native workerd Worker. It verifies the metadata/token/JWKS
 URLs, both client authentication methods, PKCE and resource indicators, fixed failures,
-redirect rejection, response caps and zero global provider fetches.
+redirect rejection, response caps, explicit `offline_access` scope and zero global provider fetches.
 
 Run `node tests/check.mjs /absolute/path/to/cloudflare-os` after installing that checkout's dependencies. The check bundles this source and drives the real Worker/DO RPC flow under Miniflare, with a fixture callback and a mocked external identity provider. All identities and keys are generated test fixtures. It verifies signed callbacks, exact failure categories and statuses across RPC, redacted token/JWT/handoff/cleanup failures, replay, issuer/audience/nonce/allowlist failures, expiry, and cleanup. It does not exercise the full Workshop callback and browser confirmation or claim to test a hosted SSO login or change the Workshop's own session lifetime.

@@ -253,7 +253,7 @@ test('explicit OIDC mode preserves legacy generated configuration and build comm
 test('OAuth JWT is explicit, pins its resource and scopes, and only post requires a secret', () => {
   const input = structuredClone(example);
   Object.assign(input.auth, { mode: 'oauth-jwt', resource: 'https://resource.example.com',
-    scopes: ['profile', 'email'], tokenEndpointAuthMethod: 'none' });
+    scopes: ['profile', 'email', 'offline_access'], tokenEndpointAuthMethod: 'none' });
   const generated = generateConfigs(input, bases);
   assert.equal(generated.oidc.vars.SIGN_IN_PROTOCOL, 'oauth-jwt');
   assert.equal(generated.oidc.vars.OAUTH_JWT_RESOURCE, input.auth.resource);
@@ -277,7 +277,6 @@ test('OAuth JWT is explicit, pins its resource and scopes, and only post require
     c => { c.auth.scopes = ['read write']; },
     c => { c.auth.scopes = ['profile', 'profile']; },
     c => { c.auth.scopes = ['openid']; },
-    c => { c.auth.scopes = ['offline_access']; },
     c => { c.auth.clientSecret = 'not-configuration'; },
   ]) {
     const bad = structuredClone(input); mutate(bad);

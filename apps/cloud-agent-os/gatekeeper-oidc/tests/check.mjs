@@ -20,7 +20,7 @@ const output = await mkdtemp(join(root, ".test-output-"));
 const issuer = "https://identity.example.invalid/api/auth";
 const origin = "https://workshop.example.invalid";
 const resource = "https://resource.example.invalid";
-const scopes = ["profile", "email"];
+const scopes = ["profile", "email", "offline_access"];
 const metadata = oauthJwt ? `https://identity.example.invalid/.well-known/oauth-authorization-server/api/auth`
   : `${issuer}/.well-known/openid-configuration`;
 const email = `person-${randomBytes(4).toString("hex")}@example.invalid`;
@@ -217,7 +217,7 @@ export default {
     assert.equal(result.status,200,await result.clone().text());
     const html = await result.text();
     assert.match(html,/fixture-handoff-ticket/);
-    for(const value of ["fixture-access-token","fixture-refresh-token",secret,jwt(),email,subject]) assert.ok(!html.includes(value),"callback exposes no identity or provider credentials");
+    for(const value of ["fixture-access-token","fixture-refresh-token","ignored-id-token",secret,jwt(),email,subject]) assert.ok(!html.includes(value),"callback exposes no identity or provider credentials");
     const probe = await mf.getDurableObjectNamespace("Probe");
     assert.deepEqual(await (await probe.get(probe.idFromName("result")).fetch("https://test.invalid")).json(),
       {email,identity:{issuer,subject,email},remainingIdentity:null},
@@ -237,7 +237,7 @@ export default {
       {iat:Math.floor(Date.now()/1000)+3600}, {iat:Math.floor(Date.now()/1000)-3600}, {iat:-1}, {iat:1.5}, {iat:"123"}, {iat:undefined},
       {exp:Math.floor(Date.now()/1000)+30, iat:Math.floor(Date.now()/1000)+45},
       {jti:undefined}, {jti:""}, {jti:42}, {client_id:"other"}, {client_id:undefined}, {azp:"other"}, {azp:undefined},
-      {scope:"profile"}, {scope:["profile","email"]}, {scope:"profile\temail"}, {scope:undefined},
+      {scope:"profile"}, {scope:"profile email"}, {scope:["profile","email"]}, {scope:"profile\temail"}, {scope:undefined},
       {token_use:"id"}, {token_use:undefined}, {banned:true}, {banned:"false"}, {banned:undefined},
     ] : [{iss:"https://other.example.invalid"},{aud:"other-client"},{nonce:"wrong"},
       {exp:Math.floor(Date.now()/1000)-1},{iat:Math.floor(Date.now()/1000)+3600},{email_verified:false},

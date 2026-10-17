@@ -122,7 +122,7 @@ export function parseDeployment(value) {
         'auth.scopes must contain 1–32 explicit scopes');
       for (const scope of value.auth.scopes) {
         text(scope, 'auth.scopes[]', /^[\x21\x23-\x5b\x5d-\x7e]{1,128}$/);
-        assert(scope !== 'openid' && scope !== 'offline_access', 'OAuth JWT login does not use OpenID or refresh scopes');
+        assert(scope !== 'openid', 'OAuth JWT login does not use OpenID scopes');
       }
       assert(new Set(value.auth.scopes).size === value.auth.scopes.length, 'auth.scopes contains duplicates');
     }

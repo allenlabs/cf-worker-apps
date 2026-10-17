@@ -1,0 +1,122 @@
+--- a/packages/workshop-backend/src/auth/login-flow.ts
++++ b/packages/workshop-backend/src/auth/login-flow.ts
+@@ -52,6 +52,7 @@
+ type PendingOutcome =
+   | { pending: true }
+   | { token: string; ticketHash: string; confirmed: boolean }
++  | { consumed: true; ticketHash: string }
+   | { error: string };
+ // `expiresAt` bounds the result absolutely: the alarm wipes it too, but receive() must not depend on
+ // the alarm having fired on time.
+@@ -81,8 +82,9 @@
+  * receive() answers null while the user is still at the provider rather than mistaking the wait for
+  * an expired attempt; deliver()/fail() replace the marker with the result, which lives for
+  * PENDING_HANDOFF_LIFETIME_MS at most; confirm() marks a delivered token as confirmed by the popup
+- * holding its ticket, and receive() releases it only then. An alarm wipes whatever is left
+- * unreceived. An account link (`link`) is kept for as long as the account exists.
++ * holding its ticket, and receive() releases it only then. After receipt, only the ticket hash and
++ * original expiry remain so a lost confirmation reply can be retried. The alarm wipes the result.
++ * An account link (`link`) is kept for as long as the account exists.
+  */
+ export class PendingLogin extends DurableObject<Cloudflare.Env> {
+   /** Called by PublicApi.startGatekeeperLogin before the gatekeeper flow starts. */
+@@ -134,23 +136,26 @@
+     const hash = await hashPresentedSecret(ticket);
+     const result = await this.#result();
+     if ("pending" in result || hash !== result.ticketHash) throw new Error(EXPIRED_MESSAGE);
+-    this.ctx.storage.kv.put<PendingResult>(RESULT_KEY, { ...result, confirmed: true });
++    if ("token" in result) {
++      this.ctx.storage.kv.put<PendingResult>(RESULT_KEY, { ...result, confirmed: true });
++    }
+   }
+ 
+   /**
+    * Release the token to the holder of the attempt once the popup has confirmed it; null while the
+    * attempt is still pending or the token is delivered but unconfirmed, so the caller polls. Single
+-   * use: the result is removed with the read, so a repeat gets no second try.
++   * use: receipt removes the token and retains only proof for confirmation retries until expiry.
+    */
+   async receive(): Promise<string | null> {
+     const result = await this.#result();
++    if ("consumed" in result) throw new Error(EXPIRED_MESSAGE);
+     if ("pending" in result || !result.confirmed) return null;
+-    await this.#clear();
++    this.ctx.storage.kv.put<PendingResult>(RESULT_KEY, {
++      consumed: true, ticketHash: result.ticketHash, expiresAt: result.expiresAt,
++    });
+     return result.token;
+   }
+ 
+-  // The live result, or a throw for an attempt that cannot complete: none (never begun, wiped, or
+-  // already received), expired, or failed; the latter two are cleared as they are reported.
+   async #result(): Promise<Exclude<PendingResult, { error: string }>> {
+     const result = this.ctx.storage.kv.get<PendingResult>(RESULT_KEY);
+     if (!result || Date.now() >= result.expiresAt) {
+@@ -191,12 +196,14 @@
+   async complete(account: Fetcher<GatekeeperUser>, expiresAt?: Date): Promise<ConnectHandoff> {
+     const targetOrigin = handoffTargetOrigin(this.env);
+     const { secret, hash } = await newSecretToken();
+-    await this.#deliver(account, expiresAt, hash);
++    if (!await this.#deliver(account, expiresAt, hash)) {
++      throw new Error("Sign-in failed. Please try again.");
++    }
+     return { targetOrigin, ticket: secret.toHex() };
+   }
+ 
+   async #deliver(account: Fetcher<GatekeeperUser>, expiresAt: Date | undefined,
+-                 ticketHash: string): Promise<void> {
++                 ticketHash: string): Promise<boolean> {
+     const loginLogger = logger.with({
+       operation: "gatekeeper.login",
+       vendorId: this.ctx.props.vendorId,
+@@ -212,7 +219,7 @@
+           event: "gatekeeper.login.finished", outcome: "no_email",
+         });
+         await pending.fail("This account has no verified email, so it can't be used to sign in.");
+-        return;
++        return false;
+       }
+       const userStub = this.ctx.exports.UserDurableObject.get(
+           this.ctx.exports.UserDurableObject.idFromName(email));
+@@ -233,7 +240,7 @@
+           event: "gatekeeper.login.finished", outcome: "signups_disabled",
+         });
+         await pending.fail("New sign-ups are currently disabled on this deployment.");
+-        return;
++        return false;
+       }
+       // For Cloudflare, signing in also links the account for AI Gateway billing: startGatekeeperLogin
+       // requested full (non-transient) scopes, so persist the grant as a connected account before
+@@ -249,6 +256,7 @@
+       loginLogger.info("gatekeeper login finished", {
+         event: "gatekeeper.login.finished", outcome: "ok",
+       });
++      return true;
+     } catch (err) {
+       loginLogger.error("gatekeeper login failed", {
+         event: "gatekeeper.login.failed", error: err,
+@@ -257,6 +265,7 @@
+         event: "gatekeeper.login.finished", outcome: "error",
+       });
+       await pending.fail("Sign-in failed. Please try again.");
++      return false;
+     }
+   }
+ 
+--- a/packages/workshop-frontend/src/ConnectHandoffPage.tsx
++++ b/packages/workshop-frontend/src/ConnectHandoffPage.tsx
+@@ -42,10 +42,10 @@
+  * reload nor a re-render can present the ticket twice. The one repeat is deliberate: a redemption
+  * that failed is presented again over the next session, when the RPC connection has been replaced
+  * after an outage (`main.tsx` swaps the stub once per reconnect, and `useAuth` re-authenticates on
+- * it). That is safe because ticket and nonce are single-use server-side: if the first call did
+- * reach the server, the repeat is refused as expired and changes nothing; if it died with the
+- * socket, the repeat is the first the server hears of it. This page is the only surface a rejected
+- * ticket is reported on, so the server's message is shown verbatim.
++ * it). Sign-in confirmation accepts the same ticket until the original handoff expiry, including
++ * after the login tab receives its token, so a lost reply can be retried without releasing another
++ * token. Connect redemption remains single-use. This page reports a rejected ticket using the
++ * server's message.
+  */
+ export default function ConnectHandoffPage() {
+   const rpcStub = useRpcStub()
