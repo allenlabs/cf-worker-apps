@@ -158,12 +158,14 @@ export function codexImageCheck(owner, verifyIdentity) {
         check(!/text\/html/i.test(response.headers.get("content-type") || "") && response.headers.get("cf-mitigated") !== "challenge", "codex_image_remote_denied");
         if (pending.migration?.intent === "subscription_setup") {
           const bytes = response.body ? await bounded(response, 128 * 1024) : new Uint8Array();
-          let body;
-          try {
-            const content = new TextDecoder("utf-8", { fatal: true }).decode(bytes).trim();
-            body = content ? JSON.parse(content) : {};
-          } catch { throw new Error("codex_image_remote_denied"); }
-          check(body && typeof body === "object" && !Array.isArray(body) && (!Object.hasOwn(body, "error") || body.error === "authorization_pending"), "codex_image_remote_denied");
+          let content, body;
+          try { content = new TextDecoder("utf-8", { fatal: true }).decode(bytes).trim(); }
+          catch { throw new Error("codex_image_oauth_response_invalid"); }
+          check(!codexHtmlError(content) && !/^(?:Forbidden|Access denied)$/i.test(content), "codex_image_remote_denied");
+          try { body = content ? JSON.parse(content) : {}; }
+          catch { throw new Error("codex_image_oauth_response_invalid"); }
+          check(body && typeof body === "object" && !Array.isArray(body), "codex_image_oauth_response_invalid");
+          check(![body.error, body.error?.code, body.error?.type].some(code => ["access_denied", "permission_denied", "forbidden"].includes(code)), "codex_image_remote_denied");
         }
         pending.nextAt = Date.now() + pending.interval * 1000;
         await write(owner, PENDING, pending);

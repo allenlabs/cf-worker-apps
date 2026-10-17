@@ -157,7 +157,7 @@ export default {
       if (Object.keys(input).length !== 1 || typeof input.callbackUrl !== "string" || input.callbackUrl.length > 16384) throw new RequestError("callback_input_invalid");
       return secure(Response.json(readiness(await env.Credentials.getByName("owner").complete(input.callbackUrl))));
     } catch (error) {
-      const code = error instanceof RequestError || (safeErrors.has(error?.message) || /^(?:codex_image_(?:oauth_http_(?:400|401|403|404|429|500|502|503)|oauth_network_error|remote_denied|attempt_expired|attempt_failed_restart_login|identity_mismatch|identity_policy_changed|auth_busy|login_required|subscription_required|refresh_failed_restart_login)|subscription_connection_unavailable)$/.test(error?.message)) ? error.message : "oauth_failed";
+      const code = error instanceof RequestError || (safeErrors.has(error?.message) || /^(?:codex_image_(?:oauth_http_(?:400|401|403|404|429|500|502|503)|oauth_network_error|oauth_response_invalid|remote_denied|attempt_expired|attempt_failed_restart_login|identity_mismatch|identity_policy_changed|auth_busy|login_required|subscription_required|refresh_failed_restart_login)|subscription_connection_unavailable)$/.test(error?.message)) ? error.message : "oauth_failed";
       return secure(Response.json({ error: code }, { status: error instanceof RequestError ? error.status : 400 }));
     }
   },

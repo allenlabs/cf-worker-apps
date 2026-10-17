@@ -423,6 +423,10 @@ try {
     {status:403,body:' \n\t',headers:{'content-type':'text/plain'}},
     {status:403,body:JSON.stringify({error:'authorization_pending',message:'Waiting for approval',interval:1}),headers:{'content-type':'application/json'}},
     {status:404,body:JSON.stringify({status:'waiting',interval:1}),headers:{'content-type':'application/json'}},
+    {status:403,body:JSON.stringify({error:null}),headers:{'content-type':'application/json'}},
+    {status:404,body:JSON.stringify({error:{message:'Waiting for approval',details:{retry:true}}}),headers:{'content-type':'application/json'}},
+    {status:403,body:JSON.stringify({error:'device_authorization_not_ready'}),headers:{'content-type':'text/plain'}},
+    {status:404,body:JSON.stringify({error:{code:'authorization_pending',type:'device_authorization'}}),headers:{'content-type':'application/json'}},
   ];
   while(deviceResponses.length) { await deviceTime({nextAt:Date.now()-1}); const pendingResponse=await send('/gatekeeper/subscription/device/check'); assert.equal(pendingResponse.status,200,await pendingResponse.clone().text()); assert.equal((await pendingResponse.json()).device.userCode,'FIXTURE-CODE'); assert.equal((await inspect()).subscriptionProvider,'siwc','empty or pending-object response never activates'); }
   await deviceTime({nextAt:Date.now()-1});
@@ -489,16 +493,23 @@ try {
   await assertError(await send('/gatekeeper/subscription/device/check'),400,'codex_image_attempt_failed_restart_login');
   assert.equal(devicePolls,jsonDeniedPolls,'explicit JSON access denial is terminal'); deviceJsonDenied=false;
   for(const rejected of [
-    {status:404,body:'Forbidden',headers:{'content-type':'text/plain'}},
-    {status:404,body:'<!doctype html><html>blocked</html>'},
-    {status:403,body:'{invalid',headers:{'content-type':'application/json'}},
-    {status:403,body:'[]',headers:{'content-type':'application/json'}},
-    {status:404,body:'null',headers:{'content-type':'application/json'}},
-    {status:403,body:'{}',headers:{'content-type':'application/json','cf-mitigated':'challenge'}},
+    {status:404,body:'Forbidden',headers:{'content-type':'text/plain'},error:'codex_image_remote_denied'},
+    {status:403,body:' Access denied ',error:'codex_image_remote_denied'},
+    {status:404,body:'<!doctype html><html>blocked</html>',error:'codex_image_remote_denied'},
+    {status:403,body:'<html>blocked</html>',headers:{'content-type':'application/json'},error:'codex_image_remote_denied'},
+    {status:403,body:JSON.stringify({error:'permission_denied'}),error:'codex_image_remote_denied'},
+    {status:404,body:JSON.stringify({error:{code:'access_denied'}}),error:'codex_image_remote_denied'},
+    {status:403,body:JSON.stringify({error:{type:'forbidden',message:'Blocked'}}),error:'codex_image_remote_denied'},
+    {status:403,body:'{invalid',headers:{'content-type':'application/json'},error:'codex_image_oauth_response_invalid'},
+    {status:403,body:'[]',headers:{'content-type':'application/json'},error:'codex_image_oauth_response_invalid'},
+    {status:404,body:'null',headers:{'content-type':'application/json'},error:'codex_image_oauth_response_invalid'},
+    {status:403,body:'Not ready yet',headers:{'content-type':'text/plain'},error:'codex_image_oauth_response_invalid'},
+    {status:403,body:new Uint8Array([0xff]),headers:{'content-type':'application/json'},error:'codex_image_oauth_response_invalid'},
+    {status:403,body:'{}',headers:{'content-type':'application/json','cf-mitigated':'challenge'},error:'codex_image_remote_denied'},
   ]) {
     deviceResponses=[rejected];
     await send('/gatekeeper/subscription/device/start',{planUsageConfirmed:true}); await deviceTime({nextAt:Date.now()-1});
-    await assertError(await send('/gatekeeper/subscription/device/check'),400,'codex_image_remote_denied');
+    await assertError(await send('/gatekeeper/subscription/device/check'),400,rejected.error);
     const rejectedPolls=devicePolls;
     await assertError(await send('/gatekeeper/subscription/device/check'),400,'codex_image_attempt_failed_restart_login');
     assert.equal(devicePolls,rejectedPolls,'invalid pending response is terminal without repeat');
@@ -682,5 +693,5 @@ try {
   assert.equal(oidcConfig.vars.CF_ACCESS_AUD, undefined);
   assert.deepEqual(oidcConfig.durable_objects, config.durable_objects);
   assert.deepEqual(oidcConfig.migrations, config.migrations);
-  console.log(JSON.stringify({ result: "PASS", nativeRuntime: "Miniflare/workerd", checks: ["Access signature/issuer/audience/expiry/admin", "OIDC private session and exact issuer/subject/email pins before Credentials", "OIDC static shell and authenticated UI gating", "same-origin JSON bounded requests before DO", "automatic verified SIWC identity, legacy pins and concurrent registration conflicts", "independent encrypted SIWC and Codex completion in either order", "device empty/pending-object responses, interval, expiry and terminal denial", "explicit active transport and unavailable selection fails closed", "account cache privacy and in-flight selection change", "both login choices and bounded device polling with navigation guard", "automatic metadata and manual callback UI with no browser persistence"], tokenCalls, inferenceCalls, temporaryBuild: work }));
+  console.log(JSON.stringify({ result: "PASS", nativeRuntime: "Miniflare/workerd", checks: ["Access signature/issuer/audience/expiry/admin", "OIDC private session and exact issuer/subject/email pins before Credentials", "OIDC static shell and authenticated UI gating", "same-origin JSON bounded requests before DO", "automatic verified SIWC identity, legacy pins and concurrent registration conflicts", "independent encrypted SIWC and Codex completion in either order", "device empty/arbitrary pending objects, interval, expiry and terminal denial or invalid response", "explicit active transport and unavailable selection fails closed", "account cache privacy and in-flight selection change", "both login choices and bounded device polling with navigation guard", "automatic metadata and manual callback UI with no browser persistence"], tokenCalls, inferenceCalls, temporaryBuild: work }));
 } finally { await mf.dispose(); }
