@@ -113,6 +113,30 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 
 배포 후 URL과 secret을 환경변수로 지정하고 `npm run smoke`를 실행하면 합성 이벤트 **한 건을 실제 저장**하여 즉시 조회, 중복 요청, R2 전환을 검사합니다. 자세한 순서는 [DEPLOYMENT.md](docs/DEPLOYMENT.md)에 있습니다.
 
+## Optional SSO for browser access
+
+Configure all three values together in private deployment configuration. Both URLs must be exact HTTPS origins with no path, query, credentials or trailing slash. The subjects are exact SSO `user.id` values, not emails or roles. Every allowed subject can read the whole dataset; this does not add administrative rights or multi-user data isolation.
+
+```toml
+[vars]
+SSO_WEB_ORIGIN = "https://identity.example.invalid"
+SSO_API_ORIGIN = "https://identity-api.example.invalid"
+SSO_ALLOWED_SUBJECTS = '["example-viewer-subject"]'
+
+# Optional same-account transport; SSO_API_ORIGIN remains required.
+[[services]]
+binding = "AUTH_API"
+service = "example-auth-api"
+```
+
+Register this deployment's origin and `/auth/callback` return URL with the existing SSO service. `/auth/login` sends the browser to its `/sign-in` page with a browser-bound random state in the callback. The state cookie is signed, HttpOnly, Secure, SameSite=Lax and expires after ten minutes. The callback requires exactly one matching state and one code before sending a single server-side `POST /sso/exchange` with `{code, client_id: <this origin>, include_token: false}`. Only a successful response with an allowlisted `user.id` can issue the existing signed viewer session. No provider token is requested or sent to the browser; a response containing a nonempty token is rejected. The identity-only response's empty `token` and zero `expires_in` select the local eight-hour session limit. The session is HttpOnly, Secure and SameSite=Lax, lasts at most eight hours, and is shorter when the exchange supplies a smaller positive `expires_in`. Binding failures never fall back to public HTTP.
+
+In this mode, anonymous HTML requests redirect to `/auth/login`. The native HTML rewriter removes the viewer-token form and marks the page for the public JavaScript. Browser token-to-cookie login is disabled, historical token-login cookies are rejected, and requests with `Origin` or `Sec-Fetch-*` headers cannot authenticate with a bearer token. CLI requests without those browser headers retain the existing viewer bearer protocol. Keep `VIEWER_TOKEN` as a server-side signing secret and authorized CLI credential; ingestion credentials remain separate and unchanged.
+
+Viewer APIs still return JSON 401/403 responses. A configured 401 includes the fixed `x-cf-observe-login: /auth/login` hint, which the dashboard uses to start SSO. Denials and service failures do not start another login. Explicit logout clears the local viewer cookie and shows a neutral SSO sign-in link; it does not sign out the central SSO service or immediately sign back in. Same-origin browser API and WebSocket guards remain required. Each signed SSO session records its subject, SSO API origin and application origin. Every authenticated request checks these against the current subject allowlist, API origin and request origin; policy changes invalidate previously admitted sessions. Older SSO cookies without these bindings require sign-in again.
+
+Partial or malformed SSO configuration fails closed for HTML and viewer authentication. Health remains public. With valid SSO configuration, static JavaScript/CSS retain their existing protocols. With all SSO settings and the optional binding absent, the local demo and existing token-login mode remain available.
+
 ## 비용 기본값
 
 ```json

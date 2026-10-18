@@ -1,6 +1,7 @@
 import { createRenderScheduler, mergeEventWindow, eventPage, healthSummary, emptyState, connectionExamples, MAX_RETAINED_EVENTS, DISPLAY_PAGE_SIZE } from './live-state.js';
 const $ = id => document.getElementById(id);
-const state = { events: new Map(), kind: '', live: true, socket: null, reconnect: null, revision: 0, query: null, cursor: null, complete: false, loading: false, queryAbort: null, scanned: { manifests: 0, segments: 0, compressedBytes: 0 }, selected: null, detail: null, showBatch: false, health: null, authenticated: false, healthTimer: null, healthLoading: false, healthCheckedAt: null, healthError: '', rowOffset: 0, evicted: 0, rejected: 0 };
+const sso = document.body.dataset.sso === 'true';
+const state = { events: new Map(), kind: '', live: true, socket: null, reconnect: null, revision: 0, query: null, cursor: null, complete: false, loading: false, queryAbort: null, scanned: { manifests: 0, segments: 0, compressedBytes: 0 }, selected: null, detail: null, showBatch: false, health: null, authenticated: false, healthTimer: null, healthLoading: false, healthCheckedAt: null, healthError: '', signedOut: false, rowOffset: 0, evicted: 0, rejected: 0 };
 const MAX_VISIBLE = MAX_RETAINED_EVENTS;
 const renderScheduler = createRenderScheduler(() => render(), () => drawChart([...state.events.values()]));
 const titles = { '': '모든 이벤트', logs: '로그', traces: '트레이스', metrics: '메트릭' };
@@ -29,6 +30,7 @@ async function api(path, options = {}) {
     if (!r.ok) {
         const e = new Error(data.error || `요청 실패 (${r.status})`);
         e.status = r.status;
+        e.ssoLogin = r.status === 401 && r.headers.get('x-cf-observe-login') === '/auth/login';
         throw e;
     }
     return data;
@@ -40,6 +42,7 @@ function handleError(e) {
         state.authenticated = false;
         stopHealthPolling();
         stopSocket();
+        if (e.ssoLogin && !state.signedOut) { location.replace('/auth/login'); return; }
         if (!$('loginDialog').open)
             $('loginDialog').showModal();
     }
@@ -570,13 +573,14 @@ $('traceButton').addEventListener('click', () => {
     traceFilter(id);
 });
 $('loginDialog').addEventListener('cancel', e => e.preventDefault());
-$('loginForm').addEventListener('submit', async (e) => {
+if (!sso) $('loginForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     $('loginError').textContent = '';
     try {
         await api('/api/session', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: $('viewerToken').value }) });
         $('viewerToken').value = '';
         $('loginDialog').close();
+        state.signedOut = false;
         state.authenticated = true;
         startHealthPolling();
         search();
@@ -586,6 +590,7 @@ $('loginForm').addEventListener('submit', async (e) => {
     }
 });
 $('logoutButton').addEventListener('click', async () => {
+    state.signedOut = true;
     ++state.revision;
     state.queryAbort?.abort();
     state.loading = false;
@@ -626,12 +631,15 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('beforeunload', () => { stopSocket(); stopHealthPolling(); renderScheduler.cancel(); });
 try {
-    state.health = await api('/api/health');
-    state.authenticated = true;
-    state.healthCheckedAt = Date.now();
-    startHealthPolling();
-    updateHealth();
-    await search();
+    const health = await api('/api/health');
+    if (!state.signedOut) {
+        state.health = health;
+        state.authenticated = true;
+        state.healthCheckedAt = Date.now();
+        startHealthPolling();
+        updateHealth();
+        await search();
+    }
 }
 catch (e) {
     handleError(e);

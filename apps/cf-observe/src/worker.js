@@ -1,5 +1,5 @@
 import { TelemetryJournal } from './journal.js';
-import { authorizeIngest, authorizeViewer, login, logout, requireSameOrigin } from './auth.js';
+import { authorizeIngest, authorizeViewer, login, logout, requireSameOrigin, ssoConfig, ssoLogin, ssoCallback } from './auth.js';
 import { decodeBody, normalize } from './protocol.js';
 import { queryEvents, getEvent, journalStub, parseFilters } from './query.js';
 import { HttpError, json, errorResponse, utf8, base64url, sha256 } from './util.js';
@@ -21,6 +21,14 @@ async function route(request, env) {
     const url = new URL(request.url), path = url.pathname;
     if (path === '/healthz')
         return json({ service: 'cf-observe', version: '0.1.0' });
+    if (path === '/auth/login' || path === '/auth/callback') {
+        const config = ssoConfig(env);
+        if (!config)
+            throw new HttpError(404, 'SSO is not configured');
+        if (request.method !== 'GET')
+            throw new HttpError(405, 'GET required');
+        return path === '/auth/login' ? ssoLogin(request, env, config) : ssoCallback(request, env, config);
+    }
     if (path === '/api/session' && request.method === 'POST')
         return login(request, env);
     if (path === '/api/session' && request.method === 'DELETE')
@@ -89,7 +97,22 @@ async function route(request, env) {
     }
     if (request.method !== 'GET' && request.method !== 'HEAD')
         throw new HttpError(405, 'GET required');
-    return env.ASSETS.fetch(request);
+    const sso = ssoConfig(env);
+    const response = await env.ASSETS.fetch(request);
+    if (sso && /^text\/html(?:;|$)/i.test(response.headers.get('content-type') || '')) {
+        try { await authorizeViewer(request, env); }
+        catch (error) {
+            if (error.status !== 401) throw error;
+            return new Response(null, { status: 303, headers: { location: '/auth/login', 'cache-control': 'no-store' } });
+        }
+        const protectedResponse = new Response(response.body, response);
+        protectedResponse.headers.set('cache-control', 'no-store');
+        return new HTMLRewriter()
+            .on('body', { element(element) { element.setAttribute('data-sso', 'true'); } })
+            .on('#loginDialog', { element(element) { element.setInnerContent('<p>로그아웃되었습니다.</p><a href="/auth/login">SSO로 로그인</a>', { html: true }); } })
+            .transform(protectedResponse);
+    }
+    return response;
 }
 export default {
     async fetch(request, env) {
@@ -97,7 +120,12 @@ export default {
             return headers(await route(request, env));
         }
         catch (e) {
-            return headers(otlpPaths.has(new URL(request.url).pathname) ? otlpError(request, e) : errorResponse(e));
+            const path = new URL(request.url).pathname;
+            const response = otlpPaths.has(path) ? otlpError(request, e) : errorResponse(e);
+            if (response.status === 401 && path.startsWith('/api/')) {
+                try { if (ssoConfig(env)) response.headers.set('x-cf-observe-login', '/auth/login'); } catch {}
+            }
+            return headers(response);
         }
     },
     async scheduled(_event, env, ctx) {
