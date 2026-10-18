@@ -1,5 +1,13 @@
+const oidcSessionScript = String.raw`
+function forgetSession() { try { localStorage.removeItem('authToken'); } catch {} }
+function signInPath() {
+  const hash = /^#(?:add|connection=(?:owner|account-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}))$/.test(location.hash) ? location.hash : '';
+  return '/?sign_in=oidc&return_to=' + encodeURIComponent('/gatekeeper/subscription' + hash);
+}
+`;
+
 export function browserScript(mode = 'access') {
-  return (mode === 'oidc' ? String.raw`
+  return (mode === 'oidc' ? oidcSessionScript + String.raw`
 const oidc = true;
 function sessionHeaders() {
   try {
@@ -7,6 +15,7 @@ function sessionHeaders() {
     return token ? { authorization: 'Bearer ' + token } : {};
   } catch { return {}; }
 }
+document.querySelector('#sign-in a').href = signInPath();
 ` : `const oidc = false;\nfunction sessionHeaders() { return {}; }\n`) + String.raw`
 const byId = id => document.getElementById(id);
 let pollTimer, pollGeneration = 0, accountGeneration = 0, accountLoaded = false, activeProvider;
@@ -32,14 +41,14 @@ async function post(path, value, target = capture()) {
   if (!current(target)) throw Error('selection_changed');
   if (!response.ok) {
     if (oidc && (response.status === 401 || response.status === 403)) {
-      controls(false);
-      byId('sign-in').hidden = false;
-      byId('authorization').hidden = true;
-      byId('login').removeAttribute('href');
-      byId('identity').textContent = '';
-      byId('metadata-refresh').hidden = true;
-      pollGeneration++; accountGeneration++; clearTimeout(pollTimer);
-      byId('device').hidden = true; byId('device-code').textContent = ''; byId('device-login').removeAttribute('href'); byId('account-info').textContent = '';
+      controls(false); clearConnection();
+      byId('sign-in').hidden = response.status !== 401;
+      status.textContent = response.status === 401 ? 'OS 로그인으로 이동합니다.' : '이 구독 연결 설정에 접근할 권한이 없습니다.';
+      if (response.status === 401) {
+        forgetSession();
+        const path = signInPath(); document.querySelector('#sign-in a').href = path; location.replace(path);
+      }
+      throw Error('selection_changed');
     }
     throw Error(result.error || 'request_failed');
   }
@@ -223,4 +232,27 @@ export function subscriptionPage(nonce, mode = 'access', dual = false) {
 <form id="start" autocomplete="off"><fieldset id="setup-start"${disabled}><legend>SIWC · ChatGPT 로그인</legend><p>이메일을 입력할 필요 없이 OpenAI에서 계정을 선택하세요. 이메일·요금제·조직은 인증된 로그인 결과에 제공된 정보만 표시합니다.</p><label><input id="approval" type="checkbox" required> 이 연결을 통한 모델 요청이 내 ChatGPT 구독 사용량을 사용할 수 있음에 동의합니다.</label><button id="start-button" type="submit">ChatGPT로 계속</button></fieldset></form>
 <section id="authorization" hidden><h2>2. 직접 로그인</h2><p><a id="login" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">OpenAI 로그인 열기</a></p><p>OpenAI에서 사용할 계정과 워크스페이스를 선택하세요. 기존 연결을 다시 인증할 때는 같은 계정과 워크스페이스를 사용하세요.</p></section>
 <form id="complete" autocomplete="off"><fieldset id="setup-complete"${disabled}><legend>3. 로그인 완료 주소 입력</legend><p>로그인을 마치면 <code>http://127.0.0.1:1455/auth/callback</code> 주소로 이동합니다. 페이지가 열리지 않는다는 메시지가 보여도 주소 표시줄의 전체 주소를 복사해 아래 칸에 입력하세요.</p><p>이 주소에는 일회용 인증 코드가 있습니다. 이 화면에만 입력하고 채팅이나 메시지로 보내지 마세요. 제출하면 입력 칸이 비워집니다.</p><label for="callback">127.0.0.1 콜백 전체 주소</label><textarea id="callback" rows="4" maxlength="16384" required autocomplete="off" autocapitalize="none" spellcheck="false"></textarea><button id="complete-button" type="submit">연결 완료</button></fieldset></form>${dual ? `<form id="device-start" autocomplete="off"><fieldset id="setup-device"${disabled}><legend>Codex device · 코드로 로그인</legend><p>콜백 주소를 붙여넣지 않고 OpenAI 페이지에서 일회용 코드를 승인합니다. 계정의 디바이스 코드 로그인이 허용되어야 하며, 원격 환경에서 OpenAI가 요청을 거부하면 SIWC를 사용할 수 있습니다.</p><label><input id="device-approval" type="checkbox" required> 모델 요청에 내 ChatGPT 구독을 사용하는 데 동의합니다.</label><button id="device-start-button" type="submit">디바이스 코드 받기</button></fieldset></form>` : ''}<section id="device" hidden><h2>OpenAI에서 코드 승인</h2><p>일회용 코드: <strong id="device-code"></strong></p><p><a id="device-login" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">OpenAI 코드 승인 열기</a></p><p>이 화면을 열어 두세요. 완료되면 연결이 자동으로 전환됩니다.</p></section></main><script nonce="${nonce}">${browserScript(mode)}</script></html>`;
+}
+
+export function subscriptionBootstrapPage(nonce) {
+  return `<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>구독 연결</title><main><p id="status" role="status" aria-live="polite">로그인 상태를 확인하고 있습니다.</p><a id="sign-in" hidden>OS 로그인</a></main><script nonce="${nonce}">
+(() => {
+${oidcSessionScript}
+const status = document.getElementById('status'), signIn = document.getElementById('sign-in');
+signIn.href = signInPath();
+function login() { status.textContent = 'OS 로그인으로 이동합니다.'; signIn.hidden = false; location.replace(signIn.href); }
+(async () => {
+  let token;
+  try { token = localStorage.getItem('authToken'); } catch {}
+  if (!token) { login(); return; }
+  const response = await fetch(location.pathname, { method: 'GET', credentials: 'same-origin', headers: { authorization: 'Bearer ' + token, 'x-subscription-document-nonce': '${nonce}' }, cache: 'no-store', referrerPolicy: 'no-referrer', redirect: 'error' });
+  if (response.status === 401) { forgetSession(); login(); return; }
+  if (response.status === 403) { status.textContent = '이 구독 연결 설정에 접근할 권한이 없습니다.'; return; }
+  if (!response.ok || response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'text/html') throw Error('document_failed');
+  const html = await response.text();
+  try { sessionStorage.removeItem('gadgets.redirect-login-received'); } catch {}
+  document.open(); document.write(html); document.close();
+})().catch(() => { status.textContent = '로그인 상태를 확인하지 못했습니다. 페이지를 새로고침하세요.'; });
+})();
+</script></html>`;
 }

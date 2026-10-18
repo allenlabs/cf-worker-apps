@@ -67,7 +67,7 @@ try {
         run('pnpm', ['exec', 'vitest', 'run',
           ...(config.auth.mode === 'access' ? ['__tests__/access.test.ts', '__tests__/client-errors.test.ts'] : []),
           '__tests__/subscription-models.test.ts', '__tests__/subscription-setup-session.test.ts',
-          '__tests__/pending-login.test.ts',
+          '__tests__/pending-login.test.ts', '__tests__/redirect-login.test.ts',
           '__tests__/user-models.test.ts', '__tests__/admin-settings-models.test.ts',
           '__tests__/site-launch.test.ts', '__tests__/site-launch-agent.test.ts',
           '__tests__/opencode-loop.test.ts', '__tests__/agent-retry.test.ts',
@@ -78,7 +78,8 @@ try {
           cwd: join(checkout, packages.workshop),
         });
         run('pnpm', ['exec', 'vitest', 'run',
-          ...(config.auth.mode === 'access' ? ['src/useAuth.test.tsx'] : []),
+          'src/useAuth.test.tsx', 'src/redirectLogin.test.tsx',
+          'src/ConnectHandoffPage.test.tsx', 'src/components/auth/OAuthButtons.test.tsx',
           'src/AddModelModal.test.tsx',
           'src/features/ai-models/AdminModelsPanel.test.tsx',
           'src/features/ai-models/AdminModelsPanel.subscription.test.tsx',

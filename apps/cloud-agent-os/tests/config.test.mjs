@@ -500,7 +500,10 @@ test('Access and public OAuth JWT checks and deployments need no OIDC secret fil
       assert(deployments.every(command => command.args.includes('--dry-run') === (mode === '--check')));
       if (mode === '--check') {
         assert.equal(commands.some(command => command.args.includes('__tests__/access.test.ts')), access);
-        assert.equal(commands.some(command => command.args.includes('src/useAuth.test.tsx')), access);
+        for (const file of ['src/useAuth.test.tsx', 'src/redirectLogin.test.tsx',
+          'src/ConnectHandoffPage.test.tsx', 'src/components/auth/OAuthButtons.test.tsx', '__tests__/redirect-login.test.ts']) {
+          assert(commands.some(command => command.args.includes(file)), `Missing native sign-in check: ${file}`);
+        }
         if (!access) {
           assert(commands.some(command => command.args.includes('oauth-jwt')));
           assert(commands.some(command => command.args.includes('oauth-jwt-service')));

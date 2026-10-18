@@ -1,0 +1,434 @@
+diff --git a/packages/workshop-backend/__tests__/test-worker.ts b/packages/workshop-backend/__tests__/test-worker.ts
+index 505c490..0c402b3 100644
+--- a/packages/workshop-backend/__tests__/test-worker.ts
++++ b/packages/workshop-backend/__tests__/test-worker.ts
+@@ -4,7 +4,7 @@
+ import { DurableObject, WorkerEntrypoint, restore } from "cloudflare:workers";
+ import type { AccountDescription } from "@gadgets/workshop-shared/gatekeeper";
+ import { GatekeeperConnectCallbackImpl } from "../src/user.js";
+-import { LoginConnectCallbackImpl } from "../src/auth/login-flow.js";
++import { LoginConnectCallbackImpl as RealLoginConnectCallbackImpl } from "../src/auth/login-flow.js";
+ import { OverseerDurableObject as RealOverseerDurableObject } from "../src/server.js";
+ 
+ export * from "../src/server.js";
+@@ -50,6 +50,7 @@ export { CodeModeTailLoopback } from "../src/server.js";
+  * than covered by the `export *`.
+  */
+ export class TestConnectCallback extends GatekeeperConnectCallbackImpl {}
++export class LoginConnectCallbackImpl extends RealLoginConnectCallbackImpl {}
+ /** The sign-in callback, reachable the same way. */
+ export class TestLoginCallback extends LoginConnectCallbackImpl {}
+ 
+diff --git a/packages/workshop-backend/src/auth/login-flow.ts b/packages/workshop-backend/src/auth/login-flow.ts
+index faf896c..ffad4fc 100644
+--- a/packages/workshop-backend/src/auth/login-flow.ts
++++ b/packages/workshop-backend/src/auth/login-flow.ts
+@@ -72,6 +72,8 @@ type AccountLink = { userId: string; accountId: number };
+ 
+ const RESULT_KEY = "result";
+ const LINK_KEY = "link";
++const RESUME_KEY = "resume";
++type ResumeProof = { hash: string; expiresAt: number };
+ /** What confirmLogin() and LoginAttempt.receive() throw for an attempt that cannot complete. */
+ export const EXPIRED_MESSAGE = "This sign-in attempt has expired. Please try again.";
+ 
+@@ -88,8 +90,26 @@ export const EXPIRED_MESSAGE = "This sign-in attempt has expired. Please try aga
+  */
+ export class PendingLogin extends DurableObject<Cloudflare.Env> {
+   /** Called by PublicApi.startGatekeeperLogin before the gatekeeper flow starts. */
+-  async begin(): Promise<void> {
++  async begin(resumeHash?: string): Promise<void> {
+     await this.#store({ pending: true }, LOGIN_PENDING_LIFETIME_MS);
++    if (resumeHash !== undefined) {
++      this.ctx.storage.kv.put<ResumeProof>(RESUME_KEY, {
++        hash: resumeHash, expiresAt: Date.now() + LOGIN_PENDING_LIFETIME_MS,
++      });
++    }
++  }
++
++  /** A nonce locates this DO; only the separate receive secret restores its capability. */
++  async authorizeResume(secret: string): Promise<void> {
++    const hash = await hashPresentedSecret(secret);
++    const proof = this.ctx.storage.kv.get<ResumeProof>(RESUME_KEY);
++    if (hash === undefined || !proof || hash !== proof.hash) throw new Error(EXPIRED_MESSAGE);
++    if (Date.now() >= proof.expiresAt) {
++      await this.#clear();
++      throw new Error(EXPIRED_MESSAGE);
++    }
++    const result = await this.#result();
++    if ("consumed" in result) throw new Error(EXPIRED_MESSAGE);
+   }
+ 
+   /** Called by LoginConnectCallbackImpl on success, with the hash of the ticket that confirms it. */
+@@ -108,6 +128,10 @@ export class PendingLogin extends DurableObject<Cloudflare.Env> {
+   async #store(result: PendingOutcome, lifetimeMs = PENDING_HANDOFF_LIFETIME_MS): Promise<void> {
+     const expiresAt = Date.now() + lifetimeMs;
+     this.ctx.storage.kv.put<PendingResult>(RESULT_KEY, { ...result, expiresAt });
++    const proof = this.ctx.storage.kv.get<ResumeProof>(RESUME_KEY);
++    if (proof) this.ctx.storage.kv.put<ResumeProof>(RESUME_KEY, {
++      ...proof, expiresAt: Math.min(proof.expiresAt, expiresAt),
++    });
+     await this.ctx.storage.setAlarm(expiresAt);
+   }
+ 
+@@ -153,6 +177,7 @@ export class PendingLogin extends DurableObject<Cloudflare.Env> {
+     this.ctx.storage.kv.put<PendingResult>(RESULT_KEY, {
+       consumed: true, ticketHash: result.ticketHash, expiresAt: result.expiresAt,
+     });
++    this.ctx.storage.kv.delete(RESUME_KEY);
+     return result.token;
+   }
+ 
+@@ -170,11 +195,13 @@ export class PendingLogin extends DurableObject<Cloudflare.Env> {
+   }
+ 
+   async #clear(): Promise<void> {
++    this.ctx.storage.kv.delete(RESUME_KEY);
+     this.ctx.storage.kv.delete(RESULT_KEY);
+     await this.ctx.storage.deleteAlarm();
+   }
+ 
+   async alarm(): Promise<void> {
++    this.ctx.storage.kv.delete(RESUME_KEY);
+     this.ctx.storage.kv.delete(RESULT_KEY);
+   }
+ }
+diff --git a/packages/workshop-backend/src/server.ts b/packages/workshop-backend/src/server.ts
+index 9315425..f55ba31 100644
+--- a/packages/workshop-backend/src/server.ts
++++ b/packages/workshop-backend/src/server.ts
+@@ -1,7 +1,7 @@
+ import { RpcStub, RpcTarget, newHttpBatchRpcResponse, newWebSocketRpcSession, RpcSessionOptions } from "capnweb";
+ import { validateRpc } from "capnweb-validate";
+ import type { JWTPayload } from "jose";
+-import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, RedactedAiModelConfig, AiGatewayInfo, AiModelProvider, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, UserDirectoryRecord, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES, AUTH_ERROR_CODES, createAuthError, ConnectFlowStart } from '@gadgets/workshop-shared/api';
++import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, RedactedAiModelConfig, AiGatewayInfo, AiModelProvider, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, UserDirectoryRecord, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES, AUTH_ERROR_CODES, createAuthError, ConnectFlowStart, GatekeeperLoginStart } from '@gadgets/workshop-shared/api';
+ import type { UiFeatureFlags } from "@gadgets/workshop-shared/feature-flags";
+ import { getServerConfig } from "./deployment-config.js";
+ import { isPasswordAuthEnabled, getAuthGatekeeperAllowlist } from "./auth/config.js";
+@@ -699,8 +699,8 @@ class PublicApiImpl extends RpcTarget implements PublicApi {
+     return getServerConfig(this.env);
+   }
+ 
+-  async startGatekeeperLogin(vendorId: string)
+-      : Promise<{ url: string; nonce: string; attempt: RpcStub<LoginAttempt> }> {
++  async startGatekeeperLogin(vendorId: string, mode: "popup" | "redirect" = "popup")
++      : Promise<GatekeeperLoginStart> {
+     if (!getAuthGatekeeperAllowlist(this.env).includes(vendorId)) {
+       throw new Error(`Sign-in via "${vendorId}" is not enabled on this deployment.`);
+     }
+@@ -718,7 +718,8 @@ class PublicApiImpl extends RpcTarget implements PublicApi {
+     const pending = this.ctx.exports.PendingLogin.get(pendingId);
+     // Mark the attempt as started before the gatekeeper can deliver to it, so receive() answers null
+     // while it is still running instead of reporting it expired.
+-    await pending.begin();
++    const resume = mode === "redirect" ? await newSecretToken() : undefined;
++    await pending.begin(resume?.hash);
+     const callback = this.ctx.exports.LoginConnectCallbackImpl(
+         { props: { pendingId: pendingId.toString(), vendorId } });
+     // For most providers, sign-in needs only minimal scopes to verify the user's email (the grant is
+@@ -729,9 +730,20 @@ class PublicApiImpl extends RpcTarget implements PublicApi {
+       ? { scopes: "full" as const, resourceUrlPatterns: [] }
+       : { scopes: "auth" as const };
+     const { url } = await vendor.connectAccount(callback, options);
++    if (resume) return { mode: "redirect", url, nonce: secret.toHex(), resumeSecret: resume.secret.toHex() };
+     // @ts-expect-error Cap'n Web RPC stubs and native RPC targets are compatible but the type
+     //     system doesn't know this.
+-    return { url, nonce: secret.toHex(), attempt: new LoginAttemptImpl(pending) };
++    return { mode: "popup", url, nonce: secret.toHex(), attempt: new LoginAttemptImpl(pending) };
++  }
++
++  async resumeGatekeeperLogin(nonce: string, resumeSecret: string): Promise<RpcStub<LoginAttempt>> {
++    const nonceHash = await hashPresentedSecret(nonce);
++    if (nonceHash === undefined) throw new Error(EXPIRED_MESSAGE);
++    const pending = this.ctx.exports.PendingLogin.get(this.ctx.exports.PendingLogin.idFromName(nonceHash));
++    await pending.authorizeResume(resumeSecret);
++    // @ts-expect-error Cap'n Web RPC stubs and native RPC targets are compatible but the type
++    //     system doesn't know this.
++    return new LoginAttemptImpl(pending);
+   }
+ 
+   async confirmLogin(ticket: string, nonce: string): Promise<void> {
+diff --git a/packages/workshop-backend/vitest.config.ts b/packages/workshop-backend/vitest.config.ts
+index 82af93f..2263dd1 100644
+--- a/packages/workshop-backend/vitest.config.ts
++++ b/packages/workshop-backend/vitest.config.ts
+@@ -89,6 +89,7 @@ export default defineConfig({
+         workerLoaders: { LOADER: {} },
+         // Where a blueprint's content is published to and read back from.
+         r2Buckets: ['BLUEPRINT_CONTENT'],
++        kvNamespaces: ['BLUEPRINTS'],
+         durableObjects: {
+           TEST_OVERSEER: { className: 'OverseerDurableObject', useSQLite: true },
+           TEST_USER: { className: 'UserDurableObject', useSQLite: true },
+diff --git a/packages/workshop-frontend/src/ConnectHandoffPage.tsx b/packages/workshop-frontend/src/ConnectHandoffPage.tsx
+index 3c09d26..847f118 100644
+--- a/packages/workshop-frontend/src/ConnectHandoffPage.tsx
++++ b/packages/workshop-frontend/src/ConnectHandoffPage.tsx
+@@ -4,6 +4,7 @@ import type { AuthenticatedApi, PublicApi } from '@gadgets/workshop-shared/api'
+ import { useConnectionLost, useRpcStub } from './RpcContext'
+ import { useAuth } from './useAuth'
+ import { readPopupHandoff, ticketFromHandoffFragment } from './connectHandoff'
++import { loginNavigation, markRedirectLoginReceived, takeRedirectLogin } from './redirectLogin'
+ 
+ /**
+  * What the page tells the user once the outcome is known: a heading and one line of detail.
+@@ -52,9 +53,10 @@ export default function ConnectHandoffPage() {
+   const connectionLost = useConnectionLost()
+   const { authenticatedApi, isLoading } = useAuth(rpcStub)
+   // Read once: the storage record is consumed by reading it, and the fragment is stripped below.
+-  const [{ ticket, handoff }] = useState(() => ({
++  const [{ ticket, handoff, redirect }] = useState(() => ({
+     ticket: ticketFromHandoffFragment(window.location.hash),
+     handoff: readPopupHandoff(),
++    redirect: takeRedirectLogin(),
+   }))
+   const [result, setResult] = useState<Outcome | null>(null)
+   // The session the ticket was last presented over. It is presented at most once per session,
+@@ -68,31 +70,46 @@ export default function ConnectHandoffPage() {
+   }, [])
+ 
+   useEffect(() => {
+-    if (ticket === null || handoff === null) return
++    if (ticket === null || (handoff === null && redirect === null)) return
+     let api: RpcStub<AuthenticatedApi> | RpcStub<PublicApi>
+     let redeem: () => Promise<void>
+     let done: Outcome
+     let failed: string
+-    if (handoff.kind === 'connect') {
++    if (redirect !== null) {
++      api = rpcStub
++      redeem = async () => {
++        await rpcStub.confirmLogin(ticket, redirect.nonce)
++        const attempt = await rpcStub.resumeGatekeeperLogin(redirect.nonce, redirect.resumeSecret)
++        try {
++          const token = await attempt.receive()
++          if (token === null) throw new Error('Sign-in has not completed. Please try again.')
++          markRedirectLoginReceived(redirect.returnTo)
++          localStorage.setItem('authToken', token)
++        } finally { attempt[Symbol.dispose]() }
++      }
++      done = { title: 'Signed in', detail: 'Returning to your page…' }
++      failed = 'Could not sign in'
++    } else if (handoff?.kind === 'connect') {
+       if (isLoading || authenticatedApi === null) return
+       api = authenticatedApi
+       redeem = () => authenticatedApi.completeConnectHandoff(ticket, handoff.nonce)
+       done = { title: 'Connected', detail: CLOSE_HINT }
+       failed = 'Could not complete the connection'
+-    } else {
++    } else if (handoff !== null) {
+       api = rpcStub
+       redeem = () => rpcStub.confirmLogin(ticket, handoff.nonce)
+       done = { title: 'Signed in', detail: CLOSE_HINT }
+       failed = 'Could not sign in'
+-    }
++    } else return
+     if (sentWithRef.current === api) return
+-    if (sentWithRef.current !== null && !result?.failed) return
++    if (sentWithRef.current !== null && (redirect !== null || !result?.failed)) return
+     sentWithRef.current = api
+     setResult(null)
+     redeem().then(
+       () => {
+         // Browsers may refuse to close a window a script did not open; the hint covers that.
+-        window.close()
++        if (redirect !== null) loginNavigation.replace(redirect.returnTo)
++        else window.close()
+         setResult(done)
+       },
+       (err: unknown) => {
+@@ -103,14 +120,14 @@ export default function ConnectHandoffPage() {
+         })
+       },
+     )
+-  }, [ticket, handoff, isLoading, authenticatedApi, rpcStub, result])
++  }, [ticket, handoff, redirect, isLoading, authenticatedApi, rpcStub, result])
+ 
+   let outcome = result
+-  if (ticket === null || handoff === null) outcome = INVALID
++  if (ticket === null || (handoff === null && redirect === null)) outcome = INVALID
+   // A failure while the connection is down is the socket's, not the server's: the redemption is
+   // presented again once the session is back, so show the wait rather than a transient error.
+   else if (outcome?.failed && connectionLost) outcome = null
+-  else if (outcome === null && handoff.kind === 'connect' && !isLoading && authenticatedApi === null) {
++  else if (outcome === null && handoff?.kind === 'connect' && !isLoading && authenticatedApi === null) {
+     outcome = SIGNED_OUT
+   }
+ 
+@@ -118,6 +135,7 @@ export default function ConnectHandoffPage() {
+     <div className="flex min-h-full flex-col items-center justify-center gap-2 bg-kumo-base p-6 text-center">
+       <h1 className="text-lg font-semibold text-kumo-default">{outcome?.title ?? 'Finishing up…'}</h1>
+       {outcome && <p className="text-sm text-kumo-subtle">{outcome.detail}</p>}
++      {redirect !== null && outcome?.failed && <a className="underline" href={`/?sign_in=oidc&return_to=${encodeURIComponent(redirect.returnTo)}`}>Try signing in again</a>}
+     </div>
+   )
+ }
+diff --git a/packages/workshop-frontend/src/LoginPage.tsx b/packages/workshop-frontend/src/LoginPage.tsx
+index 6c6289a..34d202e 100644
+--- a/packages/workshop-frontend/src/LoginPage.tsx
++++ b/packages/workshop-frontend/src/LoginPage.tsx
+@@ -10,14 +10,16 @@ import { useDocumentTitle } from './useDocumentTitle'
+ import { useConnectionLost } from './RpcContext'
+ import OAuthButtons from './components/auth/OAuthButtons'
+ import SiteLogo from './components/SiteLogo'
++import { AutomaticOidcLogin } from './AutomaticOidcLogin'
+ 
+ 
+ interface LoginPageProps {
+   rpcStub: RpcStub<PublicApi>
+   onLoginSuccess?: () => void
++  automaticOidc?: boolean
+ }
+ 
+-export default function LoginPage({ rpcStub, onLoginSuccess }: LoginPageProps) {
++export default function LoginPage({ rpcStub, onLoginSuccess, automaticOidc = false }: LoginPageProps) {
+   const [username, setUsername] = useState('')
+   const [password, setPassword] = useState('')
+   const [loading, setLoading] = useState(false)
+@@ -173,7 +175,9 @@ export default function LoginPage({ rpcStub, onLoginSuccess }: LoginPageProps) {
+             {!passwordAuthEnabled && error && (
+               <Banner variant="error" title={error} className="mb-4" />
+             )}
+-            <OAuthButtons rpcStub={rpcStub} vendors={authVendors} onSuccess={onLoginSuccess} />
++            {automaticOidc && window.parent === window && !passwordAuthEnabled && authVendors.length === 1 && authVendors[0].vendorId === 'oidc'
++              ? <AutomaticOidcLogin rpcStub={rpcStub} />
++              : <OAuthButtons rpcStub={rpcStub} vendors={authVendors} onSuccess={onLoginSuccess} />}
+           </div>
+         )}
+       </div>
+diff --git a/packages/workshop-frontend/src/components/auth/OAuthButtons.tsx b/packages/workshop-frontend/src/components/auth/OAuthButtons.tsx
+index 304c043..8ece1ba 100644
+--- a/packages/workshop-frontend/src/components/auth/OAuthButtons.tsx
++++ b/packages/workshop-frontend/src/components/auth/OAuthButtons.tsx
+@@ -69,7 +69,9 @@ export default function OAuthButtons({ rpcStub, vendors, onSuccess }: OAuthButto
+     setError(null)
+     setPending(vendorId)
+     try {
+-      const { url, nonce, attempt } = await rpcStub.startGatekeeperLogin(vendorId)
++      const flow = await rpcStub.startGatekeeperLogin(vendorId)
++      if (flow.mode === 'redirect') throw new Error('Expected popup sign-in')
++      const { url, nonce, attempt } = flow
+       // `attempt` is the capability to receive the session token.
+       const dispose = () => {
+         try { (attempt as unknown as Disposable)[Symbol.dispose]() } catch { /* already disposed */ }
+diff --git a/packages/workshop-frontend/src/routes/__root.tsx b/packages/workshop-frontend/src/routes/__root.tsx
+index b9a7e47..89141cd 100644
+--- a/packages/workshop-frontend/src/routes/__root.tsx
++++ b/packages/workshop-frontend/src/routes/__root.tsx
+@@ -12,6 +12,8 @@ import { FeatureFlagsProvider } from '../FeatureFlagsContext'
+ import Header from '../components/Header'
+ import AppShell from '../components/AppShell/AppShell'
+ import LoginPage from '../LoginPage'
++import { SignInReturn } from '../AutomaticOidcLogin'
++import { requestedSignInReturn } from '../redirectLogin'
+ import OnboardingWizard from '../OnboardingWizard'
+ import AccountSelectionModal from '../components/billing/AccountSelectionModal'
+ import { SiteLaunchRouteGuard, SiteLaunchScopeContext, useSiteLaunchSelection, useSiteLaunchScope } from '../features/site-launch/SiteLaunchScope'
+@@ -52,6 +54,7 @@ const RootContent = ({ onLaunched, clearSelection, embedded }: {
+   // of public routes. Signed-in users get the full app chrome so public pages (esp. the blueprint
+   // detail) feel native — sidebar and all — instead of floating on a bare page.
+   const standalone = isSignup || isHandoff || (isBlueprint && !isAuthenticated)
++  const signInReturn = pathname === '/' ? requestedSignInReturn(window.location.search) : null
+ 
+   // The workspace editor renders fullscreen (no app chrome). /gadget/ is the legacy URL, kept
+   // here so the chrome doesn't flash in during the redirect to /workspace/.
+@@ -118,7 +121,7 @@ const RootContent = ({ onLaunched, clearSelection, embedded }: {
+ 
+   // Not authenticated and not a public route — show login
+   if (!isAuthenticated && !standalone) {
+-    return <LoginPage rpcStub={rpcStub} onLoginSuccess={handleLoginSuccess} />
++    return <LoginPage rpcStub={rpcStub} onLoginSuccess={handleLoginSuccess} automaticOidc />
+   }
+ 
+   // Signed-out visitors of public routes render without the auth wrapper / app shell.
+@@ -138,6 +141,10 @@ const RootContent = ({ onLaunched, clearSelection, embedded }: {
+     )
+   }
+ 
++  if (authenticatedApi && signInReturn !== null) {
++    return <SignInReturn authenticatedApi={authenticatedApi} returnTo={signInReturn} rpcStub={rpcStub} />
++  }
++
+   // Authenticated — render the full shell (with onboarding gate)
+   // authenticatedApi is guaranteed non-null here: isLoading, error, and
+   // !isAuthenticated branches all return early above.
+diff --git a/packages/workshop-frontend/src/useAuth.ts b/packages/workshop-frontend/src/useAuth.ts
+index 1eeb231..4512733 100644
+--- a/packages/workshop-frontend/src/useAuth.ts
++++ b/packages/workshop-frontend/src/useAuth.ts
+@@ -1,7 +1,8 @@
+ import { useState, useEffect, useRef } from 'react'
+ import { RpcStub } from 'capnweb'
+-import { PublicApi, AuthenticatedApi } from '@gadgets/workshop-shared/api'
++import { PublicApi, AuthenticatedApi, AUTH_ERROR_CODES, getAuthErrorCode } from '@gadgets/workshop-shared/api'
+ import { setReportedUserId } from './errorReporting'
++import { clearRedirectLogin, clearVerifiedNativeLoginMarkers, markManualSignIn } from './redirectLogin'
+ 
+ const CF_ACCESS_MODE = import.meta.env.VITE_CF_ACCESS_MODE === 'true'
+ 
+@@ -50,8 +51,20 @@ export function useAuth(publicApi: RpcStub<PublicApi>) {
+     let cancelled = false
+     authenticatedApi.whoami().then((info) => {
+       // Only a real user account names a person: for a gadget author `id` is its owner's id.
+-      if (!cancelled && info.type === 'user') setReportedUserId(info.id)
+-    }).catch(() => {})
++      if (!cancelled && info.type === 'user') {
++        if (CF_ACCESS_MODE || localStorage.getItem('authToken') === authState.token) {
++          clearRedirectLogin()
++          clearVerifiedNativeLoginMarkers()
++        }
++        setReportedUserId(info.id)
++      }
++    }).catch((err: unknown) => {
++      if (!cancelled && !CF_ACCESS_MODE && getAuthErrorCode(err) === AUTH_ERROR_CODES.invalidSessionToken) {
++        if (localStorage.getItem('authToken') === authState.token) localStorage.removeItem('authToken')
++        setReportedUserId(undefined)
++        setAuthState({ token: null, authenticatedApi: null, isLoading: false, error: null })
++      }
++    })
+     return () => { cancelled = true }
+   }, [authState.authenticatedApi])
+ 
+@@ -130,6 +143,7 @@ export function useAuth(publicApi: RpcStub<PublicApi>) {
+       return
+     }
+ 
++    markManualSignIn()
+     // Use functional updater to read current state (avoids stale closure).
+     setAuthState(prev => {
+       if (prev.authenticatedApi) {
+diff --git a/packages/workshop-shared/src/api.ts b/packages/workshop-shared/src/api.ts
+index 6eb95b2..0db8171 100644
+--- a/packages/workshop-shared/src/api.ts
++++ b/packages/workshop-shared/src/api.ts
+@@ -102,6 +102,10 @@ export interface LoginAttempt extends RpcTarget {
+   receive(): Promise<string | null>;
+ }
+ 
++export type GatekeeperLoginStart =
++  | { mode: "popup"; url: string; nonce: string; attempt: RpcStub<LoginAttempt> }
++  | { mode: "redirect"; url: string; nonce: string; resumeSecret: string };
++
+ /** Public API exposed to the internet. */
+ export interface PublicApi extends RpcTarget {
+   /** Confirms that the RPC connection can round-trip without performing application work. */
+@@ -121,10 +125,17 @@ export interface PublicApi extends RpcTarget {
+    * Workshop's own /connect/handoff page, which calls `confirmLogin(ticket, nonce)`. The vendor must
+    * be auth-capable and allowlisted (see ServerConfig.authVendors); throws otherwise.
+    *
++   * Redirect mode returns a separate `resumeSecret` instead of a stub. Store it only in this
++   * tab's sessionStorage before navigating, then confirm the ticket and call resumeGatekeeperLogin
++   * with that independent proof to restore the receive capability. The nonce alone never does so.
++   *
+    * Dispose `attempt` to abandon the sign-in (e.g. the user closed the popup). Nothing is cancelled
+    * server-side: the browser just stops polling, and an unreceived token expires on its own.
+    */
+-  startGatekeeperLogin(vendorId: string): Promise<{ url: string; nonce: string; attempt: RpcStub<LoginAttempt> }>;
++  startGatekeeperLogin(vendorId: string, mode?: "popup" | "redirect"): Promise<GatekeeperLoginStart>;
++
++  /** Restore a redirect attempt only with the independent receive secret stored in this tab. */
++  resumeGatekeeperLogin(nonce: string, resumeSecret: string): Promise<RpcStub<LoginAttempt>>;
+ 
+   /**
+    * Confirm a finished sign-in flow. Called by the /connect/handoff page in the sign-in popup, which

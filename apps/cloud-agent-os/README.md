@@ -37,6 +37,24 @@ expired attempts remain denied. The existing alarm clears the proof and preserve
 If session creation fails, the callback throws rather than returning a successful handoff page,
 while the login tab can still receive the recorded failure reason.
 
+When password login is disabled and OIDC is the only configured sign-in vendor, native protected
+top-level pages automatically enter the existing provider in the same browser tab. The tab stores a bounded
+nonce, independent receive secret and validated return path in sessionStorage before navigating.
+The handoff confirms the existing ticket and nonce, then requires the separate receive proof to
+restore the capability and receive the OS session once. PendingLogin stores only the proof hash;
+the existing 30-minute pending and two-minute delivered limits still apply. Inline sign-in, embedded launch, other sign-in choices
+and connected-account flows retain their popup behavior.
+
+Protected same-origin documents can enter through `/?sign_in=oidc&return_to=<encoded-relative-path>`.
+An existing valid OS session returns directly after server verification. Return paths are limited
+to normalized native routes and the exact subscription document with its recognized connection/add
+fragment; external URLs, callback/API paths, controls and ambiguous paths are refused. Browser Back,
+cancellation and errors require a manual retry. Invalid stored OS sessions recover automatically
+once; a newly received native session rejected again requires a click. Permission denials do not
+trigger another login. A non-secret received marker remains until the destination authority accepts
+the session; native identity verification cannot clear a subscription rejection. Explicit logout
+stays signed out until the user chooses sign-in again. No browser session cookie or alternate OAuth implementation is added.
+
 Use `auth.mode: "oauth-jwt"` only for a provider with the signed access-token contract below.
 Copy `deployment.oauth-jwt.example.json`, then set the exact HTTPS resource origin, explicit scopes
 and `tokenEndpointAuthMethod` to `"none"` for a public PKCE client or `"client_secret_post"` for a

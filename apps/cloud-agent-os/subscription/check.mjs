@@ -236,10 +236,32 @@ try {
   const sessionCalls = async () => (await oidcClient.fetch("https://fixture.invalid/session-calls")).json();
   const publicShell = await oidc.fetch(origin + "/gatekeeper/subscription");
   assert.equal(publicShell.status, 200);
-  assert.equal(await sessionCalls(), 0, "OIDC GET never verifies or reads an account session");
+  assert.equal(await sessionCalls(), 0, "anonymous OIDC GET never reads an account session");
   const shell = await publicShell.text();
-  assert.ok(shell.includes('id="setup-start" disabled') && shell.includes('id="setup-complete" disabled'));
+  const documentNonce = publicShell.headers.get("content-security-policy").match(/'nonce-([a-f0-9]{32})'/)[1];
+  assert.ok(!/<form\b|<textarea\b|id="(?:setup-start|setup-complete|device-start|add-connection)"/.test(shell), 'anonymous OIDC GET must not expose setup forms');
+  assert.ok(shell.includes('nonce="' + documentNonce + '"'));
   assert.ok(!shell.includes(email) && !shell.includes(oidcSubject) && !shell.includes(oidcIssuer) && !shell.includes(osToken));
+  assert.equal(publicShell.headers.get("cache-control"), "no-store");
+  const anonymousNonce = await oidc.fetch(origin + "/gatekeeper/subscription", {headers:{"x-subscription-document-nonce":"a".repeat(32)}});
+  assert.ok(!(await anonymousNonce.text()).includes('nonce="' + "a".repeat(32) + '"'), "anonymous callers cannot choose the bootstrap nonce");
+  assert.equal(await sessionCalls(), 0);
+  for (const token of ["invalid", sessionToken(5), sessionToken(6)]) await assertError(await oidc.fetch(origin + "/gatekeeper/subscription", {headers:{authorization:"Bearer " + token,"x-subscription-document-nonce":"invalid"}}),401,"access_denied");
+  for (const token of [osOtherToken, sessionToken(3), sessionToken(4)]) await assertError(await oidc.fetch(origin + "/gatekeeper/subscription", {headers:{authorization:"Bearer " + token}}),403,"admin_denied");
+  for (const badNonce of ["a".repeat(31), "A".repeat(32), 'a" onload="bad', "a".repeat(33)]) await assertError(await oidc.fetch(origin + "/gatekeeper/subscription", {headers:{authorization:"Bearer " + osToken,"x-subscription-document-nonce":badNonce}}),400,"request_invalid");
+  const beforeDocument = await sessionCalls();
+  const authenticatedDocument = await oidc.fetch(origin + "/gatekeeper/subscription", {headers:{authorization:"Bearer " + osToken,"x-subscription-document-nonce":documentNonce}});
+  assert.equal(authenticatedDocument.status,200);
+  assert.equal(await sessionCalls(),beforeDocument+1,"form HTML requires the private OS session check");
+  const authenticatedPageHtml = await authenticatedDocument.text();
+  assert.ok(authenticatedPageHtml.includes('id="setup-start" disabled') && authenticatedPageHtml.includes('id="setup-complete" disabled'));
+  for (const id of ['add-connection','connection-select','device-start']) assert.ok(authenticatedPageHtml.includes('id="'+id+'"'),"authorized HTML retains named and dual-provider forms");
+  assert.ok(authenticatedDocument.headers.get("content-security-policy").includes("'nonce-"+documentNonce+"'"));
+  for(const match of authenticatedPageHtml.matchAll(/<(?:script|style) nonce="([^"]+)"/g)) assert.equal(match[1],documentNonce,"loaded markup uses the bootstrap CSP nonce");
+  const directDocument = await oidc.fetch(origin + "/gatekeeper/subscription", {headers:{authorization:"Bearer " + osToken}});
+  assert.equal(directDocument.status,200,"direct authenticated requests can receive a fresh document nonce");
+  assert.ok((await directDocument.text()).includes('id="complete"'));
+  assert.deepEqual(await oidcEvents(),[],"HTML authentication and nonce validation never access Credentials");
   for (const path of ["connections", "connections/create"]) await assertError(await oidcSend(null, {label:'Denied'}, path),401,"access_denied");
   for (const token of [null, "invalid", "x".repeat(300), sessionToken(5), sessionToken(6)]) await assertError(await oidcSend(token), 401, "access_denied");
   for (const token of [osOtherToken, sessionToken(3), sessionToken(4)]) await assertError(await oidcSend(token), 403, "admin_denied");
@@ -621,6 +643,85 @@ try {
   await put({adminAccounts:storedInventory});
   deviceAccount=deviceAccountBeforeNamed;deviceSubject=deviceSubjectBeforeNamed;
   const browserConnections={connections:[{id:'owner',label:'owner',provider:'siwc',ready:true}]};
+  const browserFlush = () => new Promise(resolve => setImmediate(resolve));
+  function bootstrapBrowser({token=osToken,hash='#add',responseStatus=200,fetchFailure=false,contentType='text/html',receivedMarker=null}={}) {
+    const redirects=[],requests=[];
+    const dom=new JSDOM(shell.replace('<script nonce=','<script type="text/plain" nonce='),{url:origin+'/gatekeeper/subscription'+hash,runScripts:'dangerously',beforeParse(window){
+      if(token)window.localStorage.setItem('authToken',token);
+      window.localStorage.setItem('existing','preserve');
+      if(receivedMarker)window.sessionStorage.setItem('gadgets.redirect-login-received',receivedMarker);
+      window.fetch=async(url,options)=>{
+        requests.push({url,options});
+        if(options.method==='GET') {
+          if(fetchFailure)throw Error('synthetic-error-must-not-display');
+          return{ok:responseStatus===200,status:responseStatus,headers:new Headers({'content-type':contentType}),text:async()=>authenticatedPageHtml};
+        }
+        return{ok:true,status:200,json:async()=>url.endsWith('/connections')?browserConnections:ready};
+      };
+    }});
+    assert.equal(dom.window.document.querySelector('form'),null,'bootstrap initially has no setup form');
+    const script=dom.window.document.querySelector('script').textContent;
+    dom.window.Function('location',script)({pathname:'/gatekeeper/subscription',hash,replace:path=>redirects.push(path)});
+    return{dom,requests,redirects};
+  }
+  for(const hash of ['','#add','#connection=owner','#connection=account-00000000-0000-0000-0000-000000000011','#connection=unknown','#callback=do-not-return','#//external.example.invalid']) {
+    const safeHash=/^#(?:add|connection=(?:owner|account-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}))$/.test(hash)?hash:'';
+    const browser=bootstrapBrowser({token:null,hash});
+    try {
+      await browserFlush();
+      assert.deepEqual(browser.redirects,['https://os.example.invalid/?sign_in=oidc&return_to='+encodeURIComponent('/gatekeeper/subscription'+safeHash)]);
+      assert.equal(browser.requests.length,0,'missing token goes directly to native OS sign-in');
+      assert.equal(browser.dom.window.document.querySelector('form'),null);
+      assert.equal(browser.dom.window.localStorage.getItem('existing'),'preserve');
+      assert.equal(browser.dom.window.sessionStorage.length,0);
+    }finally{browser.dom.window.close();}
+  }
+  for(const responseStatus of [401,403,500]) {
+    const browser=bootstrapBrowser({responseStatus});
+    try {
+      await browserFlush();
+      assert.equal(browser.requests.length,1);
+      const {url,options}=browser.requests[0];
+      assert.equal(url,'/gatekeeper/subscription');assert.equal(options.method,'GET');
+      assert.equal(options.headers.authorization,'Bearer '+osToken);
+      assert.equal(options.headers['x-subscription-document-nonce'],documentNonce);
+      assert.equal(options.body,undefined);assert.equal(options.redirect,'error');assert.equal(options.cache,'no-store');assert.equal(options.referrerPolicy,'no-referrer');
+      assert.equal(browser.dom.window.document.querySelector('form'),null,'failed authorization never renders setup');
+      assert.equal(browser.redirects.length,responseStatus===401?1:0,'only unauthenticated sessions navigate to sign-in');
+      assert.equal(browser.dom.window.localStorage.getItem('authToken'),responseStatus===401?null:osToken,'401 clears only the stale OS token');
+      assert.equal(browser.dom.window.localStorage.getItem('existing'),'preserve');
+      if(responseStatus===403)assert.ok(browser.dom.window.document.getElementById('status').textContent.includes('권한이 없습니다'));
+      assert.ok(!browser.dom.window.document.body.textContent.includes(osToken));
+    }finally{browser.dom.window.close();}
+  }
+  for(const options of [{fetchFailure:true},{contentType:'application/json'}]) {
+    const browser=bootstrapBrowser(options);
+    try {
+      await browserFlush();assert.equal(browser.redirects.length,0);assert.equal(browser.dom.window.document.querySelector('form'),null);
+      assert.equal(browser.dom.window.document.getElementById('status').textContent,'로그인 상태를 확인하지 못했습니다. 페이지를 새로고침하세요.');
+      assert.ok(!browser.dom.window.document.body.textContent.includes('synthetic-error'));
+    }finally{browser.dom.window.close();}
+  }
+  const receivedMarker=JSON.stringify({returnTo:'/gatekeeper/subscription#add',expiresAt:Date.now()+30*60*1000});
+  for(const responseStatus of [401,200]) {
+    const browser=bootstrapBrowser({responseStatus,receivedMarker});
+    try {
+      await browserFlush();await browserFlush();
+      assert.equal(browser.dom.window.sessionStorage.getItem('gadgets.redirect-login-received'),responseStatus===401?receivedMarker:null,'newly received sessions rejected by the subscription keep the native recovery bound; an authorized document clears it');
+      assert.equal(browser.redirects.length,responseStatus===401?1:0);
+    }finally{browser.dom.window.close();}
+  }
+  const rendered=bootstrapBrowser();
+  try {
+    await browserFlush();await browserFlush();
+    assert.equal(rendered.redirects.length,0);
+    for(const id of ['start','complete','device-start','add-connection'])assert.ok(rendered.dom.window.document.getElementById(id),'authenticated bootstrap renders '+id);
+    assert.ok(rendered.requests.some(item=>item.url.endsWith('/status')&&item.options.method==='POST'),'returned setup script executes after document replacement');
+    assert.equal(rendered.dom.window.document.activeElement.id,'connection-label','authenticated bootstrap preserves #add');
+    assert.equal(rendered.dom.window.document.getElementById('setup-start').disabled,false);
+    for(const node of rendered.dom.window.document.querySelectorAll('style,script'))assert.equal(node.nonce,documentNonce);
+    assert.equal(rendered.dom.window.localStorage.getItem('authToken'),osToken);assert.equal(rendered.dom.window.localStorage.getItem('existing'),'preserve');assert.equal(rendered.dom.window.sessionStorage.length,0);
+  }finally{rendered.dom.window.close();}
   const posted = [];
   const dom = new JSDOM(subscriptionPage("synthetic-nonce"), { url: origin + "/gatekeeper/subscription", runScripts: "dangerously", beforeParse(window) {
     window.fetch = async (url, options) => {
@@ -745,22 +846,23 @@ try {
     select(browserB);await flush();document.getElementById('refresh').click();await flush();assert.equal(document.getElementById('connection-select').value,browserB,'refresh preserves the current editor selection');
     assert.equal(namedDom.window.localStorage.length,0);assert.equal(namedDom.window.sessionStorage.length,0);
   }finally{namedDom.window.close();}
-  for (const failureAt of ['initial', 'start', 'complete']) {
+  for (const denialStatus of [401,403]) for (const failureAt of ['initial', 'start', 'complete']) {
     const unauthorized = failureAt === 'initial';
     let denied = unauthorized;
-    const postedOidc = [];
+    const postedOidc = [], navigations=[];
     let resolveStatus;
     const statusWait = new Promise(resolve => { resolveStatus = resolve; });
-    const dom = new JSDOM(subscriptionPage("synthetic-nonce", "oidc"), { url: origin + "/gatekeeper/subscription", runScripts: "dangerously", beforeParse(window) {
+    const dom = new JSDOM(subscriptionPage("synthetic-nonce", "oidc",true).replace('<script nonce=','<script type="text/plain" nonce='), { url: origin + "/gatekeeper/subscription#connection=owner", runScripts: "dangerously", beforeParse(window) {
       window.localStorage.setItem("authToken", osToken);
       window.localStorage.setItem("existing", "preserve");
       window.Storage.prototype.setItem = () => { throw Error("unexpected_storage_write"); };
       window.fetch = async (url, options) => {
         postedOidc.push({ url, options });
         if (postedOidc.length === 1) await statusWait;
-        return { ok: !denied, status: denied ? 401 : 200, json: async () => denied ? { error: "access_denied" } : url.endsWith("/connections") ? browserConnections : ready };
+        return { ok: !denied, status: denied ? denialStatus : 200, json: async () => denied ? { error: denialStatus===401?"access_denied":"admin_denied" } : url.endsWith("/connections") ? browserConnections : ready };
       };
     } });
+    dom.window.Function('location',dom.window.document.querySelector('script').textContent)({hash:'#connection=owner',replace:path=>navigations.push(path)});
     try {
       const { document, Event } = dom.window;
       assert.equal(document.getElementById("setup-start").disabled, true);
@@ -768,34 +870,39 @@ try {
       document.getElementById("start").dispatchEvent(new Event("submit", { cancelable: true }));
       assert.equal(postedOidc.length, 1, "controls cannot submit before authenticated status");
       resolveStatus();
-      await new Promise(resolve => setImmediate(resolve));
+      await browserFlush();await browserFlush();
       assert.equal(document.getElementById("setup-start").disabled, unauthorized);
       assert.equal(document.getElementById("setup-complete").disabled, unauthorized);
-      assert.equal(document.getElementById("sign-in").hidden, !unauthorized);
-      assert.equal(document.querySelector("#sign-in a").getAttribute("href"), "/");
+      assert.equal(document.getElementById("sign-in").hidden, !(unauthorized&&denialStatus===401));
+      assert.equal(document.querySelector("#sign-in a").getAttribute("href"), "/?sign_in=oidc&return_to="+encodeURIComponent('/gatekeeper/subscription#connection=owner'));
       assert.equal(postedOidc[0].options.headers.authorization, "Bearer " + osToken);
       if (!unauthorized) {
-        dom.window.localStorage.removeItem("authToken");
+        if(denialStatus===401)dom.window.localStorage.removeItem("authToken");
         denied = true;
         document.getElementById("callback").value = "http://127.0.0.1:1455/auth/callback?synthetic";
+        document.getElementById('device-code').textContent='stale-device-code';
+        document.getElementById('device-login').href='https://auth.openai.com/codex/device';
         document.getElementById(failureAt).dispatchEvent(new Event("submit", { cancelable: true }));
-        await new Promise(resolve => setImmediate(resolve));
-        assert.equal(postedOidc.find(item => item.url.endsWith("/" + failureAt)).options.headers.authorization, undefined, "every POST reads the current OS token");
+        await browserFlush();
+        assert.equal(postedOidc.find(item => item.url.endsWith("/" + failureAt)).options.headers.authorization,denialStatus===401?undefined:"Bearer "+osToken,"every POST reads the current OS token");
         assert.equal(document.getElementById("setup-start").disabled, true);
         assert.equal(document.getElementById("setup-complete").disabled, true);
         assert.equal(document.getElementById(failureAt + "-button").matches(":disabled"), true, "authorization failure stays disabled through finally");
-        assert.equal(document.getElementById("sign-in").hidden, false);
+        assert.equal(document.getElementById("sign-in").hidden, denialStatus!==401);
+        assert.equal(document.getElementById('callback').value,'');assert.equal(document.getElementById('device-code').textContent,'');assert.equal(document.getElementById('device-login').hasAttribute('href'),false);
       }
+      assert.deepEqual(navigations,denialStatus===401?["/?sign_in=oidc&return_to="+encodeURIComponent('/gatekeeper/subscription#connection=owner')]:[],"only 401 automatically starts native same-tab sign-in");
+      assert.equal(dom.window.localStorage.getItem('authToken'),denialStatus===401?null:osToken);
+      assert.equal(document.getElementById('authorization').hidden,true);assert.equal(document.getElementById('login').hasAttribute('href'),false);
+      assert.ok(document.getElementById('status').textContent.includes(denialStatus===401?'OS 로그인으로':'권한이 없습니다'));
       denied = false;
       document.getElementById("refresh").click();
-      await new Promise(resolve => setImmediate(resolve));
+      await browserFlush();
       assert.ok(postedOidc.some(item => item.url.endsWith("/status")));
-      for (const id of ["setup-start", "setup-complete", "start-button", "complete-button"]) {
-        assert.equal(document.getElementById(id).matches(":disabled"), false, "successful status refresh restores " + id);
-      }
+      for (const id of ["setup-start", "setup-complete", "start-button", "complete-button"]) assert.equal(document.getElementById(id).matches(":disabled"), false, "successful status refresh restores " + id);
       assert.equal(document.getElementById("sign-in").hidden, true);
       for (const post of postedOidc) assert.ok(post.url.startsWith("/gatekeeper/subscription/"));
-      assert.equal(dom.window.localStorage.length, unauthorized ? 2 : 1);
+      assert.equal(dom.window.localStorage.length,denialStatus===401?1:2);
       assert.equal(dom.window.localStorage.getItem("existing"), "preserve");
       assert.equal(dom.window.sessionStorage.length, 0);
       assert.ok(!document.body.textContent.includes(osToken));
@@ -813,5 +920,5 @@ try {
   assert.equal(oidcConfig.vars.CF_ACCESS_AUD, undefined);
   assert.deepEqual(oidcConfig.durable_objects, config.durable_objects);
   assert.deepEqual(oidcConfig.migrations, config.migrations);
-  console.log(JSON.stringify({ result: "PASS", nativeRuntime: "Miniflare/workerd", checks: ["Access signature/issuer/audience/expiry/admin", "OIDC private session and exact issuer/subject/email pins before Credentials", "OIDC static shell and authenticated UI gating", "same-origin JSON bounded requests before DO", "automatic verified SIWC identity, legacy pins and concurrent registration conflicts", "independent encrypted SIWC and Codex completion in either order", "device empty/arbitrary pending objects, interval, expiry and terminal denial or invalid response", "explicit active transport and unavailable selection fails closed", "account cache privacy and in-flight selection change", "both login choices and bounded device polling with navigation guard", "automatic metadata and manual callback UI with no browser persistence", "owner plus two named isolated connections, bounded catalog and explicit private inference selectors", "rendered add/list/switch ignores late status, login, metadata and device-poll responses"], tokenCalls, inferenceCalls, temporaryBuild: work }));
+  console.log(JSON.stringify({ result: "PASS", nativeRuntime: "Miniflare/workerd", checks: ["Access signature/issuer/audience/expiry/admin", "OIDC private session and exact issuer/subject/email pins before Credentials", "OIDC no-form bootstrap, authenticated document GET and matching CSP nonce, same-tab 401 recovery and 403 denial", "same-origin JSON bounded requests before DO", "automatic verified SIWC identity, legacy pins and concurrent registration conflicts", "independent encrypted SIWC and Codex completion in either order", "device empty/arbitrary pending objects, interval, expiry and terminal denial or invalid response", "explicit active transport and unavailable selection fails closed", "account cache privacy and in-flight selection change", "both login choices and bounded device polling with navigation guard", "automatic metadata and manual callback UI with no browser persistence", "owner plus two named isolated connections, bounded catalog and explicit private inference selectors", "rendered add/list/switch ignores late status, login, metadata and device-poll responses"], tokenCalls, inferenceCalls, temporaryBuild: work }));
 } finally { await mf.dispose(); }

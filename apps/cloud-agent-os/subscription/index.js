@@ -1,5 +1,5 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
-import { subscriptionPage } from "./view.js";
+import { subscriptionBootstrapPage, subscriptionPage } from "./view.js";
 export { Credentials, CloudAgentInference } from "../../cloud-agent/workers/pi/index.js";
 
 const encoder = new TextEncoder();
@@ -109,9 +109,15 @@ export default {
       const config = settings(env), url = new URL(request.url);
       if (url.origin !== config.origin || url.search) throw new RequestError("request_invalid");
       const page = request.method === "GET" && (url.pathname === "/" || url.pathname === "/gatekeeper/subscription");
-      if (!(config.mode === "oidc" && page)) await authenticate(request, config, env);
-      if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/gatekeeper/subscription")) {
+      if (config.mode === "oidc" && page && !request.headers.has("authorization")) {
         const nonce = crypto.randomUUID().replaceAll("-", "");
+        return secure(new Response(subscriptionBootstrapPage(nonce), { headers: { "content-type": "text/html; charset=utf-8" } }), nonce);
+      }
+      await authenticate(request, config, env);
+      if (page) {
+        const suppliedNonce = config.mode === "oidc" ? request.headers.get("x-subscription-document-nonce") : null;
+        if (suppliedNonce !== null && !/^[a-f0-9]{32}$/.test(suppliedNonce)) throw new RequestError("request_invalid");
+        const nonce = suppliedNonce ?? crypto.randomUUID().replaceAll("-", "");
         return secure(new Response(subscriptionPage(nonce, config.mode, config.dual), { headers: { "content-type": "text/html; charset=utf-8" } }), nonce);
       }
       if (!["/gatekeeper/subscription/connections", "/gatekeeper/subscription/connections/create", "/gatekeeper/subscription/status", "/gatekeeper/subscription/start", "/gatekeeper/subscription/complete", "/gatekeeper/subscription/refresh", "/gatekeeper/subscription/device/start", "/gatekeeper/subscription/device/check", "/gatekeeper/subscription/select", "/gatekeeper/subscription/account-info"].includes(url.pathname)) throw new RequestError("not_found", 404);
