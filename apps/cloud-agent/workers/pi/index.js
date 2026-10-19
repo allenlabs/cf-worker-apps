@@ -1,4 +1,5 @@
 import { readCodexAccountInfo } from "./codex-account-info.js";
+import { subscriptionIdentity, subscriptionInfoHistory, retainSubscriptionInfo } from "./subscription-account-info.js";
 import { workflowDraftInput, workflowDraftDefinition, workflowDraftPrompt, workflowDraftResult } from "./workflow-assist.js";
 import { reconcileWorkflow } from "./workflow-reconcile.js";
 import { resolveShortcut, suggestShortcuts, skillAskSnapshot } from "./skill-shortcuts.js";
@@ -192,7 +193,7 @@ export class Credentials extends ManagementCredentials {
 
   async createSubscriptionConnection(input) {
     await this.#subscriptionInventory();
-    requireCondition(input && typeof input === "object" && !Array.isArray(input) && Object.keys(input).length === 1 && typeof input.label === "string" && input.label.trim() && encoder.encode(input.label).length <= 128 && !/[\x00-\x1f\x7f]/.test(input.label), "subscription_label_invalid");
+    requireCondition(input && typeof input === "object" && !Array.isArray(input) && Object.keys(input).length === 1 && typeof input.label === "string" && input.label.trim() && encoder.encode(input.label.trim()).length <= 128 && !/[\x00-\x1f\x7f-\x9f]/.test(input.label), "subscription_label_invalid");
     const id = `account-${crypto.randomUUID()}`;
     await this.ctx.storage.transaction(async transaction => {
       const rows = await transaction.get("adminAccounts") || [{ id: "owner", label: "owner", createdAt: null }];
@@ -202,6 +203,67 @@ export class Credentials extends ManagementCredentials {
       await transaction.put("adminAccounts", rows);
     });
     return { id };
+  }
+
+  async renameSubscriptionConnection(input) {
+    await this.#subscriptionInventory();
+    requireCondition(input && typeof input === "object" && !Array.isArray(input) && Object.keys(input).length === 2 && Object.hasOwn(input, "accountId") && Object.hasOwn(input, "label"), "subscription_label_invalid");
+    requireCondition(typeof input.label === "string" && input.label.trim() && encoder.encode(input.label.trim()).length <= 128 && !/[\x00-\x1f\x7f-\x9f]/.test(input.label), "subscription_label_invalid");
+    await this.resolveSubscriptionAccount(input.accountId);
+    await this.ctx.storage.transaction(async transaction => {
+      const rows = await transaction.get("adminAccounts") || [{ id: "owner", label: "owner", createdAt: null }];
+      if (input.accountId === "owner" && !rows.some(row => row.id === "owner")) {
+        requireCondition(rows.length < 20, "account_limit");
+        rows.unshift({ id: "owner", label: "owner", createdAt: null });
+      }
+      const row = rows.find(row => row.id === input.accountId && (row.id === "owner" || row.subscriptionSetup === true));
+      requireCondition(row, "subscription_account_not_found");
+      row.label = input.label.trim();
+      await transaction.put("adminAccounts", rows);
+    });
+  }
+
+  async subscriptionOverview() {
+    return Promise.all((await this.#subscriptionInventory()).map(async ({ id, label }) => {
+      try { return { id, label, ...await (id === "owner" ? this : this.env.Credentials.getByName(id)).subscriptionConnectionOverview() }; }
+      catch { return { id, label, provider: null, ready: null, identity: null, snapshot: null, lastAttempt: null, history: [], error: "unavailable" }; }
+    }));
+  }
+
+  async #subscriptionInfoSelection(storage = this.ctx.storage) {
+    const profile = await this.open(await storage.get("codexImageProfile"));
+    const active = await storage.get("subscriptionProvider");
+    if (this.env.SUBSCRIPTION_INFERENCE_PROVIDER !== "auto" || !(active === "codex" || (!active && profile?.unified)) || !profile?.metadata?.accountId) return null;
+    return { key: await digest(JSON.stringify(["codex", profile.clientId, profile.subjectHash, profile.metadata.accountId])) };
+  }
+
+  async #requireSubscriptionInfoSelection(scope, storage = this.ctx.storage) {
+    requireCondition((await this.#subscriptionInfoSelection(storage))?.key === scope.key, "account_selection_changed");
+  }
+
+  async subscriptionConnectionOverview() {
+    let status;
+    try {
+      status = await this.status();
+      let snapshot = null, lastAttempt = null, history = [];
+      if (status.provider === "codex" && status.codexInferenceReady) {
+        const scope = await this.#subscriptionInfoSelection();
+        requireCondition(scope, "account_selection_changed");
+        const record = await this.open(await this.ctx.storage.get("subscriptionAccountHistory"));
+        await this.#requireSubscriptionInfoSelection(scope);
+        status = await this.status();
+        requireCondition(status.provider === "codex", "account_selection_changed");
+        if (status.codexInferenceReady && record?.key === scope.key) {
+          snapshot = record.snapshot;
+          lastAttempt = record.lastAttempt;
+          history = subscriptionInfoHistory(record);
+        }
+        await this.#requireSubscriptionInfoSelection(scope);
+      }
+      return { provider: status.provider, ready: status.inferenceReady === true, identity: subscriptionIdentity(status), snapshot, lastAttempt, history };
+    } catch (error) {
+      return { provider: status?.provider ?? null, ready: status ? status.inferenceReady === true : null, identity: null, snapshot: null, lastAttempt: null, history: [], error: error?.message === "account_selection_changed" ? "account_selection_changed" : "unavailable" };
+    }
   }
 
   async expectedEmailHash() {
@@ -400,11 +462,13 @@ export class Credentials extends ManagementCredentials {
     const status = await this.status();
     if (status.provider !== "codex") return { checkedAt: new Date().toISOString(), account: { status: "unavailable", reason: "provider_not_supplied", httpStatus: null }, usage: { status: "unavailable", reason: "provider_not_supplied", httpStatus: null } };
     requireCondition(status.codexInferenceReady, "subscription_connection_unavailable");
-    const profile = await this.open(await this.ctx.storage.get("codexImageProfile"));
-    const key = await digest(JSON.stringify(["codex", profile.clientId, profile.subjectHash, profile.metadata.accountId]));
+    const scope = await this.#subscriptionInfoSelection();
+    requireCondition(scope, "account_selection_changed");
+    const { key } = scope;
     const stillSelected = async () => {
-      const current = await this.open(await this.ctx.storage.get("codexImageProfile"));
-      requireCondition((await this.status()).provider === "codex" && current?.clientId === profile.clientId && current.subjectHash === profile.subjectHash && current.metadata.accountId === profile.metadata.accountId, "account_selection_changed");
+      await this.#requireSubscriptionInfoSelection(scope);
+      const current = await this.status();
+      requireCondition(current.provider === "codex" && current.codexInferenceReady, "account_selection_changed");
     };
     const cached = await this.open(await this.ctx.storage.get("subscriptionAccountInfo"));
     if (cached?.key === key && cached.expiresAt > Date.now()) { await stillSelected(); return cached.value; }
@@ -414,7 +478,14 @@ export class Credentials extends ManagementCredentials {
       await stillSelected();
       const value = await readCodexAccountInfo({ access: credential.access, accountId: credential.accountId });
       await stillSelected();
-      await this.ctx.storage.put("subscriptionAccountInfo", await this.seal({ key, expiresAt: Date.now() + 60000, value }));
+      await this.ctx.storage.transaction(async transaction => {
+        await this.#requireSubscriptionInfoSelection(scope, transaction);
+        const previous = await this.open(await transaction.get("subscriptionAccountHistory"));
+        await transaction.put({
+          subscriptionAccountInfo: await this.seal({ key, expiresAt: Date.now() + 60000, value }),
+          subscriptionAccountHistory: await this.seal(retainSubscriptionInfo(previous, key, value)),
+        });
+      });
       await stillSelected();
       return value;
     })();

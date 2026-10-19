@@ -28,7 +28,7 @@ function jwt(keys, kid, claims, header = {}) {
   return `${input}.${sign("RSA-SHA256", Buffer.from(input), keys.privateKey).toString("base64url")}`;
 }
 const accessJwt = (changes = {}, keys = accessKeys) => jwt(keys, accessJwk.kid, { iss: issuer, aud: audience, sub: "synthetic-admin", email, iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 3600, ...changes });
-let accountReads = 0, usageReads = 0, duringAccountRead = null;
+let accountReads = 0, usageReads = 0, duringAccountRead = null, usageHttpStatus = 200, usedPercent = 12;
 let devicePolls = 0, deviceExchanges = 0, deviceSubject = "device-owner", deviceAccount = "device-account", deviceHtmlDenied = false, deviceStartDenied = false, deviceDeniedType = "text/html", deviceResponses = [], deviceJsonDenied = false;
 const deviceClient = "app_EMoamEEZ73f0CkXaXp7hrann";
 const deviceVerifier = "fixture-device-verifier-abcdefghijklmnopqrstuvwxyz";
@@ -47,11 +47,32 @@ export class Credentials extends BaseCredentials {
   async configureAccount(input) { events.push('configureAccount'); return super.configureAccount(input); }
   async start(approval, intent) { events.push('start:' + approval + ':' + intent); return super.start(approval, intent); }
   async startCodex(intent) { events.push('startCodex:' + intent); return super.startCodex(intent); }
-  async status() { events.push('status'); if(statusError)throw Error(${JSON.stringify(accessToken)});return super.status(); }
+  async status() { events.push('status'); if(statusError||this.fixtureStatusFailed)throw Error(${JSON.stringify(accessToken)});return super.status(); }
   async complete(callback) { events.push('complete'); return super.complete(callback); }
   async access(force) { events.push('access'); return super.access(force); }
   async codexAccess(force) { events.push('codexAccess'); return super.codexAccess(force); }
+  async open(value) {
+    const opened=await super.open(value);
+    if(this.flipOnHistoryRead && opened?.key && Array.isArray(opened.history)) { this.flipOnHistoryRead=false;await this.ctx.storage.put('subscriptionProvider','siwc'); }
+    return opened;
+  }
   async fetch(request) {
+    if(new URL(request.url).pathname==='/fixture-info') {
+      if(request.method==='POST') {
+        const input=await request.json();
+        if(Object.hasOwn(input,'failStatus'))this.fixtureStatusFailed=input.failStatus;
+        if(input.flipOnHistoryRead)this.flipOnHistoryRead=true;
+        if(input.expireCache) { const cached=await this.open(await this.ctx.storage.get('subscriptionAccountInfo')); if(cached)await this.ctx.storage.put('subscriptionAccountInfo',await this.seal({...cached,expiresAt:0})); }
+        if(input.subjectHash) {
+          const profile=await this.open(await this.ctx.storage.get('codexImageProfile'));
+          const pin=await this.ctx.storage.get('codexRegistration');
+          await this.ctx.storage.put({codexImageProfile:await this.seal({...profile,subjectHash:input.subjectHash}),codexRegistration:{...pin,subjectHash:input.subjectHash}});
+        }
+        if(input.record)await this.ctx.storage.put('subscriptionAccountHistory',await this.seal(input.record));
+      }
+      if(request.method==='POST')return Response.json({ok:true});
+      return Response.json(await this.open(await this.ctx.storage.get('subscriptionAccountHistory')) ?? null);
+    }
     if(new URL(request.url).pathname==='/fixture-disconnect') return Response.json(await this.disconnect());
     if(new URL(request.url).pathname==='/fixture-device-time') { const change=await request.json(); const pending=await this.open(await this.ctx.storage.get('codexImagePending')); await this.ctx.storage.put('codexImagePending',await this.seal({...pending,...change})); }
     if(new URL(request.url).pathname==='/fixture-put') { const input=await request.json();for(const [key,value] of Object.entries(input)) { if(value===null)await this.ctx.storage.delete(key);else await this.ctx.storage.put(key,value); } }
@@ -116,7 +137,8 @@ const outboundService = async request => {
   }
   if (request.url === "https://chatgpt.com/backend-api/wham/usage") {
     usageReads++;
-    return Response.json({account_id:deviceAccount,plan_type:'plus',rate_limit:{allowed:true,limit_reached:false,primary_window:{used_percent:12,limit_window_seconds:18000,reset_at:1800000000},secondary_window:null}});
+    if(usageHttpStatus!==200)return new Response('fixture-private-usage-error',{status:usageHttpStatus});
+    return Response.json({account_id:deviceAccount,plan_type:'plus',rate_limit:{allowed:true,limit_reached:false,primary_window:{used_percent:usedPercent,limit_window_seconds:18000,reset_after_seconds:2400,reset_at:1800000000},secondary_window:null}});
   }
   if (request.url === "https://auth.openai.com/api/accounts/deviceauth/usercode") {
     assert.deepEqual(await request.json(), { client_id: deviceClient });
@@ -192,6 +214,7 @@ const mf = new Miniflare(convertV4MiniflareOptions({
     { ...common, name: "oidc-client", scriptPath: join(work, "client.bundle.js"), serviceBindings: { PROBE: { name: "oidc-subscription", entrypoint: "Probe" }, SESSION: { name: "os-session", entrypoint: "SubscriptionSetupSession" }, BRIDGE: { name: "oidc-subscription", entrypoint: "CloudAgentInference" } } },
     ...["SUBSCRIPTION_ADMIN_ISSUER", "SUBSCRIPTION_ADMIN_SUBJECT", "SUBSCRIPTION_ADMIN_EMAIL"].map((missing, i) => ({ ...common, name: "oidc-missing-pin-" + i, scriptPath: join(work, "production.bundle.js"), bindings: Object.fromEntries(Object.entries(oidcBindings).filter(([key]) => key !== missing)), serviceBindings: { OS_SESSION: { name: "os-session", entrypoint: "SubscriptionSetupSession" } }, durableObjects: { Credentials: { className: "Credentials", useSQLite: true } }, outboundService })),
     { ...common, name: "native-production", scriptPath: join(work, "production.bundle.js"), bindings, durableObjects: { Credentials: { className: "Credentials", useSQLite: true } }, outboundService },
+    { ...common, name: "native-siwc-only", scriptPath: join(work, "production.bundle.js"), bindings: { ...bindings, SUBSCRIPTION_INFERENCE_PROVIDER: "siwc", INFERENCE_BRIDGE_PROVIDER: "siwc" }, durableObjects: { Credentials: { className: "Credentials", useSQLite: true } }, outboundService },
   ],
 }));
 const headers = (changes = {}) => ({ "cf-access-jwt-assertion": accessJwt(), origin, "content-type": "application/json", ...changes });
@@ -262,7 +285,10 @@ try {
   assert.equal(directDocument.status,200,"direct authenticated requests can receive a fresh document nonce");
   assert.ok((await directDocument.text()).includes('id="complete"'));
   assert.deepEqual(await oidcEvents(),[],"HTML authentication and nonce validation never access Credentials");
-  for (const path of ["connections", "connections/create"]) await assertError(await oidcSend(null, {label:'Denied'}, path),401,"access_denied");
+  for (const path of ["connections", "connections/create", "connections/rename", "overview"]) {
+    await assertError(await oidcSend(null, {label:'Denied'}, path),401,"access_denied");
+    await assertError(await oidcSend(osOtherToken, {}, path),403,"admin_denied");
+  }
   for (const token of [null, "invalid", "x".repeat(300), sessionToken(5), sessionToken(6)]) await assertError(await oidcSend(token), 401, "access_denied");
   for (const token of [osOtherToken, sessionToken(3), sessionToken(4)]) await assertError(await oidcSend(token), 403, "admin_denied");
   await assertError(await oidcSend(null, {}, "status", { "cf-access-jwt-assertion": accessJwt(), "x-auth-email": email, "x-auth-subject": oidcSubject, "x-auth-issuer": oidcIssuer }), 401, "access_denied");
@@ -281,12 +307,16 @@ try {
   assert.equal(new URL((await oidcStart.json()).authorizationUrl).searchParams.get("client_id"), "dynamic_agent_client");
 
   const production = await mf.getWorker("native-production");
+  const siwcOnly = await mf.getWorker("native-siwc-only");
+  const siwcOnlyStatus = await siwcOnly.fetch(origin + '/gatekeeper/subscription/status',{method:'POST',headers:headers(),body:'{}'});
+  assert.equal(siwcOnlyStatus.status,200);assert.equal((await siwcOnlyStatus.json()).deviceLoginAvailable,false,'SIWC-only configuration does not advertise unavailable device login');
+  await assertError(await siwcOnly.fetch(origin + '/gatekeeper/subscription/device/start',{method:'POST',headers:headers(),body:JSON.stringify({planUsageConfirmed:true})}),404,'not_found');
   const productionPage = await production.fetch(origin + "/gatekeeper/subscription", { method: "GET", headers: headers() });
   assert.equal(productionPage.status, 200, "unmodified production artifact runs under workerd: " + await productionPage.text());
   const freshProduction = await production.fetch(origin + "/gatekeeper/subscription/start", { method: "POST", headers: headers(), body: JSON.stringify({ planUsageConfirmed: true }) });
   assert.equal(freshProduction.status, 200);
   assert.equal(new URL((await freshProduction.json()).authorizationUrl).searchParams.get("client_id"), "dynamic_agent_client", "unmodified production starts a new namespace grant");
-  for (const path of ["/gatekeeper/subscription/connections", "/gatekeeper/subscription/connections/create", "/gatekeeper/subscription/device/start", "/gatekeeper/subscription/device/check", "/gatekeeper/subscription/select", "/gatekeeper/subscription/account-info", "/gatekeeper/subscription", "/gatekeeper/subscription/status", "/gatekeeper/subscription/start", "/gatekeeper/subscription/complete", "/gatekeeper/subscription/refresh"]) {
+  for (const path of ["/gatekeeper/subscription/overview", "/gatekeeper/subscription/connections/rename", "/gatekeeper/subscription/connections", "/gatekeeper/subscription/connections/create", "/gatekeeper/subscription/device/start", "/gatekeeper/subscription/device/check", "/gatekeeper/subscription/select", "/gatekeeper/subscription/account-info", "/gatekeeper/subscription", "/gatekeeper/subscription/status", "/gatekeeper/subscription/start", "/gatekeeper/subscription/complete", "/gatekeeper/subscription/refresh"]) {
     await assertError(await send(path, {}, { headers: { origin, "content-type": "application/json" } }), 401, "access_denied");
   }
   for (const token of ["invalid", accessJwt({ iss: "https://wrong.example.invalid" }), accessJwt({ aud: "wrong" }), accessJwt({ exp: 1 }), accessJwt({ nbf: Math.floor(Date.now() / 1000) + 3600 }), accessJwt({}, openaiKeys), accessJwt({ exp: undefined }), accessJwt({ sub: undefined }), accessJwt({ iat: "invalid" }), accessJwt({ iat: Math.floor(Date.now() / 1000) + 3600 })]) {
@@ -306,11 +336,19 @@ try {
   }
   await assertError(await send("/gatekeeper/subscription/status", { accountId: "arbitrary" }), 400, "body_invalid");
   await assertError(await send("/gatekeeper/subscription/refresh", { email }), 400, "body_invalid");
+  await assertError(await send("/gatekeeper/subscription/overview", { accountId: "owner" }), 400, "body_invalid");
+  for(const input of [{label:'Only label'},{accountId:'owner'},{accountId:'owner',label:'Name',extra:true},{accountId:'arbitrary',label:'Name'}]) await assertError(await send('/gatekeeper/subscription/connections/rename',input),400,'body_invalid');
+  for(const label of ['', 'x'.repeat(129), '한'.repeat(43), 'bad\nlabel', 'bad\u0085label']) await assertError(await send('/gatekeeper/subscription/connections/rename',{accountId:'owner',label}),400,'subscription_label_invalid');
+  await assertError(await send('/gatekeeper/subscription/connections/create',{label:'bad\u0085label'}),400,'subscription_label_invalid');
   await assertError(await send("/gatekeeper/subscription/status?callbackUrl=synthetic"), 400, "request_invalid");
   await assertError(await send("/infer"), 404, "not_found");
   await assertError(await send("/gatekeeper/subscription/status", {}, { method: "GET", body: undefined }), 405, "method_not_allowed");
   assert.deepEqual(await events(), [], "all unauthorized/invalid requests rejected before any DO call");
   assert.equal(tokenCalls, 0);
+  const renamedDefault=await send('/gatekeeper/subscription/connections/rename',{accountId:'owner',label:'  Default subscription  '});
+  assert.equal(renamedDefault.status,200);
+  assert.deepEqual((await renamedDefault.json()).connections,[{id:'owner',label:'Default subscription',provider:'siwc',ready:false}]);
+  assert.deepEqual((await inspect()).adminAccounts,[{id:'owner',label:'Default subscription',createdAt:null}],'owner can be renamed before catalog initialization');
 
   const page = await mf.dispatchFetch(origin + "/gatekeeper/subscription", { headers: headers() });
   assert.equal(page.status, 200);
@@ -320,7 +358,7 @@ try {
   assert.ok(!html.includes("localStorage") && !html.includes("sessionStorage"));
   let response = await send("/gatekeeper/subscription/status");
   const unavailableUsage = { available: false, reason: "provider_not_supplied" };
-  assert.deepEqual(await response.json(), { connected: false, identityVerified: false, loginPending: false, planUsageConfirmed: false, siwcInferenceReady: false, identity: null, identityRefreshStatus: null, provider: "siwc", inferenceReady: false, codexInferenceReady: false, device: null, deviceFailed: false, usage: unavailableUsage });
+  assert.deepEqual(await response.json(), { connected: false, identityVerified: false, loginPending: false, planUsageConfirmed: false, siwcInferenceReady: false, identity: null, identityRefreshStatus: null, provider: "siwc", inferenceReady: false, codexInferenceReady: false, deviceLoginAvailable: true, device: null, deviceFailed: false, usage: unavailableUsage });
   assert.ok(!html.includes('id="email"') && !html.includes('고정됩니다'));
   assert.ok(html.includes('https://chatgpt.com/settings/usage'));
   const notReady = await privateClient.fetch("https://fixture.invalid/infer", { method: "POST", body: JSON.stringify(wire()) });
@@ -330,6 +368,12 @@ try {
   const namespace = await mf.getDurableObjectNamespace("Credentials", "subscription");
   const owner = namespace.get(namespace.idFromName("owner"));
   const put = value => owner.fetch("https://fixture.invalid/fixture-put", { method: "POST", body: JSON.stringify(value) });
+  const infoFixture = async input => (await owner.fetch('https://fixture.invalid/fixture-info',input?{method:'POST',body:JSON.stringify(input)}:{})).json();
+  const overview = async () => {
+    const response=await send('/gatekeeper/subscription/overview');
+    assert.equal(response.status,200,await response.clone().text());
+    return (await response.json()).connections;
+  };
   const stalePolicy = { expectedEmailHash: createHash("sha256").update(email).digest("hex"), label: "Previous unverified selection" };
   await put({ identityPolicy: stalePolicy, nativeUsageTotals: { source: "pi_committed_usage", totalTokens: 12345 } });
   let authorization = await start();
@@ -352,7 +396,7 @@ try {
   response = await send("/gatekeeper/subscription/complete", { callbackUrl: callback(authorization) });
   assert.equal(response.status, 200);
   const ready = await response.json();
-  assert.deepEqual(ready, { connected: true, identityVerified: true, loginPending: false, planUsageConfirmed: true, siwcInferenceReady: true, identity: { name: "Verified subscriber", email: other, planType: "pro", workspaceName: null, organizationNames: null, verifiedAt: ready.identity.verifiedAt }, identityRefreshStatus: null, provider: "siwc", inferenceReady: true, codexInferenceReady: false, device: null, deviceFailed: false, usage: unavailableUsage });
+  assert.deepEqual(ready, { connected: true, identityVerified: true, loginPending: false, planUsageConfirmed: true, siwcInferenceReady: true, identity: { name: "Verified subscriber", email: other, planType: "pro", workspaceName: null, organizationNames: null, verifiedAt: ready.identity.verifiedAt }, identityRefreshStatus: null, provider: "siwc", inferenceReady: true, codexInferenceReady: false, deviceLoginAvailable: true, device: null, deviceFailed: false, usage: unavailableUsage });
   assert.ok(Number.isFinite(Date.parse(ready.identity.verifiedAt)));
   assert.notEqual(ready.identity.email, email, "OpenAI account is independent of the OS administrator");
   const stored = await inspect();
@@ -477,6 +521,59 @@ try {
   for(const forbidden of ['other-account','Other private workspace',deviceAccount,'fixture-device-refresh']) assert.ok(!JSON.stringify(projectedInfo).includes(forbidden));
   await send('/gatekeeper/subscription/account-info'); assert.equal(accountReads,1); assert.equal(usageReads,1,'account snapshot cache prevents repeat network reads');
   assert.ok((await inspect()).subscriptionAccountInfo.ciphertext);
+  assert.ok((await inspect()).subscriptionAccountHistory.ciphertext);
+  const cachedHistory=await infoFixture();
+  assert.equal(cachedHistory.history.length,1,'cache hits add no observations');
+  let dashboard=(await overview())[0];
+  assert.deepEqual(Object.keys(dashboard).sort(),['history','id','identity','label','lastAttempt','provider','ready','snapshot']);
+  assert.deepEqual(dashboard.snapshot,projectedInfo);assert.deepEqual(dashboard.lastAttempt,projectedInfo);
+  assert.deepEqual(dashboard.identity,deviceStatus.identity,'overview uses the same safe verified identity');
+  assert.equal(dashboard.history.length,1);
+  assert.equal(accountReads,1);assert.equal(usageReads,1,'overview is cached-only');
+  for(const forbidden of [deviceAccount,'fixture-device-refresh','other-account','Other private workspace']) assert.ok(!JSON.stringify(dashboard).includes(forbidden));
+  await infoFixture({expireCache:true}); usageHttpStatus=429;
+  const failedInfo=await (await send('/gatekeeper/subscription/account-info')).json();
+  assert.deepEqual(failedInfo.usage,{status:'unavailable',reason:'http_error',httpStatus:429});
+  dashboard=(await overview())[0];
+  assert.deepEqual(dashboard.snapshot,projectedInfo,'a failed refresh preserves the most recent usage success');
+  assert.deepEqual(dashboard.lastAttempt,failedInfo);assert.equal(dashboard.history.length,1);
+  usageHttpStatus=200;usedPercent=125;await infoFixture({expireCache:true});
+  let releaseDedup, dedupStarted;
+  const didStartDedup=new Promise(resolve=>dedupStarted=resolve), waitDedup=new Promise(resolve=>releaseDedup=resolve);
+  duringAccountRead=async()=>{dedupStarted();await waitDedup;};
+  const beforeDedup={account:accountReads,usage:usageReads};
+  const firstDedup=send('/gatekeeper/subscription/account-info');await didStartDedup;
+  const secondDedup=send('/gatekeeper/subscription/account-info');releaseDedup();
+  const firstValue=await (await firstDedup).json(),secondValue=await (await secondDedup).json();
+  assert.deepEqual(firstValue,secondValue);
+  assert.equal(accountReads,beforeDedup.account+1);assert.equal(usageReads,beforeDedup.usage+1,'concurrent explicit refreshes share one provider request');
+  dashboard=(await overview())[0];
+  assert.equal(dashboard.snapshot.usage.primaryWindow.usedPercent,125);
+  assert.equal(dashboard.history.length,1,'fresh same-hour observations replace their hour');
+  assert.equal(dashboard.history[0].primaryWindow.usedPercent,125);usedPercent=12;
+  const retainedBeforeScope=await infoFixture();
+  const now=Date.now();
+  await infoFixture({record:{...retainedBeforeScope,history:Array.from({length:180},(_,i)=>({...retainedBeforeScope.history[0],checkedAt:new Date(now-(179-i)*3600000).toISOString()}))}});
+  assert.equal((await overview())[0].history.length,168,'overview bounds and expires retained history');
+  await infoFixture({record:retainedBeforeScope});
+  const originalSubjectHash=createHash('sha256').update(deviceSubject).digest('hex');
+  const alternateSubjectHash=createHash('sha256').update('changed-fixture-subject').digest('hex');
+  await infoFixture({subjectHash:alternateSubjectHash});
+  dashboard=(await overview())[0];
+  assert.equal(dashboard.snapshot,null);assert.equal(dashboard.lastAttempt,null);assert.deepEqual(dashboard.history,[],'different identity cannot see another scope');
+  await infoFixture({subjectHash:originalSubjectHash,expireCache:true});
+  let releaseScope, scopeStarted;
+  const didStartScope=new Promise(resolve=>scopeStarted=resolve),waitScope=new Promise(resolve=>releaseScope=resolve);
+  duringAccountRead=async()=>{scopeStarted();await waitScope;};
+  const scopeRace=send('/gatekeeper/subscription/account-info');await didStartScope;
+  await infoFixture({subjectHash:alternateSubjectHash});releaseScope();
+  await assertError(await scopeRace,400,'account_selection_changed');
+  assert.deepEqual(await infoFixture(),retainedBeforeScope,'a stale lookup cannot replace retained success or history');
+  await infoFixture({subjectHash:originalSubjectHash,flipOnHistoryRead:true});
+  const racedOverview=(await overview())[0];
+  assert.equal(racedOverview.error,'account_selection_changed');assert.equal(racedOverview.snapshot,null);assert.equal(racedOverview.identity,null);assert.deepEqual(racedOverview.history,[]);
+  assert.deepEqual((await overview())[0].history,[],'a cached-read race cannot expose old Codex quota to SIWC');
+  assert.equal((await send('/gatekeeper/subscription/select',{provider:'codex'})).status,200);
   await put({subscriptionAccountInfo:null});
   let releaseAccount, accountReadStarted;
   const startedAccount = new Promise(resolve=>accountReadStarted=resolve);
@@ -489,13 +586,15 @@ try {
   await assertError(await staleInfo,400,'account_selection_changed'); assert.equal(selected.status,200);
   assert.equal((await selected.json()).provider,'siwc');
   assert.equal((await (await send('/gatekeeper/subscription/account-info')).json()).usage.reason,'provider_not_supplied','SIWC does not expose stale Codex usage');
+  dashboard=(await overview())[0];assert.equal(dashboard.snapshot,null);assert.equal(dashboard.lastAttempt,null);assert.deepEqual(dashboard.history,[]);
   await (await privateClient.fetch('https://fixture.invalid/infer',{method:'POST',body:JSON.stringify(wire())})).text();
   assert.equal(outboundUrls.at(-1),'https://api.openai.com/v1/responses','explicit choice routes SIWC without reauthentication');
+  const deviceBeforeWrongIdentity=(await inspect()).codexImageProfile;
   deviceSubject='other-device-owner';
   await send('/gatekeeper/subscription/device/start',{planUsageConfirmed:true}); await deviceTime({nextAt:Date.now()-1});
   await assertError(await send('/gatekeeper/subscription/device/check'),400,'codex_image_identity_mismatch');
   assert.equal((await inspect()).subscriptionProvider,'siwc');
-  assert.deepEqual((await inspect()).codexImageProfile,afterDevice.codexImageProfile,'wrong identity preserves existing device grant');
+  assert.ok(JSON.stringify((await inspect()).codexImageProfile)===JSON.stringify(deviceBeforeWrongIdentity),'wrong identity preserves existing device grant');
   deviceSubject='device-owner'; deviceHtmlDenied=true;
   await send('/gatekeeper/subscription/device/start',{planUsageConfirmed:true}); await deviceTime({nextAt:Date.now()-1});
   await assertError(await send('/gatekeeper/subscription/device/check'),400,'codex_image_remote_denied');
@@ -586,7 +685,7 @@ try {
     const response=await send('/gatekeeper/subscription/connections/create',{label});
     assert.equal(response.status,200,await response.clone().text());return response.json();
   };
-  for (const label of ['', 'x'.repeat(129), '한'.repeat(43), 'bad\nlabel']) await assertError(await send('/gatekeeper/subscription/connections/create',{label}),400,'subscription_label_invalid');
+  for (const label of ['', 'x'.repeat(129), '한'.repeat(43), 'bad\nlabel', 'bad\u0085label']) await assertError(await send('/gatekeeper/subscription/connections/create',{label}),400,'subscription_label_invalid');
   await assertError(await send('/gatekeeper/subscription/connections/create',{label:'Named',email}),400,'subscription_label_invalid');
   const createdA=await create('Connection A'), connectionA=createdA.id;
   const createdB=await create('Connection B'), connectionB=createdB.id;
@@ -596,10 +695,20 @@ try {
   const catalogRows=(await inspect()).adminAccounts;
   assert.equal(catalogRows.find(row=>row.id===connectionA).subscriptionSetup,true);
   assert.ok(!Object.hasOwn(catalogRows.find(row=>row.id===connectionA),'expectedEmail'),'named setup creates no email policy');
+  await put({adminAccounts:catalogRows.map(row=>row.id===connectionA?{...row,fixtureMetadata:{preserved:true}}:row)});
+  const beforeRename=await inspect();
+  const renamed=await send('/gatekeeper/subscription/connections/rename',{accountId:connectionA,label:'  Renamed connection A  '});
+  assert.equal(renamed.status,200);
+  assert.equal((await renamed.json()).connections.find(row=>row.id===connectionA).label,'Renamed connection A');
+  const afterRename=await inspect();
+  assert.deepEqual(afterRename.adminAccounts,beforeRename.adminAccounts.map(row=>row.id===connectionA?{...row,label:'Renamed connection A'}:row),'rename changes only the selected catalog label');
+  for(const key of ['accountSelection','defaultAccountId','credential','registration','codexImageProfile','codexRegistration','identityPolicy','subscriptionProvider','subscriptionAccountInfo','subscriptionAccountHistory']) assert.deepEqual(afterRename[key],beforeRename[key],'rename preserves IDs, grants, pins, selection and usage');
   const beforeUnknownEvents=(await events()).length, beforeUnknownOutbound=outboundUrls.length;
   for (const accountId of [unknownId,excludedId]) {
     await assertError(await send('/gatekeeper/subscription/status',{accountId}),400,'subscription_account_not_found');
     await assertError(await send('/gatekeeper/subscription/start',{accountId,planUsageConfirmed:true}),400,'subscription_account_not_found');
+    await assertError(await send('/gatekeeper/subscription/account-info',{accountId}),400,'subscription_account_not_found');
+    await assertError(await send('/gatekeeper/subscription/connections/rename',{accountId,label:'Denied rename'}),400,'subscription_account_not_found');
     const denied=await privateClient.fetch('https://fixture.invalid/infer',{method:'POST',body:JSON.stringify(wire({subscriptionAccountId:accountId}))});
     assert.equal(denied.status,403);
   }
@@ -624,6 +733,37 @@ try {
   for (const row of namedCatalog) assert.deepEqual(Object.keys(row).sort(),['id','label','provider','ready']);
   assert.deepEqual({account:accountReads,usage:usageReads},readsBeforeNamed,'catalog reads local readiness without usage requests');
   assert.deepEqual(await (await privateClient.fetch('https://fixture.invalid/connections')).json(),namedCatalog,'trusted catalog needs no user ID');
+  const beforeNamedOverview={account:accountReads,usage:usageReads};
+  let namedOverview=await overview();
+  assert.deepEqual(namedOverview.map(row=>row.id),['owner',connectionA,connectionB]);
+  assert.equal(namedOverview.find(row=>row.id===connectionA).snapshot,null);
+  assert.equal(namedOverview.find(row=>row.id===connectionB).snapshot,null,'new account cannot inherit owner quota');
+  assert.deepEqual({account:accountReads,usage:usageReads},beforeNamedOverview,'all-account overview makes no provider calls');
+  const namedInfoResponse=await send('/gatekeeper/subscription/account-info',{accountId:connectionB});
+  assert.equal(namedInfoResponse.status,200);const namedInfo=await namedInfoResponse.json();
+  namedOverview=await overview();
+  assert.deepEqual(namedOverview.find(row=>row.id===connectionB).snapshot,namedInfo);
+  assert.equal(namedOverview.find(row=>row.id===connectionB).history.length,1);
+  assert.equal(namedOverview.find(row=>row.id===connectionA).snapshot,null);
+  assert.ok((await targetState(connectionB)).subscriptionAccountHistory.ciphertext);
+  assert.equal((await targetState(connectionA)).subscriptionAccountHistory,undefined);
+  await targetObject(connectionB).fetch('https://fixture.invalid/fixture-info',{method:'POST',body:JSON.stringify({flipOnHistoryRead:true})});
+  const partialRace=await overview();
+  assert.equal(partialRace.find(row=>row.id===connectionB).error,'account_selection_changed');
+  assert.equal(partialRace.find(row=>row.id===connectionB).snapshot,null);
+  assert.equal(partialRace.find(row=>row.id===connectionA).ready,true);
+  assert.equal(partialRace.find(row=>row.id==='owner').ready,true,'a cached-read race leaves sibling rows usable');
+  assert.equal((await send('/gatekeeper/subscription/select',{accountId:connectionB,provider:'codex'})).status,200);
+  await targetObject(connectionB).fetch('https://fixture.invalid/fixture-info',{method:'POST',body:JSON.stringify({failStatus:true})});
+  const readsBeforeFailedRow={account:accountReads,usage:usageReads};
+  const partialOverview=await overview();
+  const failedRow=partialOverview.find(row=>row.id===connectionB);
+  assert.deepEqual(failedRow,{id:connectionB,label:'Connection B',provider:null,ready:null,identity:null,snapshot:null,lastAttempt:null,history:[],error:'unavailable'});
+  assert.equal(partialOverview.find(row=>row.id===connectionA).ready,true);assert.equal(partialOverview.find(row=>row.id===connectionA).identity.email,'subscriber-a@example.invalid');
+  assert.equal(partialOverview.find(row=>row.id==='owner').ready,true);
+  assert.ok(!JSON.stringify(partialOverview).includes(accessToken),'row failures do not expose exception contents');
+  assert.deepEqual({account:accountReads,usage:usageReads},readsBeforeFailedRow,'partial overview failures never query a provider');
+  await targetObject(connectionB).fetch('https://fixture.invalid/fixture-info',{method:'POST',body:JSON.stringify({failStatus:false})});
   for (const accountId of [connectionA,connectionB,'owner',undefined]) {
     if(accountId==='owner'||accountId===undefined) deviceAccount=deviceAccountBeforeNamed;
     const response=await privateClient.fetch('https://fixture.invalid/infer',{method:'POST',body:JSON.stringify(wire(accountId?{subscriptionAccountId:accountId}:{}))});
@@ -636,7 +776,7 @@ try {
   assert.ok(namedA.credential.ciphertext && namedB.codexImageProfile.ciphertext);
   assert.equal(namedA.codexImageProfile,undefined);assert.equal(namedB.credential,undefined);
   const ownerAfterNamed=await inspect();
-  for(const key of ['credential','registration','codexImageProfile','codexRegistration','subscriptionProvider','subscriptionAccountInfo']) assert.deepEqual(ownerAfterNamed[key],ownerBeforeNamed[key],'named connections preserve legacy owner state');
+  for(const key of ['credential','registration','codexImageProfile','codexRegistration','subscriptionProvider','subscriptionAccountInfo','subscriptionAccountHistory']) assert.deepEqual(ownerAfterNamed[key],ownerBeforeNamed[key],'named connections preserve legacy owner state');
   const storedInventory=ownerAfterNamed.adminAccounts;
   await put({adminAccounts:[...storedInventory,...Array.from({length:20-storedInventory.length},(_,i)=>({id:`account-00000000-0000-0000-0000-${String(i+10).padStart(12,'0')}`,label:'Inventory fixture'}))]});
   await assertError(await send('/gatekeeper/subscription/connections/create',{label:'Over limit'}),400,'account_limit');

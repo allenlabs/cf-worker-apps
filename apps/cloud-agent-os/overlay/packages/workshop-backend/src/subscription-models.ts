@@ -27,7 +27,7 @@ export const subscriptionAccountIdSchema = z.union([
 ]);
 const subscriptionConnectionsSchema = z.array(z.object({
   id: subscriptionAccountIdSchema,
-  label: z.string().trim().min(1).max(128).refine(value => new TextEncoder().encode(value).length <= 128 && !/[\u0000-\u001f\u007f]/.test(value)),
+  label: z.string().trim().min(1).max(128).refine(value => new TextEncoder().encode(value).length <= 128 && !/[\u0000-\u001f\u007f-\u009f]/.test(value)),
   provider: z.enum(["siwc", "codex"]),
   ready: z.boolean(),
 }).strict()).min(1).max(20).refine(connections =>
@@ -49,7 +49,7 @@ export class SubscriptionModels {
   readonly providers: ReadonlySet<AiModelProvider> = new Set(["openai"]);
   readonly userModels: boolean;
   readonly setupUrl?: string;
-  readonly all: readonly { id: string; name: string; provider: "openai"; mode: GatewayModelMode;
+  readonly all: readonly { id: string; name: string; providerDisplayName: string; provider: "openai"; mode: GatewayModelMode;
     accountId: string; subscriptionProvider: SubscriptionConnections[number]["provider"] | null; ready: boolean | null }[];
   readonly #selectable: boolean;
   readonly #physicalModel: string;
@@ -57,7 +57,7 @@ export class SubscriptionModels {
 
   constructor(
     env: Cloudflare.Env & SubscriptionEnvironment,
-    config: Pick<AdminConfig, "modelModes" | "userModelsEnabled">,
+    config: Pick<AdminConfig, "modelModes" | "userModelsEnabled"> & Partial<Pick<AdminConfig, "modelDisplayNames">>,
     userId: string | undefined,
     connections: SubscriptionConnections | undefined,
   ) {
@@ -87,7 +87,9 @@ export class SubscriptionModels {
     this.all = (connections ?? [{ id: "owner", label: "Codex subscription", provider: null, ready: null }]).map(connection => {
       const id = connection.id === "owner" ? catalog.id : `subscription-${connection.id}`;
       const mode = Object.hasOwn(config.modelModes, id) ? config.modelModes[id] : "enabled";
-      return { id, name: connection.label, provider: "openai", mode, accountId: connection.id,
+      return { id, name: config.modelDisplayNames && Object.hasOwn(config.modelDisplayNames, id)
+          ? config.modelDisplayNames[id] : connection.label,
+        providerDisplayName: connection.label, provider: "openai", mode, accountId: connection.id,
         subscriptionProvider: connection.provider, ready: connection.ready };
     });
   }
@@ -100,14 +102,14 @@ export class SubscriptionModels {
     if (!this.#authorized) return [];
     return this.all
       .filter((model) => model.mode === "enabled")
-      .map(({ id, name }) => ({ type: "agent", id, name }));
+      .map(({ id, name, providerDisplayName }) => ({ type: "agent", id, name, providerDisplayName }));
   }
 
   resolve(id: string): UserAiModelRecord | undefined {
     const model = this.get(id);
     if (!this.#authorized || !model || model.mode === "disabled") return undefined;
     return {
-      profile: { type: "agent", id: model.id, name: model.name },
+      profile: { type: "agent", id: model.id, name: model.name, providerDisplayName: model.providerDisplayName },
       config: { provider: "openai", model: this.#physicalModel, apiToken: "", transport: "subscription",
         ...(this.#selectable ? { subscriptionAccountId: model.accountId } : {}) },
     };

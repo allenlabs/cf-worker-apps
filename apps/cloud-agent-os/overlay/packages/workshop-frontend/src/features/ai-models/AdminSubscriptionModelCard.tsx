@@ -3,6 +3,8 @@ import { Switch, useKumoToastManager } from '@cloudflare/kumo'
 import type { AdminApi, AdminSettingsView } from '@gadgets/workshop-shared/api'
 import type { RpcStub } from 'capnweb'
 import { rpcFailureDescription } from '../../rpcErrors'
+import { SubscriptionDashboard } from './SubscriptionDashboard'
+import { DisplayNameEditor } from './DisplayNameEditor'
 
 /** Named subscription objects use independent availability and the same personal-provider policy. */
 export const AdminSubscriptionModelCard = ({ admin, model, onChanged }: {
@@ -36,8 +38,23 @@ export const AdminSubscriptionModelCard = ({ admin, model, onChanged }: {
     } catch (err) {
       const title = saved ? 'Saved, but couldn’t reload the provider'
         : scope === 'subscription' ? 'Couldn’t update Codex subscription' : 'Couldn’t update personal provider policy'
-      console.error(`${title}:`, err)
       toasts.add({ title, description: rpcFailureDescription(err), variant: 'error' })
+    } finally {
+      inFlight.current = false
+      setBusy(false)
+    }
+  }
+
+  const changeModelName = async (modelId: string, name: string | null) => {
+    if (inFlight.current) return
+    inFlight.current = true
+    focusBeforeWrite.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    setBusy(true)
+    try {
+      await admin.setModelDisplayName(modelId, name)
+      await onChanged()
+    } catch (err) {
+      toasts.add({ title: 'Couldn’t save the organization model name', description: rpcFailureDescription(err), variant: 'error' })
     } finally {
       inFlight.current = false
       setBusy(false)
@@ -50,7 +67,18 @@ export const AdminSubscriptionModelCard = ({ admin, model, onChanged }: {
       <p className="mb-4 text-sm text-kumo-subtle">
         Manage named subscriptions shared by your organization. Users choose which available model to use.
       </p>
-      <div className="space-y-3">
+      {model.setupUrl === '/gatekeeper/subscription' ? (
+        <SubscriptionDashboard onChanged={onChanged} availability={(accountId, label) => {
+          const connection = model.connections.find(item => item.accountId === accountId)
+          return connection ? <div className="min-w-0 space-y-2">
+            <Switch aria-label={`Enable ${label}`} checked={connection.enabled} disabled={busy}
+              onCheckedChange={enabled => { void changeEnabled('subscription', enabled, accountId) }} />
+            <p className="text-xs text-kumo-subtle">Model display name: {connection.name}</p>
+            <DisplayNameEditor label={`Model display name for ${label}`} name={connection.name} busy={busy}
+              onSave={name => { void changeModelName(connection.id, name) }} />
+          </div> : null
+        }} />
+      ) : <div className="space-y-3">
         {model.connections.map(connection => (
           <div key={connection.id} className="flex items-center gap-4 rounded-lg border border-kumo-line bg-kumo-base px-4 py-3">
             <div className="min-w-0 flex-1 text-sm">
@@ -62,6 +90,8 @@ export const AdminSubscriptionModelCard = ({ admin, model, onChanged }: {
                 No API key is needed for users. Turning this off makes the model
                 unavailable to users and agents until you enable it again.
               </p>
+              <DisplayNameEditor label={`Model display name for ${connection.providerDisplayName ?? connection.name}`} name={connection.name} busy={busy}
+                onSave={name => { void changeModelName(connection.id, name) }} />
               {model.setupUrl && (
                 <a href={`${model.setupUrl}#connection=${encodeURIComponent(connection.accountId)}`}
                   className="mt-2 inline-flex min-h-9 items-center text-sm font-medium text-kumo-link hover:underline">
@@ -74,13 +104,7 @@ export const AdminSubscriptionModelCard = ({ admin, model, onChanged }: {
               onCheckedChange={enabled => { void changeEnabled('subscription', enabled, connection.accountId) }} />
           </div>
         ))}
-      </div>
-      {model.setupUrl && (
-        <a href={`${model.setupUrl}#add`}
-          className="mt-4 inline-flex min-h-9 items-center rounded-lg bg-kumo-brand px-3.5 py-2 text-sm font-medium text-white hover:bg-kumo-brand-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-kumo-ring">
-          Add subscription
-        </a>
-      )}
+      </div>}
       <div className="mt-6 flex items-center gap-4 border-t border-kumo-line pt-4">
         <div className="min-w-0 flex-1 text-sm">
           <h3 className="font-medium text-kumo-default">Personal providers</h3>

@@ -3,7 +3,7 @@
 
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RpcStub } from 'capnweb'
 import type { AdminApi, AdminSettingsView } from '@gadgets/workshop-shared/api'
 
@@ -14,10 +14,16 @@ vi.mock('@cloudflare/kumo', async (importOriginal) => ({
 }))
 
 import { AdminModelsPanel } from './AdminModelsPanel'
+import type { SubscriptionConnection } from './SubscriptionDashboardApi'
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 describe('Admin-managed Codex subscription', () => {
+  let overview: SubscriptionConnection[] = []
+  beforeEach(() => {
+    overview = []
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ connections: overview }), { headers: { 'content-type': 'application/json' } })))
+  })
 
   it('keeps legacy bridge readiness unknown when setup is not configured', async () => {
     const subscriptionModel: NonNullable<AdminSettingsView['subscriptionModel']> = {
@@ -25,6 +31,8 @@ describe('Admin-managed Codex subscription', () => {
       connections: [{ id: 'codex-subscription', accountId: 'owner', name: 'Codex subscription',
         provider: null, ready: null, enabled: true }],
     }
+    overview = subscriptionModel.connections.map(item => ({ id: item.accountId, label: item.name, provider: item.provider,
+      ready: item.ready, identity: null, snapshot: null, lastAttempt: null, history: [] }))
     root = createRoot(document.body.appendChild(document.createElement('div')))
     await act(async () => root!.render(<AdminModelsPanel admin={{} as unknown as RpcStub<AdminApi>}
       gatewayModels={undefined} subscriptionModel={subscriptionModel} onChanged={async () => {}} />))
@@ -46,14 +54,16 @@ describe('Admin-managed Codex subscription', () => {
         { id: `subscription-${accountB}`, accountId: accountB, name: 'Writing', provider: 'siwc', ready: false, enabled: false },
       ],
     }
+    overview = subscriptionModel.connections.map(item => ({ id: item.accountId, label: item.name, provider: item.provider,
+      ready: item.ready, identity: null, snapshot: null, lastAttempt: null, history: [] }))
     root = createRoot(document.body.appendChild(document.createElement('div')))
     await act(async () => root!.render(<AdminModelsPanel admin={admin} gatewayModels={undefined}
       subscriptionModel={subscriptionModel} onChanged={async () => {}} />))
     expect(document.body.textContent).toContain('Research')
     expect(document.body.textContent).toContain('Writing')
-    expect(document.body.textContent).toContain('Connected')
-    expect(document.body.textContent).toContain('Not connected')
-    expect(document.body.querySelector(`a[href="/gatekeeper/subscription#connection=${accountB}"]`)?.textContent).toBe('Manage Writing')
+    expect(document.body.textContent).toContain('Credentials ready')
+    expect(document.body.textContent).toContain('Credentials need connection')
+    expect(document.body.querySelector('button[aria-expanded]')?.textContent).toBe('Connect Research')
     await act(async () => toggle('Enable Writing').checkbox.click())
     expect(setSubscriptionModelEnabled).toHaveBeenLastCalledWith(true, accountB)
     expect(toggle('Enable Research').control.getAttribute('aria-checked')).toBe('true')
@@ -67,6 +77,7 @@ describe('Admin-managed Codex subscription', () => {
     await act(async () => root?.unmount())
     document.body.innerHTML = ''
     vi.restoreAllMocks()
+    vi.unstubAllGlobals()
     addToast.mockReset()
   })
 
@@ -82,6 +93,8 @@ describe('Admin-managed Codex subscription', () => {
         id: 'codex-subscription', name: 'Codex subscription', enabled: reported, ...policy,
         connections: [{ id: 'codex-subscription', accountId: 'owner', name: 'Codex subscription', provider: 'siwc', ready: true, enabled: reported }],
       }
+      overview = subscriptionModel.connections.map(item => ({ id: item.accountId, label: item.name, provider: item.provider,
+        ready: item.ready, identity: null, snapshot: null, lastAttempt: null, history: [] }))
       await act(async () => root!.render(<AdminModelsPanel admin={admin}
         gatewayModels={undefined} subscriptionModel={subscriptionModel} onChanged={onChanged} />))
     }
@@ -101,7 +114,7 @@ describe('Admin-managed Codex subscription', () => {
     expect(document.body.textContent).toContain('Codex subscription')
     expect(document.body.textContent).toContain('codex-subscription')
     expect(document.body.textContent).toContain('No API key')
-    expect(document.body.querySelectorAll('input:not([type="checkbox"]), select, textarea, form')).toHaveLength(0)
+    expect(document.body.querySelectorAll('input[type="password"], input[type="url"], textarea')).toHaveLength(0)
     expect(toggle().control.getAttribute('aria-checked')).toBe(String(enabled))
     await act(async () => toggle().checkbox.click())
     expect(setSubscriptionModelEnabled).toHaveBeenCalledExactlyOnceWith(!enabled, 'owner')
@@ -129,11 +142,10 @@ describe('Admin-managed Codex subscription', () => {
   })
   it.each([undefined, '/gatekeeper/subscription'])('offers SIWC setup only when advertised (%s)', async setupUrl => {
     await render(true, undefined, { userModelsEnabled: true, setupUrl })
-    const link = document.body.querySelector<HTMLAnchorElement>('a[href="/gatekeeper/subscription#connection=owner"]')
+    const link = document.body.querySelector<HTMLAnchorElement>('a[href="/gatekeeper/subscription"]')
     if (setupUrl) {
-      expect(link?.textContent).toBe('Manage Codex subscription')
-      expect(link?.getAttribute('href')).toBe('/gatekeeper/subscription#connection=owner')
-      expect(document.body.querySelector('a[href="/gatekeeper/subscription#add"]')?.textContent).toBe('Add subscription')
+      expect(link?.textContent).toBe('Open standalone setup as a fallback')
+      expect(document.body.querySelector('input[aria-label="New subscription name"]')).not.toBeNull()
     } else expect(link).toBeNull()
     expect(document.body.textContent).toContain('Organization subscription')
     expect(document.body.textContent).toContain('Personal providers')

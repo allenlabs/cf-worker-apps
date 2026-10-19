@@ -118,8 +118,8 @@ These bridge limits do not reduce the separate login or administrator identity l
 
 Set `modelBridge.management` to `"admin"` to manage named subscription connections centrally.
 Admin's **Providers** tab manages the organization subscription and whether users may add
-personal providers. When SIWC setup is configured, its connection button opens the protected
-subscription setup page. Administrators also get this connection button in the initial
+personal providers. When SIWC setup is configured, this tab includes native subscription
+management using the existing protected setup endpoints. Administrators also get a connection button in the initial
 model setup step, before Admin is accessible. The shared model is available to permitted users without a personal
 provider record. Users manage their own API providers, default model and quick model in
 **Providers**, and can select a model for each chat. Personal credentials stay in that user's
@@ -131,9 +131,25 @@ Older untagged shared model bindings must be reconnected and do not fall back to
 Each connection appears as its own model choice, with independent availability, default and
 quick-model selection. The owner keeps its existing physical-model profile ID. Added objects use
 `subscription-account-<UUID>` profile IDs, while inference still uses the configured physical model.
-Admin's Providers card shows each connection's name and readiness, with its own toggle and protected
-setup link. Add subscription opens the setup page's add form. Unconnected objects remain visible;
+Admin's Providers card shows each connection's name and readiness with its own availability toggle.
+The native subscription panel compares saved quota windows, reset times, credits, and lookup status.
+Administrators add, rename, and connect subscriptions inside the OS. The standalone protected setup
+page remains available for recovery. Unconnected objects remain visible;
 inference requires that object's own connected grant and never falls back to another connection.
+
+Connection names, provider names, and model display names are separate from routing IDs. Organization
+administrators manage shared provider and model names. Users name their own custom providers in
+**Providers** while retaining the existing model display-name field. Renaming preserves credentials,
+model selection IDs, and physical provider/model routing. Existing chat messages retain their saved
+author names; subsequent model choices and turns use the current names.
+
+Opening the subscription panel reads saved state without querying every provider. Row refresh and
+bounded refresh-all reuse the existing account-scoped cache. A failed lookup retains the last
+successful reading and shows its age and failure separately. Recorded quota history contains at most
+168 hourly samples from the last seven days; it starts with actual successful observations.
+The remaining-quota warning threshold controls in-page notices and is local to the browser.
+SIWC's unavailable quota stays unknown. Subscription percentages, credits, and captured OS tokens
+are distinct measurements and are never combined into an account-wide spending total.
 
 With SIWC setup enabled, the Workshop validates the private binding's safe catalog before building profiles.
 Without setup, the existing single model keeps the runtime's configured account. The Workshop neither

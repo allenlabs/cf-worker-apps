@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { readCodexAccountInfo } from "../../workers/pi/codex-account-info.js";
+import { retainSubscriptionInfo, subscriptionInfoHistory } from "../../workers/pi/subscription-account-info.js";
 
 const selected = "fixture-selected";
-const access = "fixture-access-do-not-return";
+const access = "fixture-access-do-not-return-" + "x".repeat(512);
 const other = "fixture-other-do-not-return";
 const account = { id: selected, name: "Example workspace", structure: "workspace", plan_type: "business" };
 const accountResponse = { accounts: [account, { id: other, name: "Private other workspace" }] };
@@ -55,7 +56,8 @@ try {
   assert.deepEqual(result.account, { status: "available", httpStatus: 200, workspaceName: account.name, structure: "workspace", planType: "business" });
   assert.deepEqual(result.usage, {
     status: "available", httpStatus: 200, planType: "plus", allowed: false, limitReached: false,
-    primaryWindow: { usedPercent: 0, windowSeconds: 18000, resetAt: 1800000000 }, secondaryWindow: null,
+    primaryWindow: { usedPercent: 0, windowSeconds: 18000, resetAt: 1800000000, resetAfterSeconds: 2400 }, secondaryWindow: null,
+    additionalWindows: [],
     credits: { hasCredits: false, unlimited: false, balance: "0.0000000000000000001" },
   });
   const map = await read({ accounts: () => json({
@@ -65,7 +67,7 @@ try {
   assert.equal(map.account.workspaceName, "Mapped workspace");
   assert.equal(map.account.planType, null);
   const missing = await read({ usage: () => json({ plan_type: "pro", rate_limit: { allowed: true, limit_reached: false, primary_window: {} } }) });
-  assert.deepEqual(missing.usage.primaryWindow, { usedPercent: null, windowSeconds: null, resetAt: null });
+  assert.deepEqual(missing.usage.primaryWindow, { usedPercent: null, windowSeconds: null, resetAt: null, resetAfterSeconds: null });
   assert.equal(missing.usage.secondaryWindow, null);
   assert.equal(missing.usage.credits, null);
   const over = structuredClone(usageResponse);
@@ -75,6 +77,43 @@ try {
   assert.equal(onlyPlan.status, "available");
   assert.equal(onlyPlan.allowed, null);
   assert.equal(onlyPlan.primaryWindow, null);
+  const extra = { limit_name: "Model-specific limit", metered_feature: "codex_fixture", rate_limit: usageResponse.rate_limit };
+  const additional = (await read({ usage: () => json({ ...usageResponse, additional_rate_limits: [extra] }) })).usage.additionalWindows;
+  assert.deepEqual(additional, [{ id: "codex_fixture", name: "Model-specific limit", allowed: false, limitReached: false, primaryWindow: result.usage.primaryWindow, secondaryWindow: null }]);
+  for (const additional_rate_limits of [null, {}, "bad", [null, {}, { ...extra, limit_name: "x".repeat(129) }, { ...extra, rate_limit: { allowed: true } }]]) {
+    const projected = (await read({ usage: () => json({ ...usageResponse, additional_rate_limits }) })).usage;
+    assert.equal(projected.status, "available");
+    assert.deepEqual(projected.additionalWindows, []);
+  }
+  assert.equal((await read({ usage: () => json({ ...usageResponse, additional_rate_limits: Array(20).fill(extra) }) })).usage.additionalWindows.length, 8);
+
+  const baseTime = Date.parse("2026-10-01T00:00:00.000Z");
+  const observation = (hour, usedPercent = hour) => ({ ...result, checkedAt: new Date(baseTime + hour * 3600000).toISOString(), usage: { ...result.usage, primaryWindow: { ...result.usage.primaryWindow, usedPercent } } });
+  let retained;
+  for (let hour = 0; hour < 180; hour++) retained = retainSubscriptionInfo(retained, "scope-a", observation(hour), baseTime + hour * 3600000);
+  assert.equal(retained.history.length, 168);
+  assert.equal(retained.history[0].primaryWindow.usedPercent, 12);
+  assert.equal(retained.history.at(-1).primaryWindow.usedPercent, 179, "measurements above 100 stay intact");
+  retained = retainSubscriptionInfo(retained, "scope-a", observation(179, 182), baseTime + 179 * 3600000);
+  assert.equal(retained.history.length, 168, "same-hour refresh replaces that hour's observation");
+  assert.equal(retained.history.at(-1).primaryWindow.usedPercent, 182);
+  const lastSuccess = retained.snapshot;
+  const failed = { ...observation(180), usage: { status: "unavailable", reason: "http_error", httpStatus: 429 } };
+  retained = retainSubscriptionInfo(retained, "scope-a", failed, baseTime + 180 * 3600000);
+  assert.deepEqual(retained.snapshot, lastSuccess);
+  assert.deepEqual(retained.lastAttempt, failed);
+  assert.equal(retained.history.at(-1).primaryWindow.usedPercent, 182);
+  assert.equal(subscriptionInfoHistory(retained, baseTime + 400 * 3600000).length, 0);
+  assert.deepEqual(retainSubscriptionInfo(retained, "scope-b", failed, baseTime + 180 * 3600000).history, []);
+  assert.equal(retainSubscriptionInfo(retained, "scope-b", failed, baseTime + 180 * 3600000).snapshot, null);
+  let dense;
+  for (let hour = 0; hour < 168; hour++) {
+    const value = observation(hour);
+    value.usage.additionalWindows = Array.from({ length: 8 }, (_, i) => ({ ...additional[0], id: String(i), name: "한".repeat(42), primaryWindow: value.usage.primaryWindow, secondaryWindow: value.usage.primaryWindow }));
+    dense = retainSubscriptionInfo(dense, "scope-a", value, baseTime + hour * 3600000);
+  }
+  assert.ok(dense.history.length > 0 && dense.history.length < 168);
+  assert.ok(new TextEncoder().encode(JSON.stringify(dense)).length <= 90 * 1024, "sealed record plaintext leaves base64 encryption space within the DO per-value limit");
 
   for (const accounts of [
     { accounts: [{ id: other }], default_account_id: selected },

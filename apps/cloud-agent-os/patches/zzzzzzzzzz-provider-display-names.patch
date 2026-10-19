@@ -1,0 +1,999 @@
+diff --git a/packages/workshop-backend/__tests__/admin-config.test.ts b/packages/workshop-backend/__tests__/admin-config.test.ts
+index 49da111..183cfd3 100644
+--- a/packages/workshop-backend/__tests__/admin-config.test.ts
++++ b/packages/workshop-backend/__tests__/admin-config.test.ts
+@@ -4,6 +4,24 @@ import { defaultOutputFormatId, normalizeAdminConfig, parseAdminConfig, reorderF
+ import { DEFAULT_ADMIN_CONFIG } from "../src/storage-schema/admin-settings-storage.js";
+ 
+ describe("parseAdminConfig", () => {
++  it("validates added model names with the same UTF-8 and control limits", () => {
++    const model = { provider: "anthropic", id: "custom-model", name: "é".repeat(64), contextWindow: 10000 };
++    expect(sanitizeAddedModel(model)?.name).toBe(model.name);
++    for (const name of ["é".repeat(65), "bad\nname", "bad\u0085name", " "])
++      expect(sanitizeAddedModel({ ...model, name })).toBeUndefined();
++  });
++
++  it("backfills and validates display-name maps without accepting inherited entries", () => {
++    const config = parseAdminConfig(JSON.stringify({
++      providerDisplayNames: { anthropic: "  Research  ", unsupported: "No", openai: "bad\nname" },
++      modelDisplayNames: { model: "  Writing  ", empty: " ", oversized: "é".repeat(65) },
++    }));
++    expect(config.providerDisplayNames).toEqual({ anthropic: "Research" });
++    expect(config.modelDisplayNames).toEqual({ model: "Writing" });
++    expect(parseAdminConfig("{}").providerDisplayNames).toEqual({});
++    expect(parseAdminConfig("{}").modelDisplayNames).toEqual({});
++  });
++
+   it("backfills fields missing from a config persisted before they existed", () => {
+     // A config written before `formats` was added. Every consumer indexes into these, so a missing
+     // field must come back as its default rather than undefined.
+diff --git a/packages/workshop-backend/__tests__/admin-settings-models.test.ts b/packages/workshop-backend/__tests__/admin-settings-models.test.ts
+index 5491de3..fb758f4 100644
+--- a/packages/workshop-backend/__tests__/admin-settings-models.test.ts
++++ b/packages/workshop-backend/__tests__/admin-settings-models.test.ts
+@@ -53,6 +53,50 @@ function adminSettings(vars: object = GATEWAY) {
+   return { inDo, stored, settings, put, mirror };
+ }
+ 
++describe("AdminSettings display names", () => {
++  it("sets and clears aliases without changing IDs, modes or provider routing", async () => {
++    const { inDo, mirror } = adminSettings();
++    await inDo(async admin => {
++      await admin.setGatewayProviderDisplayName("anthropic", "  Organization AI  ");
++      await admin.setModelDisplayName("claude-fable-5-1", "  Writing model  ");
++      const view = (await admin.getSettings("admin")).gatewayModels!;
++      expect(view.providerSettings.find(p => p.provider === "anthropic")?.displayName).toBe("Organization AI");
++      expect(view.models.find(m => m.id === "claude-fable-5-1")?.name).toBe("Writing model");
++      await admin.setModelDisplayName("claude-fable-5-1", null);
++      await admin.setGatewayProviderDisplayName("anthropic", null);
++    });
++    expect(parseAdminConfig(mirror.current).modelDisplayNames).toEqual({});
++    expect(parseAdminConfig(mirror.current).providerDisplayNames).toEqual({});
++  });
++
++  it("rejects unknown models and invalid names without a write, and rolls back a failed mirror", async () => {
++    const { inDo, put, mirror } = adminSettings();
++    for (const name of [" ", "bad\nname", "bad\u0085name", "é".repeat(65)]) {
++      await expect(inDo(admin => admin.setModelDisplayName("claude-fable-5-1", name))).rejects.toThrow("display name");
++      await expect(inDo(admin => admin.setGatewayProviderDisplayName("anthropic", name))).rejects.toThrow("display name");
++    }
++    await expect(inDo(admin => admin.setModelDisplayName("unknown-model", "Name"))).rejects.toThrow("No such");
++    await expect(inDo(admin => admin.setGatewayProviderDisplayName("ollama", "Name"))).rejects.toThrow("not served");
++    expect(put).not.toHaveBeenCalled();
++    mirror.fail = true;
++    await expect(inDo(admin => admin.setModelDisplayName("claude-fable-5-1", "Name"))).rejects.toThrow("KV unavailable");
++    expect(await inDo(admin => admin.getAdminConfig().modelDisplayNames)).toEqual({});
++  });
++
++  it("retains independent concurrent alias updates", async () => {
++    const { inDo } = adminSettings();
++    await inDo(async admin => {
++      await Promise.all([
++        admin.setModelDisplayName("claude-fable-5-1", "Writing"),
++        admin.setModelDisplayName("claude-haiku-4-5", "Quick"),
++      ]);
++      expect(admin.getAdminConfig().modelDisplayNames).toEqual({
++        "claude-fable-5-1": "Writing", "claude-haiku-4-5": "Quick",
++      });
++    });
++  });
++});
++
+ describe("AdminSettings gateway model modes", () => {
+   it("stores an override, and mirrors it to KV", async () => {
+     const { inDo, stored, put, mirror } = adminSettings();
+diff --git a/packages/workshop-backend/__tests__/ai-gateway.test.ts b/packages/workshop-backend/__tests__/ai-gateway.test.ts
+index 7715ad6..c24fb55 100644
+--- a/packages/workshop-backend/__tests__/ai-gateway.test.ts
++++ b/packages/workshop-backend/__tests__/ai-gateway.test.ts
+@@ -24,6 +24,22 @@ function env(overrides: Partial<Cloudflare.Env> = {}): Cloudflare.Env {
+   } as Cloudflare.Env;
+ }
+ 
++describe("Gateway model display names", () => {
++  it("uses organization labels in lists, resolution and admin rows while preserving inference config", () => {
++    const gateway = new AiGatewayConfig(env({ CF_AI_GATEWAY_ACCOUNT_ID: "account-id", CF_AI_GATEWAY_API_TOKEN: "fixture-token" }));
++    const original = new GatewayModels(gateway, DEFAULT_ADMIN_CONFIG);
++    const id = "claude-fable-5-1";
++    const models = new GatewayModels(gateway, { ...DEFAULT_ADMIN_CONFIG,
++      providerDisplayNames: { anthropic: "Research" }, modelDisplayNames: { [id]: "Writing" } });
++    const profile = { type: "agent", id, name: "Writing", providerDisplayName: "Research" };
++    expect(models.get(id)?.name).toBe("Writing");
++    expect(models.list().find(model => model.id === id)).toEqual(profile);
++    expect(models.resolve(id)?.profile).toEqual(profile);
++    expect(models.resolve(id)?.config).toEqual(original.resolve(id)?.config);
++    expect(models.providerSettings.find(provider => provider.provider === "anthropic")?.displayName).toBe("Research");
++  });
++});
++
+ describe("AiGatewayConfig transport selection", () => {
+   const binding = { gateway: () => ({}) } as unknown as Ai;
+   // google needs the HTTPS+token transport, so token-less configs must not enable it.
+diff --git a/packages/workshop-backend/__tests__/user-models.test.ts b/packages/workshop-backend/__tests__/user-models.test.ts
+index 8e84457..6696781 100644
+--- a/packages/workshop-backend/__tests__/user-models.test.ts
++++ b/packages/workshop-backend/__tests__/user-models.test.ts
+@@ -42,6 +42,34 @@ async function userWithModel() {
+ }
+ 
+ describe("UserDurableObject model editing", () => {
++  it("renames the owner's provider and model while retaining IDs and withheld secrets on every read", async () => {
++    const { user, stored, inDo } = await userWithModel();
++    const { config } = await user.getModelConfig(PROFILE.id);
++    await user.updateModel({ ...PROFILE, name: "  My renamed model  ", providerDisplayName: "Untrusted" },
++      { ...config, providerDisplayName: "  Research provider  " });
++    const canonical = { ...PROFILE, name: "My renamed model", providerDisplayName: "Research provider" };
++    expect((await user.getModelConfig(PROFILE.id)).profile).toEqual(canonical);
++    expect(await inDo(u => u.listModels())).toEqual([canonical]);
++    expect((await inDo(u => u.getChatContext(PROFILE.id))).aiModel?.profile).toEqual(canonical);
++    expect(await stored(PROFILE.id)).toMatchObject({ config: { ...CONFIG, providerDisplayName: "Research provider" } });
++    const other = env.TEST_USER.getByName(`user-models-other-${++userCounter}`);
++    await expect(runInDurableObject(other, u => u.getModelConfig(PROFILE.id))).rejects.toThrow("No such");
++    await user.updateModel({ ...canonical, providerDisplayName: "Forged" }, config);
++    expect((await user.getModelConfig(PROFILE.id)).profile).toEqual({ ...PROFILE, name: canonical.name });
++    expect((await inDo(u => u.listModels()))[0]).not.toHaveProperty("providerDisplayName");
++  });
++
++  it("rejects invalid display names before writing", async () => {
++    const { user, stored } = await userWithModel();
++    for (const name of [" ", "a\nb", "a\u0085b", "é".repeat(65)]) {
++      await expect(user.updateModel({ ...PROFILE, name }, CONFIG)).rejects.toThrow("display name");
++      await expect(user.updateModel(PROFILE, { ...CONFIG, providerDisplayName: name })).rejects.toThrow("display name");
++    }
++    expect(await stored(PROFILE.id)).toEqual({ profile: PROFILE, config: CONFIG });
++    await user.updateModel(PROFILE, { ...CONFIG, providerDisplayName: "é".repeat(64) });
++    expect((await user.getModelConfig(PROFILE.id)).config.providerDisplayName).toBe("é".repeat(64));
++  });
++
+   it("replaces secrets that are supplied, and drops headers that are omitted", async () => {
+     const { user, stored } = await userWithModel();
+     await user.updateModel(PROFILE, {
+diff --git a/packages/workshop-backend/src/admin-config.ts b/packages/workshop-backend/src/admin-config.ts
+index d56a794..a6b9ae8 100644
+--- a/packages/workshop-backend/src/admin-config.ts
++++ b/packages/workshop-backend/src/admin-config.ts
+@@ -9,7 +9,7 @@
+ // changed by a compromised admin session. Everything here is enabled by default; the admin UI opts
+ // things *out*.
+ 
+-import { AiModelProvider, AmbientGatekeeperMode, BlueprintBinding, BlueprintMetadata, BlueprintOutput, DEFAULT_BANNER_COLOR, GatewayModel, GatewayModelCapabilities, GatewayModelMode, GatewayModelSettings, OutputFormatOffer, REASONING_LEVELS, SUGGESTED_MODELS, isAmbientGatekeeperMode, isBannerColor, isGatewayModelMode, isOutputIcon, isReasoningLevel } from "@gadgets/workshop-shared/api";
++import { AiModelProvider, AmbientGatekeeperMode, BlueprintBinding, BlueprintMetadata, BlueprintOutput, DEFAULT_BANNER_COLOR, GatewayModel, GatewayModelCapabilities, GatewayModelMode, GatewayModelSettings, OutputFormatOffer, REASONING_LEVELS, SUGGESTED_MODELS, isAmbientGatekeeperMode, isBannerColor, isGatewayModelMode, isOutputIcon, isReasoningLevel, validateDisplayName } from "@gadgets/workshop-shared/api";
+ import { SupportedResource } from "@gadgets/workshop-shared/gatekeeper";
+ import { sanitizeBlueprintOutput } from "./blueprint-archive.js";
+ import { DEFAULT_ADMIN_CONFIG, type AdminConfig, type FormatCuration } from "./storage-schema/admin-settings-storage.js";
+@@ -219,7 +219,7 @@ export function sanitizeAddedModel(value: unknown): GatewayModel | undefined {
+   if (!isProvider(provider)) return undefined;
+   if (typeof id !== "string" || typeof name !== "string") return undefined;
+   id = id.trim();
+-  name = name.trim();
++  try { name = validateDisplayName(name); } catch { return undefined; }
+   for (let text of [id, name]) {
+     if (!text || text.length > MAX_ADDED_MODEL_TEXT) return undefined;
+   }
+@@ -280,6 +280,13 @@ function parseAddedModels(value: unknown): GatewayModel[] {
+   return [...models.values()];
+ }
+ 
++function displayNames(value: unknown): Record<string, string> {
++  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
++  return Object.fromEntries(Object.entries(value).flatMap(([id, name]) => {
++    try { return [[id, validateDisplayName(name)]]; } catch { return []; }
++  }));
++}
++
+ function strings(value: unknown): string[] {
+   return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+ }
+@@ -337,6 +344,9 @@ export function normalizeAdminConfig(p: Partial<AdminConfig>): AdminConfig {
+     ambientGatekeeperModes,
+     formats: parseFormats(p.formats),
+     modelModes,
++    providerDisplayNames: Object.fromEntries(Object.entries(displayNames(p.providerDisplayNames))
++        .filter(([provider]) => isProvider(provider))),
++    modelDisplayNames: displayNames(p.modelDisplayNames),
+     addedProviders: Array.isArray(p.addedProviders)
+       ? [...new Set(p.addedProviders.filter(isProvider))]
+       : [],
+diff --git a/packages/workshop-backend/src/admin-settings.ts b/packages/workshop-backend/src/admin-settings.ts
+index fbce434..41d6217 100644
+--- a/packages/workshop-backend/src/admin-settings.ts
++++ b/packages/workshop-backend/src/admin-settings.ts
+@@ -1,4 +1,4 @@
+-import { AdminApi, AdminFormat, AdminFormatPatch, AdminModel, AdminResourceVendor, AdminSettingsView, AiModelConfig, AiModelProvider, AmbientGatekeeperMode, BannerColor, BlueprintPublicInfo, GatewayModel, GatewayModelLevelTest, GatewayModelMode, GatewayModelSettings, GatewayModelTest, MAX_ANNOUNCEMENT_LENGTH, MAX_INSTANCE_INSTRUCTIONS_LENGTH, MAX_SITE_NAME_LENGTH, ReasoningLevel, SUGGESTED_MODELS, isAmbientGatekeeperMode, isBannerColor, isHexColor } from '@gadgets/workshop-shared/api';
++import { AdminApi, AdminFormat, AdminFormatPatch, AdminModel, AdminResourceVendor, AdminSettingsView, AiModelConfig, AiModelProvider, AmbientGatekeeperMode, BannerColor, BlueprintPublicInfo, GatewayModel, GatewayModelLevelTest, GatewayModelMode, GatewayModelSettings, GatewayModelTest, MAX_ANNOUNCEMENT_LENGTH, MAX_INSTANCE_INSTRUCTIONS_LENGTH, MAX_SITE_NAME_LENGTH, ReasoningLevel, SUGGESTED_MODELS, isAmbientGatekeeperMode, isBannerColor, isHexColor, validateDisplayName } from '@gadgets/workshop-shared/api';
+ import { GatekeeperVendor } from '@gadgets/workshop-shared/gatekeeper';
+ import { DurableObject } from 'cloudflare:workers';
+ import { RpcTarget } from 'capnweb';
+@@ -455,7 +455,7 @@ export class AdminSettings extends DurableObject<Cloudflare.Env> {
+     return { id: model.id, name: model.name, enabled: model.mode !== "disabled",
+       userModelsEnabled: config.userModelsEnabled,
+       connections: models.all.map(connection => ({ id: connection.id, accountId: connection.accountId,
+-        name: connection.name, provider: connection.subscriptionProvider, ready: connection.ready,
++        name: connection.name, providerDisplayName: connection.providerDisplayName, provider: connection.subscriptionProvider, ready: connection.ready,
+         enabled: connection.mode !== "disabled" })),
+       ...(models.setupUrl ? { setupUrl: models.setupUrl } : {}),
+     };
+@@ -474,6 +474,32 @@ export class AdminSettings extends DurableObject<Cloudflare.Env> {
+     });
+   }
+ 
++  async setGatewayProviderDisplayName(provider: AiModelProvider, name: string | null): Promise<void> {
++    assertGatewayProvider(provider);
++    const label = name === null ? null : validateDisplayName(name);
++    await this.#mutateAdminConfig(config => {
++      this.#requireGateway();
++      const entries = entriesWithout(config.providerDisplayNames, provider);
++      if (label !== null) entries.push([provider, label]);
++      return { ...config, providerDisplayNames: Object.fromEntries(entries) };
++    });
++  }
++
++  async setModelDisplayName(modelId: string, name: string | null): Promise<void> {
++    const label = name === null ? null : validateDisplayName(name);
++    const connections = isAdminManagedSubscription(this.env)
++        ? await readSubscriptionConnections(this.env) : undefined;
++    await this.#mutateAdminConfig(config => {
++      const models = isAdminManagedSubscription(this.env)
++          ? new SubscriptionModels(this.env, config, undefined, connections)
++          : new GatewayModels(this.#requireGateway(), config);
++      if (!models.get(modelId)) throw new Error(`No such model: ${modelId}`);
++      const entries = entriesWithout(config.modelDisplayNames, modelId);
++      if (label !== null) entries.push([modelId, label]);
++      return { ...config, modelDisplayNames: Object.fromEntries(entries) };
++    });
++  }
++
+   // --- AI Gateway models ---
+ 
+   // The gateway's configuration. Throws outside AI Gateway mode, which has no models to manage.
+@@ -612,6 +638,7 @@ export class AdminSettings extends DurableObject<Cloudflare.Env> {
+         addedModels: [...config.addedModels, added],
+         modelModes: Object.fromEntries(entriesWithout(config.modelModes, added.id)),
+         modelSettings: Object.fromEntries(entriesWithout(config.modelSettings, added.id)),
++        modelDisplayNames: Object.fromEntries(entriesWithout(config.modelDisplayNames, added.id)),
+       };
+     });
+   }
+@@ -632,6 +659,7 @@ export class AdminSettings extends DurableObject<Cloudflare.Env> {
+         addedModels,
+         modelModes: Object.fromEntries(entriesWithout(config.modelModes, modelId)),
+         modelSettings: Object.fromEntries(entriesWithout(config.modelSettings, modelId)),
++        modelDisplayNames: Object.fromEntries(entriesWithout(config.modelDisplayNames, modelId)),
+       };
+     });
+   }
+@@ -1047,6 +1075,14 @@ export class AdminApiImpl extends RpcTarget implements AdminApi {
+     return this.admin.setGatewayProviderEnabled(provider, enabled);
+   }
+ 
++  setGatewayProviderDisplayName(provider: AiModelProvider, name: string | null): Promise<void> {
++    return this.admin.setGatewayProviderDisplayName(provider, name);
++  }
++
++  setModelDisplayName(modelId: string, name: string | null): Promise<void> {
++    return this.admin.setModelDisplayName(modelId, name);
++  }
++
+   testGatewayProvider(provider: AiModelProvider): Promise<GatewayModelTest> {
+     return this.admin.testGatewayProvider(provider, this.adminUserId);
+   }
+diff --git a/packages/workshop-backend/src/ai-gateway.ts b/packages/workshop-backend/src/ai-gateway.ts
+index 35e6e43..988c7ee 100644
+--- a/packages/workshop-backend/src/ai-gateway.ts
++++ b/packages/workshop-backend/src/ai-gateway.ts
+@@ -192,14 +192,17 @@ export class GatewayModels {
+   readonly #added: readonly GatewayModel[];
+   /** The reasoning level of a model whose settings give none. */
+   readonly #defaultReasoning: ReasoningLevel | null;
++  readonly #providerDisplayNames: AdminConfig["providerDisplayNames"];
+ 
+   constructor(readonly gateway: AiGatewayConfig,
+               config: Pick<AdminConfig, "modelModes" | "addedProviders" | "addedModels" |
+-                  "userModelsEnabled" | "modelSettings" | "defaultReasoning">) {
++                  "userModelsEnabled" | "modelSettings" | "defaultReasoning"> &
++                  Partial<Pick<AdminConfig, "providerDisplayNames" | "modelDisplayNames">>) {
+     this.providers = new Set([
+       ...gateway.providers,
+       ...config.addedProviders.filter(provider => GATEWAY_PROVIDERS.has(provider)),
+     ]);
++    this.#providerDisplayNames = config.providerDisplayNames ?? {};
+     this.#added = config.addedModels;
+     this.userModels = config.userModelsEnabled;
+     this.#defaultReasoning = config.defaultReasoning;
+@@ -211,7 +214,9 @@ export class GatewayModels {
+       let settings = Object.hasOwn(config.modelSettings, model.id)
+           ? config.modelSettings[model.id] : undefined;
+       this.#byId.set(
+-          model.id, { ...model, mode, defaultMode, added, ...(settings && { settings }) });
++          model.id, { ...model, name: config.modelDisplayNames && Object.hasOwn(config.modelDisplayNames, model.id)
++              ? config.modelDisplayNames[model.id] : model.name,
++            mode, defaultMode, added, ...(settings && { settings }) });
+     };
+     for (let [provider, catalog] of Object.entries(SUGGESTED_MODELS)) {
+       if (!this.providers.has(provider)) continue;
+@@ -236,6 +241,8 @@ export class GatewayModels {
+         .filter(provider => GATEWAY_PROVIDERS.has(provider))
+         .map(provider => ({
+           provider,
++          ...(Object.hasOwn(this.#providerDisplayNames, provider) &&
++              { displayName: this.#providerDisplayNames[provider] }),
+           ...(this.providers.has(provider) &&
+               { enabledBy: this.gateway.providers.has(provider) ? "environment" : "admin" }),
+           // What getModelViaGateway refuses a request for. Only an admin can enable a provider
+@@ -249,10 +256,17 @@ export class GatewayModels {
+     return this.#byId.get(id);
+   }
+ 
++  #profile(model: AdminModel): AiChatAuthorInfo {
++    const label = Object.hasOwn(this.#providerDisplayNames, model.provider)
++        ? this.#providerDisplayNames[model.provider] : undefined;
++    return { type: "agent", id: model.id, name: model.name,
++      ...(label !== undefined && { providerDisplayName: label }) };
++  }
++
+   /** The models offered in pickers, i.e. the enabled ones, as AiChatAuthorInfo entries. */
+   list(): AiChatAuthorInfo[] {
+     return this.all.filter(model => model.mode === "enabled")
+-        .map(({ id, name }) => ({ type: "agent", id, name }));
++        .map(model => this.#profile(model));
+   }
+ 
+   /**
+@@ -264,7 +278,7 @@ export class GatewayModels {
+     let model = this.#byId.get(id);
+     let config = this.runConfig(id);
+     if (!model || !config || model.mode === "disabled") return undefined;
+-    return { profile: { type: "agent", id, name: model.name }, config };
++    return { profile: this.#profile(model), config };
+   }
+ 
+   /**
+diff --git a/packages/workshop-backend/src/storage-schema/admin-settings-storage.ts b/packages/workshop-backend/src/storage-schema/admin-settings-storage.ts
+index fe6137b..c86d5d0 100644
+--- a/packages/workshop-backend/src/storage-schema/admin-settings-storage.ts
++++ b/packages/workshop-backend/src/storage-schema/admin-settings-storage.ts
+@@ -71,6 +71,9 @@ export type AdminConfig = {
+    * mode (see GatewayModels in ai-gateway.ts).
+    */
+   modelModes: Record<string, GatewayModelMode>;
++  /** Optional labels keyed by routing provider and stable logical model ID. */
++  providerDisplayNames: Partial<Record<AiModelProvider, string>>;
++  modelDisplayNames: Record<string, string>;
+   /**
+    * The providers an admin turned on beside the ones CF_AI_GATEWAY_PROVIDERS lists. That variable
+    * is a floor: these add to it and take nothing from it. Only the ones AI Gateway serves count
+@@ -141,6 +144,8 @@ export const DEFAULT_ADMIN_CONFIG: AdminConfig = {
+   ambientGatekeeperModes: {},
+   formats: [],
+   modelModes: {},
++  providerDisplayNames: {},
++  modelDisplayNames: {},
+   addedProviders: [],
+   addedModels: [],
+   modelSettings: {},
+diff --git a/packages/workshop-backend/src/user.ts b/packages/workshop-backend/src/user.ts
+index f311ed8..a57d618 100644
+--- a/packages/workshop-backend/src/user.ts
++++ b/packages/workshop-backend/src/user.ts
+@@ -1,5 +1,5 @@
+ import { RpcStub } from "capnweb";
+-import { GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, RedactedAiModelConfig, CollaboratorRole, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, GadgetMetadata, BlueprintMetadata, BlueprintLibrarySummary, BlueprintSource, BlueprintUserSummary, BLUEPRINT_SCREENSHOT_R2_PREFIX, GatekeeperVendorInfo, OutputSummary, ListOutputsResult, AUTH_ERROR_CODES, createAuthError, ConnectFlowStart, validateCommitEmail } from '@gadgets/workshop-shared/api';
++import { GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, RedactedAiModelConfig, CollaboratorRole, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, GadgetMetadata, BlueprintMetadata, BlueprintLibrarySummary, BlueprintSource, BlueprintUserSummary, BLUEPRINT_SCREENSHOT_R2_PREFIX, GatekeeperVendorInfo, OutputSummary, ListOutputsResult, AUTH_ERROR_CODES, createAuthError, ConnectFlowStart, validateCommitEmail, validateDisplayName } from '@gadgets/workshop-shared/api';
+ import { Gatekeeper, GatekeeperUser, GatekeeperUserVerifier, GatekeeperVendor, AccountDescription, VendorDescription, GatekeeperConnectCallback, ConnectHandoff, SupportedResource, ResourceConfiguratorFrame, AppUiContext, GatekeeperUiFrame } from "@gadgets/workshop-shared/gatekeeper";
+ import { shouldAutoProvisionAccount, ambientGatekeeperMode } from "./provisioning-policy.js";
+ import { CloudflareGatekeeperUser } from "@gadgets/workshop-shared/cloudflare-gatekeeper";
+@@ -64,6 +64,14 @@ function areCredentialsValid(record: ConnectedAccountRecord): boolean {
+  */
+ export const CLOUDFLARE_VENDOR_ID = "cloudflare";
+ 
++/** Project every personal-model read from its owner's config, never a supplied author label. */
++function personalModelRecord(record: UserAiModelRecord): UserAiModelRecord {
++  const { transport, subscriptionAccountId, ...config } = record.config;
++  const { providerDisplayName, ...profile } = record.profile;
++  return { config, profile: { ...profile,
++    ...(config.providerDisplayName !== undefined && { providerDisplayName: config.providerDisplayName }) } };
++}
++
+ const withholdSecret = (secret: string) => secret === "" ? "" : null;
+ 
+ /** Withholds the non-empty secrets of `config`, for returning it to a client. */
+@@ -542,7 +550,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
+     if (models && !models.userModels) return result;
+     for (let model of this.storage.aiModels.list()) {
+       if (!models?.get(model.profile.id)) {
+-        result.push(model.profile);
++        result.push(personalModelRecord(model).profile);
+       }
+     }
+     return result;
+@@ -589,7 +597,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
+     if (!record || models?.get(id)) {
+       throw new Error(`No such hand-added model: ${id}`);
+     }
+-    return record;
++    return personalModelRecord(record);
+   }
+ 
+   #putModel(profile: AiChatAuthorInfo, config: AiModelConfig, models: DeploymentModels | null) {
+@@ -606,8 +614,13 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
+     // deployment's to set on its own models.
+     let {reasoning, compactionInputBudget, behavesLike, capabilities, transport, subscriptionAccountId, ...own} = config;
+ 
+-    profile.type = "agent";
+-    this.storage.aiModels.put({profile, config: own});
++    const { providerDisplayName, ...author } = profile;
++    const { providerDisplayName: label, ...connection } = own;
++    this.storage.aiModels.put({
++      profile: { ...author, type: "agent", name: validateDisplayName(author.name) },
++      config: { ...connection,
++        ...(label !== undefined && { providerDisplayName: validateDisplayName(label) }) },
++    });
+   }
+ 
+   async deleteModel(id: string): Promise<void> {
+@@ -817,9 +830,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
+     if (models?.get(id)) return models.resolve(id);
+     let record = models && !models.userModels ? undefined : this.storage.aiModels.get(id);
+     if (!record) return undefined;
+-    // Older personal records can contain extra RPC fields; only the shared resolver grants transport.
+-    let {transport, subscriptionAccountId, ...config} = record.config;
+-    return {...record, config};
++    return personalModelRecord(record);
+   }
+ 
+   async listGadgets(): Promise<GadgetMetadataWithTimestamps[]> {
+diff --git a/packages/workshop-frontend/src/AddModelModal.test.tsx b/packages/workshop-frontend/src/AddModelModal.test.tsx
+index 4b86003..581ea3a 100644
+--- a/packages/workshop-frontend/src/AddModelModal.test.tsx
++++ b/packages/workshop-frontend/src/AddModelModal.test.tsx
+@@ -83,6 +83,28 @@ describe('AddModelModal with a stored model', () => {
+     return { updateModel, addModel }
+   }
+ 
++  it('saves and clears a separate provider name while retaining the selected model and withheld secrets', async () => {
++    const { updateModel } = await render({ type: 'edit', source: { profile: PROFILE, config: CONFIG } })
++    await type(labeledInput('Provider name'), '  Research provider  ')
++    await type(labeledInput('Display Name'), 'Writing model')
++    await click(button('Save Changes'))
++    expect(updateModel).toHaveBeenLastCalledWith({ ...PROFILE, name: 'Writing model' },
++      { ...CONFIG, providerDisplayName: 'Research provider' })
++    await type(labeledInput('Provider name'), '')
++    await click(button('Save Changes'))
++    expect(updateModel).toHaveBeenLastCalledWith({ ...PROFILE, name: 'Writing model' }, CONFIG)
++  })
++
++  it('loads the provider name from the owner config and refuses an invalid label', async () => {
++    const { updateModel } = await render({ type: 'edit', source: { profile: { ...PROFILE, providerDisplayName: 'Untrusted' },
++      config: { ...CONFIG, providerDisplayName: 'Research' } } })
++    expect(labeledInput('Provider name').value).toBe('Research')
++    await type(labeledInput('Provider name'), 'é'.repeat(65))
++    await click(button('Save Changes'))
++    expect(updateModel).not.toHaveBeenCalled()
++    expect(document.body.textContent).toContain('UTF-8 bytes')
++  })
++
+   it('sends withheld secrets back as null when they are left untouched', async () => {
+     const { updateModel } = await render({ type: 'edit', source: { profile: PROFILE, config: CONFIG } })
+     expect(labeledInput('API Token').value).toBe('')
+diff --git a/packages/workshop-frontend/src/AddModelModal.tsx b/packages/workshop-frontend/src/AddModelModal.tsx
+index da64e5c..94c5ad8 100644
+--- a/packages/workshop-frontend/src/AddModelModal.tsx
++++ b/packages/workshop-frontend/src/AddModelModal.tsx
+@@ -1,6 +1,6 @@
+ import { useState, useEffect } from 'react'
+ import { Dialog, Button, Input, Select, Collapsible, useKumoToastManager } from '@cloudflare/kumo'
+-import { AiChatAuthorInfo, AiModelProvider, AiGatewayInfo, RedactedAiModelConfig, SUGGESTED_MODELS } from '@gadgets/workshop-shared/api'
++import { AiChatAuthorInfo, AiModelProvider, AiGatewayInfo, RedactedAiModelConfig, SUGGESTED_MODELS, validateDisplayName } from '@gadgets/workshop-shared/api'
+ import { RpcStub } from 'capnweb'
+ import { AuthenticatedApi } from '@gadgets/workshop-shared/api'
+ import { ExtraHeadersEditor } from './features/ai-models/ExtraHeadersEditor'
+@@ -128,6 +128,7 @@ export default function AddModelModal({ visible, onCancel, onSuccess, authentica
+   // Form fields (used for custom models). A null secret keeps the source's withheld value.
+   const [modelId, setModelId] = useState(editing ? source!.config.model : '')
+   const [displayName, setDisplayName] = useState(editing ? source!.profile.name : '')
++  const [providerName, setProviderName] = useState(source?.config.providerDisplayName ?? '')
+   const [apiToken, setApiToken] = useState<string | null>(source ? source.config.apiToken : '')
+   const [accountId, setAccountId] = useState(source?.config.accountId ?? '')
+   const [apiUrl, setApiUrl] = useState(source?.config.apiUrl ?? '')
+@@ -160,6 +161,7 @@ export default function AddModelModal({ visible, onCancel, onSuccess, authentica
+       setSelectValue(null)
+       setModelId('')
+       setDisplayName('')
++      setProviderName('')
+       setApiToken('')
+       setAccountId('')
+       setApiUrl('')
+@@ -204,7 +206,15 @@ export default function AddModelModal({ visible, onCancel, onSuccess, authentica
+ 
+     if (selection?.type === 'custom') {
+       if (!modelId.trim()) newErrors.modelId = 'Please enter the model ID'
+-      if (!displayName.trim()) newErrors.displayName = 'Please enter a display name'
++      try { validateDisplayName(displayName) } catch (error) {
++        newErrors.displayName = error instanceof Error ? error.message : 'Invalid display name'
++      }
++    }
++
++    if (providerName !== '') {
++      try { validateDisplayName(providerName) } catch (error) {
++        newErrors.providerName = error instanceof Error ? error.message : 'Invalid provider name'
++      }
+     }
+ 
+     const isOllama = selection?.provider === 'ollama'
+@@ -273,6 +283,7 @@ export default function AddModelModal({ visible, onCancel, onSuccess, authentica
+         ? { provider: 'openai', model: bridgeModel, apiToken: '' }
+         : {
+         provider: selection!.provider,
++        ...(providerName !== '' && { providerDisplayName: validateDisplayName(providerName) }),
+         model: finalModelId,
+         apiToken: gatewayMode ? '' : effectiveApiToken?.trim() ?? null,
+         ...(!gatewayMode && accountId.trim() && { accountId: accountId.trim() }),
+@@ -369,6 +380,17 @@ export default function AddModelModal({ visible, onCancel, onSuccess, authentica
+           </Select>
+           )}
+ 
++          {selection && !bridgeModel && (
++            <Input
++              label="Provider name"
++              placeholder={PROVIDER_LABELS[selection.provider]}
++              description="Optional connection name. Leave blank to use the provider's name."
++              value={providerName}
++              onChange={(e) => { setProviderName(e.target.value); setErrors(prev => ({ ...prev, providerName: '' })) }}
++              error={errors.providerName}
++            />
++          )}
++
+           {/* Custom model fields */}
+           {showCustomFields && (
+             <>
+diff --git a/packages/workshop-frontend/src/ChatInterface.tsx b/packages/workshop-frontend/src/ChatInterface.tsx
+index 22e6c67..2dab290 100644
+--- a/packages/workshop-frontend/src/ChatInterface.tsx
++++ b/packages/workshop-frontend/src/ChatInterface.tsx
+@@ -5928,7 +5928,9 @@ function ChatInterface({
+                             </div>
+                             <div className="mt-0.5 flex items-center justify-end gap-2 pr-1 text-[11px] leading-4 text-kumo-inactive opacity-100 transition-opacity duration-150 ease-out sm:opacity-0 sm:group-hover/message:opacity-100 sm:group-focus-within/message:opacity-100">
+                               {!(hideOwnUserName && msg.author.id === currentUser?.id) && (
+-                                <span className="font-medium">{msg.author.name}</span>
++                                <span className="font-medium">{msg.author.name}
++                                  {msg.author.providerDisplayName && <span className="ml-1 font-normal">· {msg.author.providerDisplayName}</span>}
++                                </span>
+                               )}
+                               <Tooltip content={formatFullTimestamp(msg.timestamp)} asChild>
+                                 <span className="font-mono">
+@@ -5978,7 +5980,9 @@ function ChatInterface({
+                               <div className="mt-0.5 flex items-center justify-end gap-2 pr-1 text-[11px] leading-4 text-kumo-inactive opacity-100 transition-opacity duration-150 ease-out sm:opacity-0 sm:group-hover/message:opacity-100 sm:group-focus-within/message:opacity-100">
+                                 {/* hideOwnUserName implies currentUser is non-null (see memo). */}
+                                 {!(hideOwnUserName && msg.author.id === currentUser?.id) && (
+-                                  <span className="font-medium">{msg.author.name}</span>
++                                  <span className="font-medium">{msg.author.name}
++                                  {msg.author.providerDisplayName && <span className="ml-1 font-normal">· {msg.author.providerDisplayName}</span>}
++                                </span>
+                                 )}
+                                 <Tooltip content={formatFullTimestamp(msg.timestamp)} asChild>
+                                   <span className="font-mono">
+diff --git a/packages/workshop-frontend/src/features/ai-models/AdminModelsPanel.test.tsx b/packages/workshop-frontend/src/features/ai-models/AdminModelsPanel.test.tsx
+index feb3eaf..a692d28 100644
+--- a/packages/workshop-frontend/src/features/ai-models/AdminModelsPanel.test.tsx
++++ b/packages/workshop-frontend/src/features/ai-models/AdminModelsPanel.test.tsx
+@@ -411,6 +411,8 @@ describe('AdminModelsPanel', () => {
+     const setGatewayModelSettings = vi.fn<AdminApi['setGatewayModelSettings']>(async () => {})
+     const setDefaultReasoning = vi.fn<AdminApi['setDefaultReasoning']>(async () => {})
+     const setGatewayProviderEnabled = vi.fn<AdminApi['setGatewayProviderEnabled']>(async () => {})
++    const setGatewayProviderDisplayName = vi.fn<AdminApi['setGatewayProviderDisplayName']>(async () => {})
++    const setModelDisplayName = vi.fn<AdminApi['setModelDisplayName']>(async () => {})
+     const testGatewayProvider = vi.fn<AdminApi['testGatewayProvider']>(async () => TEST_PASSED)
+     const testGatewayModel = vi.fn<AdminApi['testGatewayModel']>(
+       async (modelId) => ({ model: modelId, ok: true }))
+@@ -420,7 +422,7 @@ describe('AdminModelsPanel', () => {
+     const admin = {
+       setGatewayModelMode, addGatewayModel, removeGatewayModel, setUserModelsEnabled,
+       setModelsDevSuggestions, setGatewayModelSettings, setDefaultReasoning,
+-      setGatewayProviderEnabled, testGatewayProvider, testGatewayModel, testNewGatewayModel,
++      setGatewayProviderEnabled, setGatewayProviderDisplayName, setModelDisplayName, testGatewayProvider, testGatewayModel, testNewGatewayModel,
+     } as unknown as RpcStub<AdminApi>
+     const container = document.createElement('div')
+     document.body.appendChild(container)
+@@ -433,11 +435,37 @@ describe('AdminModelsPanel', () => {
+     return {
+       setGatewayModelMode, addGatewayModel, removeGatewayModel, setUserModelsEnabled,
+       setModelsDevSuggestions, setGatewayModelSettings, setDefaultReasoning,
+-      setGatewayProviderEnabled, testGatewayProvider, testGatewayModel, testNewGatewayModel,
++      setGatewayProviderEnabled, setGatewayProviderDisplayName, setModelDisplayName, testGatewayProvider, testGatewayModel, testNewGatewayModel,
+       onChanged, show,
+     }
+   }
+ 
++  it('renames provider and model display names through the admin capability using stable IDs', async () => {
++    const { setGatewayProviderDisplayName, setModelDisplayName, onChanged } = await render()
++    const provider = labeledInput('Provider name for Anthropic')
++    await type(provider, '  Research provider  ')
++    await act(async () => provider.form!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
++    expect(setGatewayProviderDisplayName).toHaveBeenCalledExactlyOnceWith('anthropic', 'Research provider')
++    const model = labeledInput(`Model name for ${SONNET.id}`)
++    await type(model, '  Writing model  ')
++    await act(async () => model.form!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
++    expect(setModelDisplayName).toHaveBeenCalledExactlyOnceWith(SONNET.id, 'Writing model')
++    await type(model, '')
++    await act(async () => model.form!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
++    expect(setModelDisplayName).toHaveBeenLastCalledWith(SONNET.id, null)
++    expect(onChanged).toHaveBeenCalledTimes(3)
++  })
++
++  it('rejects invalid alias drafts locally without writing', async () => {
++    const { setGatewayProviderDisplayName, setModelDisplayName } = await render()
++    const provider = labeledInput('Provider name for Anthropic')
++    await type(provider, 'é'.repeat(65))
++    await act(async () => provider.form!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
++    expect(document.body.textContent).toContain('UTF-8 bytes')
++    expect(setGatewayProviderDisplayName).not.toHaveBeenCalled()
++    expect(setModelDisplayName).not.toHaveBeenCalled()
++  })
++
+   describe('outside AI Gateway mode', () => {
+     it('explains where models are managed instead of offering controls', async () => {
+       await render({ gatewayModels: undefined })
+@@ -2477,7 +2505,7 @@ describe('AdminModelsPanel', () => {
+     it('offers no form while no provider that a model can be added under is on', async () => {
+       await render({ gatewayModels: { ...GATEWAY_MODELS, providers: [], models: [SONNET] } })
+ 
+-      expect(document.body.querySelector('form')).toBeNull()
++      expect(Array.from(document.body.querySelectorAll('label')).some(label => label.textContent === 'Model ID')).toBe(false)
+       expect(document.body.textContent)
+         .toContain('No model can be added, because no provider is on. Turn one on under Providers.')
+     })
+diff --git a/packages/workshop-frontend/src/features/ai-models/AdminModelsPanel.tsx b/packages/workshop-frontend/src/features/ai-models/AdminModelsPanel.tsx
+index 2571607..30c8bde 100644
+--- a/packages/workshop-frontend/src/features/ai-models/AdminModelsPanel.tsx
++++ b/packages/workshop-frontend/src/features/ai-models/AdminModelsPanel.tsx
+@@ -220,6 +220,10 @@ export const AdminModelsPanel = ({ admin, gatewayModels, subscriptionModel, onCh
+     writeModel(model, () => admin.setGatewayModelSettings(model.id, settings))
+       .catch((err) => reportFailure(`Couldn’t update ${model.name}`, err))
+ 
++  const changeModelDisplayName = (model: AdminModel, name: string | null) =>
++    write(() => admin.setModelDisplayName(model.id, name))
++      .catch(err => reportFailure('Could not update model name', err))
++
+   // The default is the level of every model that has none of its own, so every test is forgotten.
+   const changeDefaultReasoning = (level: ReasoningLevel | null) =>
+     write(async () => {
+@@ -323,6 +327,10 @@ export const AdminModelsPanel = ({ admin, gatewayModels, subscriptionModel, onCh
+           providers={gatewayModels.providerSettings}
+           busy={busy}
+           onEnabledChange={changeProviderEnabled}
++          onDisplayNameChange={(provider, name) => {
++            void write(() => admin.setGatewayProviderDisplayName(provider, name))
++              .catch(err => reportFailure('Could not update provider name', err))
++          }}
+           onTest={(provider) => admin.testGatewayProvider(provider)}
+         />
+       </section>
+@@ -349,7 +357,7 @@ export const AdminModelsPanel = ({ admin, gatewayModels, subscriptionModel, onCh
+ 
+         {[...catalogByProvider].map(([provider, models]) => (
+           <section key={provider}>
+-            <h3 className={GROUP_HEADING}>{PROVIDER_LABELS[provider]}</h3>
++            <h3 className={GROUP_HEADING}>{gatewayModels.providerSettings.find(entry => entry.provider === provider)?.displayName ?? PROVIDER_LABELS[provider]}</h3>
+             <ul className="flex flex-col gap-2">
+               {models.map((model) => (
+                 <GatewayModelRow
+@@ -358,6 +366,7 @@ export const AdminModelsPanel = ({ admin, gatewayModels, subscriptionModel, onCh
+                   defaultReasoning={defaultReasoning}
+                   busy={busy}
+                   test={modelTests.tests.get(model.id)}
++                  onDisplayNameChange={name => { void changeModelDisplayName(model, name) }}
+                   onModeChange={(mode) => requestMode(model, mode)}
+                   onSettingsChange={(settings) => changeSettings(model, settings)}
+                   onTest={() => modelTests.startTest(model.id)}
+@@ -383,9 +392,11 @@ export const AdminModelsPanel = ({ admin, gatewayModels, subscriptionModel, onCh
+                       ?.find((listed) => listed.id === model.behavesLike)?.name}
+                     busy={busy}
+                     test={modelTests.tests.get(model.id)}
++                    onDisplayNameChange={name => { void changeModelDisplayName(model, name) }}
+                     onModeChange={(mode) => requestMode(model, mode)}
+                     onSettingsChange={(settings) => changeSettings(model, settings)}
+                     onTest={() => modelTests.startTest(model.id)}
++                    providerDisplayName={gatewayModels.providerSettings.find(entry => entry.provider === model.provider)?.displayName}
+                     onRemove={() => setPendingRemoval(model)}
+                   />
+                 ))}
+diff --git a/packages/workshop-frontend/src/features/ai-models/DisplayNameEditor.tsx b/packages/workshop-frontend/src/features/ai-models/DisplayNameEditor.tsx
+new file mode 100644
+index 0000000..46094f7
+--- /dev/null
++++ b/packages/workshop-frontend/src/features/ai-models/DisplayNameEditor.tsx
+@@ -0,0 +1,34 @@
++import { useState, type FormEvent } from 'react'
++import { Button, Input } from '@cloudflare/kumo'
++import { validateDisplayName } from '@gadgets/workshop-shared/api'
++
++export function DisplayNameEditor({ label, name, busy, onSave }: {
++  label: string
++  name: string
++  busy: boolean
++  onSave: (name: string | null) => void
++}) {
++  const [draft, setDraft] = useState<string | null>(null)
++  const [error, setError] = useState<string>()
++  const submit = (event: FormEvent) => {
++    event.preventDefault()
++    if (busy) return
++    try {
++      const value = draft ?? name
++      const saved = value === '' ? null : validateDisplayName(value)
++      onSave(saved)
++      setDraft(null)
++      setError(undefined)
++    } catch (error) {
++      setError(error instanceof Error ? error.message : 'Invalid display name')
++    }
++  }
++  return (
++    <form onSubmit={submit} className="mt-2 flex flex-wrap items-end gap-2">
++      <Input label={label} value={draft ?? name} disabled={busy}
++        description="Leave blank to restore the default name."
++        error={error} onChange={event => { setDraft(event.target.value); setError(undefined) }} />
++      <Button type="submit" size="sm" variant="secondary" disabled={busy}>Save name</Button>
++    </form>
++  )
++}
+diff --git a/packages/workshop-frontend/src/features/ai-models/GatewayModelRow.tsx b/packages/workshop-frontend/src/features/ai-models/GatewayModelRow.tsx
+index 5d9a69d..b76baa6 100644
+--- a/packages/workshop-frontend/src/features/ai-models/GatewayModelRow.tsx
++++ b/packages/workshop-frontend/src/features/ai-models/GatewayModelRow.tsx
+@@ -8,6 +8,7 @@ import type {
+   GatewayModelSettings,
+   ReasoningLevel,
+ } from '@gadgets/workshop-shared/api'
++import { DisplayNameEditor } from './DisplayNameEditor'
+ import { GatewayTestButton, GatewayTestStatus } from './GatewayTest'
+ import {
+   PROVIDER_LABELS,
+@@ -74,7 +75,7 @@ const settingsWith = (
+ /** One gateway model in the Models tab: what it is, and the controls that change it. */
+ export const GatewayModelRow = ({
+   model, defaultReasoning, behavesLikeName, busy, test, onModeChange, onSettingsChange, onTest,
+-  onRemove,
++  onRemove, onDisplayNameChange, providerDisplayName,
+ }: {
+   model: AdminModelView
+   /** The deployment's default reasoning level, or null while it sets none. */
+@@ -91,6 +92,8 @@ export const GatewayModelRow = ({
+   onTest: () => void
+   /** Present for a model that can be removed, whose row then also names its provider. */
+   onRemove?: () => void
++  onDisplayNameChange?: (name: string | null) => void
++  providerDisplayName?: string
+ }) => {
+   // What is typed into the budget field, or null while the field shows the server's budget.
+   const [budgetDraft, setBudgetDraft] = useState<string | null>(null)
+@@ -166,7 +169,7 @@ export const GatewayModelRow = ({
+         </p>
+         <p className="mt-0.5 break-all font-mono text-xs text-kumo-subtle">{model.id}</p>
+         <p className="mt-0.5 text-xs text-kumo-subtle">
+-          {onRemove && `${PROVIDER_LABELS[model.provider]} · `}
++          {onRemove && `${providerDisplayName ?? PROVIDER_LABELS[model.provider]} · `}
+           Context window: {tokenCount(model.contextWindow)}
+           {model.outputLimit !== undefined && ` · Output limit: ${tokenCount(model.outputLimit)}`}
+         </p>
+@@ -228,6 +231,8 @@ export const GatewayModelRow = ({
+           the row's gap: an empty status then takes no room above the Settings. */}
+       <div className="-mt-2 min-w-0 basis-full">
+         <GatewayTestStatus test={test} subject="model" />
++        {onDisplayNameChange && <DisplayNameEditor label={`Model name for ${model.id}`}
++          name={model.name} busy={busy} onSave={onDisplayNameChange} />}
+         <Collapsible.Root className="mt-2">
+           <Collapsible.DefaultTrigger className="w-fit text-sm">
+             Settings<span className="sr-only"> for {model.name}</span>
+diff --git a/packages/workshop-frontend/src/features/ai-models/GatewayProviders.tsx b/packages/workshop-frontend/src/features/ai-models/GatewayProviders.tsx
+index c6b9857..e5ef619 100644
+--- a/packages/workshop-frontend/src/features/ai-models/GatewayProviders.tsx
++++ b/packages/workshop-frontend/src/features/ai-models/GatewayProviders.tsx
+@@ -6,20 +6,22 @@ import type {
+   GatewayModelTest,
+ } from '@gadgets/workshop-shared/api'
+ import { GatewayTestButton, GatewayTestStatus } from './GatewayTest'
++import { DisplayNameEditor } from './DisplayNameEditor'
+ import { PROVIDER_LABELS } from './modelForm'
+ import { useGatewayTests, type GatewayTestState } from './useGatewayTests'
+ 
+-const ProviderRow = ({ entry, busy, test, onEnabledChange, onTest }: {
++const ProviderRow = ({ entry, busy, test, onEnabledChange, onTest, onDisplayNameChange }: {
+   entry: AdminGatewayProvider
+   busy: boolean
+   /** Where the provider's last test stands. Absent until one is run. */
+   test: GatewayTestState | undefined
+   onEnabledChange: (enabled: boolean) => void
+   onTest: () => void
++  onDisplayNameChange?: (name: string | null) => void
+ }) => {
+   const lockedNote = useId()
+   const tokenWarning = useId()
+-  const label = PROVIDER_LABELS[entry.provider]
++  const label = entry.displayName ?? PROVIDER_LABELS[entry.provider]
+   const locked = entry.enabledBy === 'environment'
+   const described = [locked && lockedNote, entry.needsApiToken && tokenWarning].filter(Boolean)
+ 
+@@ -58,6 +60,8 @@ const ProviderRow = ({ entry, busy, test, onEnabledChange, onTest }: {
+         />
+       )}
+       <GatewayTestStatus test={test} subject="provider" />
++      {onDisplayNameChange && <DisplayNameEditor label={`Provider name for ${PROVIDER_LABELS[entry.provider]}`}
++        name={entry.displayName ?? ''} busy={busy} onSave={onDisplayNameChange} />}
+     </li>
+   )
+ }
+@@ -67,12 +71,13 @@ const ProviderRow = ({ entry, busy, test, onEnabledChange, onTest }: {
+  * test of whether it answers. The tests belong to this list rather than to the server: one runs
+  * whatever else the Models tab is doing, and its result stays until the provider is tested again.
+  */
+-export const GatewayProviders = ({ providers, busy, onEnabledChange, onTest }: {
++export const GatewayProviders = ({ providers, busy, onEnabledChange, onTest, onDisplayNameChange }: {
+   /** Every provider the gateway serves, on or off, in the order they are listed in. */
+   providers: readonly AdminGatewayProvider[]
+   /** Whether the switches are locked, because a write to the models is in flight. */
+   busy: boolean
+   onEnabledChange: (provider: AiModelProvider, enabled: boolean) => void
++  onDisplayNameChange?: (provider: AiModelProvider, name: string | null) => void
+   /**
+    * Asks one of the provider's models through the gateway. A request that fails is a result;
+    * rejects when the test could not be run at all.
+@@ -98,6 +103,7 @@ export const GatewayProviders = ({ providers, busy, onEnabledChange, onTest }: {
+             test={tests.get(entry.provider)}
+             onEnabledChange={(enabled) => onEnabledChange(entry.provider, enabled)}
+             onTest={() => startTest(entry.provider)}
++            onDisplayNameChange={onDisplayNameChange && (name => onDisplayNameChange(entry.provider, name))}
+           />
+         ))}
+       </ul>
+diff --git a/packages/workshop-frontend/src/features/chat/composer/ComposerModelSelector.test.tsx b/packages/workshop-frontend/src/features/chat/composer/ComposerModelSelector.test.tsx
+index ce9803d..f9a0874 100644
+--- a/packages/workshop-frontend/src/features/chat/composer/ComposerModelSelector.test.tsx
++++ b/packages/workshop-frontend/src/features/chat/composer/ComposerModelSelector.test.tsx
+@@ -10,7 +10,7 @@ import { ComposerModelSelector, type SelectedModel } from "./ComposerModelSelect
+ (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+ 
+ const models: AiChatAuthorInfo[] = [
+-  { type: "agent", id: "claude-opus-5-5", name: "Claude Opus 5.5" },
++  { type: "agent", id: "claude-opus-5-5", name: "Claude Opus 5.5", providerDisplayName: "Research provider" },
+ ];
+ 
+ let root: Root | null = null;
+@@ -38,6 +38,20 @@ function renderTriggerLabel(selectedModel: SelectedModel): string {
+ }
+ 
+ describe("ComposerModelSelector", () => {
++  it("shows provider metadata in the picker and returns the stable selection ID", async () => {
++    let selected: string | null = null;
++    renderTriggerLabel({ id: models[0]!.id });
++    act(() => root!.render(<ComposerModelSelector models={models} selectedModel={null}
++      onModelChange={id => { selected = id }} />));
++    const trigger = container!.querySelector<HTMLButtonElement>('[aria-label="Select model"]')!;
++    await act(async () => trigger.click());
++    const item = Array.from(document.body.querySelectorAll<HTMLElement>('[role="menuitem"]'))
++      .find(item => item.textContent?.includes('Research provider'))!;
++    expect(item.textContent).toContain('Claude Opus 5.5');
++    await act(async () => item.click());
++    expect(selected).toBe(models[0]!.id);
++  });
++
+   it("labels an offered model by its listed name", () => {
+     expect(renderTriggerLabel({ id: "claude-opus-5-5", name: "Stale name" })).toBe("Claude Opus 5.5");
+   });
+diff --git a/packages/workshop-frontend/src/features/chat/composer/ComposerModelSelector.tsx b/packages/workshop-frontend/src/features/chat/composer/ComposerModelSelector.tsx
+index 0d95504..8cf3295 100644
+--- a/packages/workshop-frontend/src/features/chat/composer/ComposerModelSelector.tsx
++++ b/packages/workshop-frontend/src/features/chat/composer/ComposerModelSelector.tsx
+@@ -51,7 +51,10 @@ export const ComposerModelSelector = ({
+               onClick={() => onModelChange(model.id)}
+               className="!h-auto rounded-xl !px-2 !py-1.5 text-[12px] leading-4 font-normal tracking-[-0.15px] text-kumo-subtle transition-colors data-highlighted:bg-kumo-tint/70 data-highlighted:text-kumo-default"
+             >
+-              <span className="min-w-0 flex-1 truncate">{model.name}</span>
++              <span className="min-w-0 flex-1 truncate">
++                {model.name}
++                {model.providerDisplayName && <span className="ml-2 text-kumo-inactive">{model.providerDisplayName}</span>}
++              </span>
+               {active && (
+                 <Check
+                   size={12}
+diff --git a/packages/workshop-frontend/src/routes/-providers.test.tsx b/packages/workshop-frontend/src/routes/-providers.test.tsx
+index 7aa824e..0a103cf 100644
+--- a/packages/workshop-frontend/src/routes/-providers.test.tsx
++++ b/packages/workshop-frontend/src/routes/-providers.test.tsx
+@@ -38,6 +38,7 @@ describe('Models selection on the providers route', () => {
+ 
+   it('offers both shared objects as distinct quick and default choices', async () => {
+     const { setQuickModel, setPreferredModel, getModelConfig } = await render(subscription)
++    expect(document.body.textContent).toContain('Shared research provider')
+     const id = 'subscription-account-22222222-2222-4222-8222-222222222222'
+     const row = Array.from(document.body.querySelectorAll<HTMLElement>('[role="button"]'))
+       .find(element => element.textContent?.includes('Writing subscription'))!
+@@ -74,7 +75,7 @@ describe('Models selection on the providers route', () => {
+     const setQuickModel = vi.fn<AuthenticatedApi['setQuickModel']>(async () => {})
+     const setPreferredModel = vi.fn<AuthenticatedApi['setPreferredModel']>(async () => {})
+     const modelList = [
+-      { type: 'agent' as const, id: 'codex-subscription', name: 'Codex subscription' },
++      { type: 'agent' as const, id: 'codex-subscription', name: 'Codex subscription', providerDisplayName: 'Shared research provider' },
+       { type: 'agent' as const, id: 'old-personal', name: 'Old personal model' },
+       { type: 'agent' as const, id: 'subscription-account-22222222-2222-4222-8222-222222222222', name: 'Writing subscription' },
+     ]
+diff --git a/packages/workshop-frontend/src/routes/providers.tsx b/packages/workshop-frontend/src/routes/providers.tsx
+index ccfdef8..16aa1b9 100644
+--- a/packages/workshop-frontend/src/routes/providers.tsx
++++ b/packages/workshop-frontend/src/routes/providers.tsx
+@@ -90,7 +90,7 @@ function ModelRow({
+           )}
+         </div>
+         <span className="mt-0.5 block truncate font-mono text-[12px] tracking-[-0.1px] text-kumo-inactive">
+-          {model.id}
++          {model.providerDisplayName ? `${model.providerDisplayName} · ${model.id}` : model.id}
+         </span>
+       </div>
+ 
+diff --git a/packages/workshop-shared/src/api.ts b/packages/workshop-shared/src/api.ts
+index 0db8171..1ddcd6c 100644
+--- a/packages/workshop-shared/src/api.ts
++++ b/packages/workshop-shared/src/api.ts
+@@ -1072,7 +1072,7 @@ export type AdminSettingsView = {
+     /** Whether users may configure personal providers beside the shared subscription. */
+     userModelsEnabled: boolean;
+     /** Named subscription objects with independent availability and safe connection status. */
+-    connections: { id: string; accountId: string; name: string; provider: "siwc" | "codex" | null;
++    connections: { id: string; accountId: string; name: string; providerDisplayName?: string; provider: "siwc" | "codex" | null;
+       ready: boolean | null; enabled: boolean }[];
+     /** Same-origin setup path, present only when the deployment configures SIWC setup. */
+     setupUrl?: string;
+@@ -1351,6 +1351,12 @@ export interface AdminApi {
+    */
+   setGatewayProviderEnabled(provider: AiModelProvider, enabled: boolean): Promise<void>;
+ 
++  /** Set a gateway provider label, or clear its override with null. */
++  setGatewayProviderDisplayName(provider: AiModelProvider, name: string | null): Promise<void>;
++
++  /** Set an existing shared model label without changing its selection or inference ID. */
++  setModelDisplayName(modelId: string, name: string | null): Promise<void>;
++
+   /**
+    * Send one small request to the first of a provider's SUGGESTED_MODELS through the gateway, as
+    * the admin, and report what happened within 15 seconds: the Workshop can't see which provider
+@@ -1726,6 +1732,8 @@ export type AdminModelView = AdminModel & {
+ 
+ /** One of the providers AI Gateway serves, as a deployment's admin sees it. */
+ export type AdminGatewayProvider = {
++  /** Optional organization label; the provider enum remains the routing key. */
++  displayName?: string;
+   /** The provider. */
+   provider: AiModelProvider;
+ 
+@@ -1760,8 +1768,22 @@ export type GatewayModelTest = { model: string } &
+  */
+ export type GatewayModelLevelTest = GatewayModelTest & { reasoning: ReasoningLevel | null };
+ 
++/** Display labels are bounded in bytes so non-ASCII names have the same storage budget. */
++export const MAX_MODEL_DISPLAY_NAME_BYTES = 128;
++
++export function validateDisplayName(value: unknown): string {
++  if (typeof value !== "string" || /[\u0000-\u001f\u007f-\u009f]/u.test(value))
++    throw new Error("A display name must contain no control characters.");
++  const name = value.trim();
++  if (!name || new TextEncoder().encode(name).length > MAX_MODEL_DISPLAY_NAME_BYTES)
++    throw new Error(`A display name must contain 1 to ${MAX_MODEL_DISPLAY_NAME_BYTES} UTF-8 bytes.`);
++  return name;
++}
++
+ /** Configuration specifying how to connect to an AI model provider. */
+ export type AiModelConfig = {
++  /** Optional personal connection label. Never used for routing or authorization. */
++  providerDisplayName?: string;
+   /** Server-owned object selector, accepted only through the shared subscription catalog. */
+   subscriptionAccountId?: string;
+ 
+@@ -3483,5 +3505,8 @@ export type AiChatAuthorInfo = {
+   /** Unique user identifier, e.g. "kenton@cloudflare.com" or "gpt-5.1-pro". */
+   id: string;
+ 
++  /** Server-derived connection label, captured with new model authors. */
++  providerDisplayName?: string;
++
+   /** Display name for author, e.g. "Kenton Varda" or "GPT" */
+   name: string;

@@ -87,10 +87,10 @@ async function body(request) {
   return parsed;
 }
 
-function readiness(status) {
+function readiness(status, dual = false) {
   const identity = status.identityVerified === true ? status.identity : null;
   return { siwcInferenceReady: status.siwcInferenceReady === true, connected: status.connected === true, loginPending: status.loginPending === true, identityVerified: status.identityVerified === true, planUsageConfirmed: status.planUsageConfirmed === true,
-    provider: status.provider, inferenceReady: status.inferenceReady === true, codexInferenceReady: status.codexInferenceReady === true, device: status.image?.device ?? null, deviceFailed: status.image?.loginFailed === true,
+    provider: status.provider, inferenceReady: status.inferenceReady === true, codexInferenceReady: status.codexInferenceReady === true, deviceLoginAvailable: dual, device: status.image?.device ?? null, deviceFailed: status.image?.loginFailed === true,
     identity: identity ? { name: identity.name, email: identity.email, planType: identity.planType, workspaceName: identity.workspace?.title ?? null, organizationNames: identity.organizations?.map(item => item.title).filter(Boolean) ?? null, verifiedAt: identity.verifiedAt } : null, identityRefreshStatus: status.identityRefreshStatus ?? null, usage: { available: false, reason: "provider_not_supplied" } };
 }
 
@@ -120,16 +120,27 @@ export default {
         const nonce = suppliedNonce ?? crypto.randomUUID().replaceAll("-", "");
         return secure(new Response(subscriptionPage(nonce, config.mode, config.dual), { headers: { "content-type": "text/html; charset=utf-8" } }), nonce);
       }
-      if (!["/gatekeeper/subscription/connections", "/gatekeeper/subscription/connections/create", "/gatekeeper/subscription/status", "/gatekeeper/subscription/start", "/gatekeeper/subscription/complete", "/gatekeeper/subscription/refresh", "/gatekeeper/subscription/device/start", "/gatekeeper/subscription/device/check", "/gatekeeper/subscription/select", "/gatekeeper/subscription/account-info"].includes(url.pathname)) throw new RequestError("not_found", 404);
+      if (!["/gatekeeper/subscription/overview", "/gatekeeper/subscription/connections/rename", "/gatekeeper/subscription/connections", "/gatekeeper/subscription/connections/create", "/gatekeeper/subscription/status", "/gatekeeper/subscription/start", "/gatekeeper/subscription/complete", "/gatekeeper/subscription/refresh", "/gatekeeper/subscription/device/start", "/gatekeeper/subscription/device/check", "/gatekeeper/subscription/select", "/gatekeeper/subscription/account-info"].includes(url.pathname)) throw new RequestError("not_found", 404);
       if (request.method !== "POST") throw new RequestError("method_not_allowed", 405);
       if (request.headers.get("origin") !== config.origin) throw new RequestError("origin_denied", 403);
       const supplied = await body(request);
+      if (url.pathname === "/gatekeeper/subscription/overview") {
+        if (Object.keys(supplied).length) throw new RequestError("body_invalid");
+        return secure(Response.json({ connections: await env.Credentials.getByName("owner").subscriptionOverview() }));
+      }
+      if (url.pathname === "/gatekeeper/subscription/connections/rename") {
+        if (Object.keys(supplied).length !== 2 || !Object.hasOwn(supplied, "accountId") || typeof supplied.accountId !== "string" || !/^(?:owner|account-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/.test(supplied.accountId)) throw new RequestError("body_invalid");
+        if (typeof supplied.label !== "string" || !supplied.label.trim() || encoder.encode(supplied.label.trim()).length > 128 || /[\x00-\x1f\x7f-\x9f]/.test(supplied.label)) throw new RequestError("subscription_label_invalid");
+        const owner = env.Credentials.getByName("owner");
+        await owner.renameSubscriptionConnection(supplied);
+        return secure(Response.json({ connections: await owner.subscriptionConnections() }));
+      }
       if (url.pathname === "/gatekeeper/subscription/connections") {
         if (Object.keys(supplied).length) throw new RequestError("body_invalid");
         return secure(Response.json({ connections: await env.Credentials.getByName("owner").subscriptionConnections() }));
       }
       if (url.pathname === "/gatekeeper/subscription/connections/create") {
-        if (Object.keys(supplied).length !== 1 || typeof supplied.label !== "string" || !supplied.label.trim() || encoder.encode(supplied.label).length > 128 || /[\x00-\x1f\x7f]/.test(supplied.label)) throw new RequestError("subscription_label_invalid");
+        if (Object.keys(supplied).length !== 1 || typeof supplied.label !== "string" || !supplied.label.trim() || encoder.encode(supplied.label.trim()).length > 128 || /[\x00-\x1f\x7f-\x9f]/.test(supplied.label)) throw new RequestError("subscription_label_invalid");
         const owner = env.Credentials.getByName("owner");
         const { id } = await owner.createSubscriptionConnection(supplied);
         return secure(Response.json({ id, connections: await owner.subscriptionConnections() }));
@@ -155,18 +166,18 @@ export default {
       }
       if (url.pathname.endsWith("/device/check")) {
         await credentials.checkCodex();
-        return secure(Response.json(readiness(await credentials.status())));
+        return secure(Response.json(readiness(await credentials.status(), config.dual)));
       }
-      if (url.pathname.endsWith("/select")) return secure(Response.json(readiness(await credentials.selectProvider(input.provider))));
-      if (url.pathname.endsWith("/status")) return secure(Response.json(readiness(await credentials.status())));
-      if (url.pathname.endsWith("/refresh")) return secure(Response.json(readiness(await credentials.refreshStatus())));
+      if (url.pathname.endsWith("/select")) return secure(Response.json(readiness(await credentials.selectProvider(input.provider), config.dual)));
+      if (url.pathname.endsWith("/status")) return secure(Response.json(readiness(await credentials.status(), config.dual)));
+      if (url.pathname.endsWith("/refresh")) return secure(Response.json(readiness(await credentials.refreshStatus(), config.dual)));
       if (url.pathname.endsWith("/start")) {
         const attempt = await credentials.start(true, "connect");
         const authorization = new URL(attempt.authorizationUrl);
         if (authorization.origin !== "https://auth.openai.com" || authorization.pathname !== "/api/accounts/authorize") throw new RequestError("oauth_failed", 502);
         return secure(Response.json({ authorizationUrl: authorization.href, expiresIn: attempt.expiresIn, manualCallbackRequired: true }));
       }
-      return secure(Response.json(readiness(await credentials.complete(input.callbackUrl))));
+      return secure(Response.json(readiness(await credentials.complete(input.callbackUrl), config.dual)));
     } catch (error) {
       const code = error instanceof RequestError || (safeErrors.has(error?.message) || /^(?:codex_image_(?:oauth_http_(?:400|401|403|404|429|500|502|503)|oauth_network_error|oauth_response_invalid|remote_denied|attempt_expired|attempt_failed_restart_login|identity_mismatch|identity_policy_changed|auth_busy|login_required|subscription_required|refresh_failed_restart_login)|subscription_connection_unavailable)$/.test(error?.message)) ? error.message : "oauth_failed";
       return secure(Response.json({ error: code }, { status: error instanceof RequestError ? error.status : 400 }));

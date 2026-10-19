@@ -10,6 +10,21 @@ The owner catalog reuses `adminAccounts`, includes `owner` plus only rows marked
 
 The authenticated same-origin `POST /connections` returns `{connections}` and `POST /connections/create` accepts only `{label}`, returning `{id, connections}`. These paths are relative to `/gatekeeper/subscription`. Catalog rows contain only `{id, label, provider, ready}`. Existing operations accept optional `accountId` alongside their existing fields. Omission retains the legacy owner behavior. A supplied ID must belong to this catalog before the Worker opens its Credentials object. Authentication and exact request validation precede account access. Catalog listing reads local status without querying usage for every connection.
 
+The native OS Admin Providers panel uses these same protected endpoints for subscription settings.
+`POST /connections/rename` accepts `{accountId, label}` and returns `{connections}`. It changes only
+the catalog label, including the default owner, preserving the stable ID, grants, identity pins,
+creation time, and saved usage. Organization model display names remain separate OS admin settings.
+
+`POST /overview` accepts `{}` and returns `{connections}` with protected identity, last successful
+snapshot, last attempt, and recorded quota history. It reads local state without querying OpenAI.
+One unavailable account does not prevent other rows from loading. This richer response is never
+exposed through the inference binding's ordinary model catalog. Explicit `/account-info` refreshes
+retain the existing 60-second encrypted cache and in-flight request deduplication.
+Successful observations retain at most 168 hourly samples from the last seven days, with a bounded
+encrypted storage record. Cache hits do not add history. Lookup failures preserve the last successful
+snapshot, while a different protocol, client, subject, or account cannot inherit that snapshot.
+Optional model-specific limits appear only when supplied; each reset belongs to its own window.
+
 The page asks for explicit subscription usage approval and calls `Credentials.start(true, "connect")`. The user selects an account and workspace at OpenAI without typing an email in the OS. A fresh namespace starts with `dynamic_agent_client`. Only an explicit setup intent can create a registration with `identitySelection: "oauth"`; its normalized email comes from a signature-, issuer-, audience-, expiry- and nonce-verified ID token. A pre-login email policy is neither enforced nor overwritten when no verified registration exists. Existing legacy registrations keep their email policy, and `start(true)` and Codex/image callers retain their strict behavior.
 
 The official flow expects a local callback listener. This page uses the repository-tested manual adaptation: the user copies the full `http://127.0.0.1:1455/auth/callback?...` address into the page's form. Never ask for that address in chat. The form submits it only in a bounded same-origin JSON POST body and clears the field immediately. It does not navigate to, log or persist the callback URL in browser storage.

@@ -1,7 +1,7 @@
 const MAX_BODY_BYTES = 128 * 1024;
 const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
-const text = value => typeof value === "string" && value.trim() !== "";
-const optionalText = value => value == null || text(value);
+const text = (value, max = 32768) => typeof value === "string" && value.trim() !== "" && new TextEncoder().encode(value).length <= max && !/[\x00-\x1f\x7f]/.test(value);
+const optionalText = value => value == null || text(value, 256);
 const integer = value => Number.isSafeInteger(value) && value >= 0;
 const unavailable = (reason, httpStatus = null) => ({ status: "unavailable", reason, httpStatus });
 
@@ -79,7 +79,7 @@ function accountInfo(result, accountId) {
     : Object.values(payload.accounts).map(entry => object(entry) && object(entry.account)
       ? { ...entry.account, id: entry.account.account_id }
       : null);
-  if (accounts.some(entry => !object(entry) || !text(entry.id)
+  if (accounts.some(entry => !object(entry) || !text(entry.id, 256)
     || !optionalText(entry.name) || !optionalText(entry.structure) || !optionalText(entry.plan_type))) {
     return unavailable("unsupported_response", 200);
   }
@@ -98,28 +98,33 @@ function accountInfo(result, accountId) {
 function usageInfo(result, accountId) {
   if (result.status !== "available") return result;
   const payload = result.value;
-  if (!object(payload) || !text(payload.plan_type)) return unavailable("unsupported_response", 200);
+  if (!object(payload) || !text(payload.plan_type, 64)) return unavailable("unsupported_response", 200);
   if (Object.hasOwn(payload, "account_id") && payload.account_id !== accountId) {
     return unavailable("account_mismatch", 200);
   }
   const rateLimit = payload.rate_limit;
-  if (rateLimit != null && (!object(rateLimit) || typeof rateLimit.allowed !== "boolean"
-    || typeof rateLimit.limit_reached !== "boolean")) return unavailable("unsupported_response", 200);
-  for (const window of [rateLimit?.primary_window, rateLimit?.secondary_window]) {
-    if (window != null && (!object(window) || ["used_percent", "limit_window_seconds", "reset_after_seconds", "reset_at"]
-      .some(key => window[key] != null && !integer(window[key])))) return unavailable("unsupported_response", 200);
-  }
+  const validWindow = window => window == null || (object(window) && ["used_percent", "limit_window_seconds", "reset_after_seconds", "reset_at"]
+    .every(key => window[key] == null || integer(window[key])));
+  const validLimit = limit => limit == null || (object(limit) && typeof limit.allowed === "boolean"
+    && typeof limit.limit_reached === "boolean" && validWindow(limit.primary_window) && validWindow(limit.secondary_window));
+  if (!validLimit(rateLimit)) return unavailable("unsupported_response", 200);
   const credits = payload.credits;
   if (credits != null && (!object(credits) || typeof credits.has_credits !== "boolean"
     || typeof credits.unlimited !== "boolean" || (credits.balance != null
-      && (typeof credits.balance !== "string" || !/^\d+(?:\.\d+)?$/.test(credits.balance))))) {
+      && (typeof credits.balance !== "string" || credits.balance.length > 128 || !/^\d+(?:\.\d+)?$/.test(credits.balance))))) {
     return unavailable("unsupported_response", 200);
   }
   const windowInfo = window => window == null ? null : {
     usedPercent: window.used_percent ?? null,
     windowSeconds: window.limit_window_seconds ?? null,
     resetAt: window.reset_at ?? null,
+    resetAfterSeconds: window.reset_after_seconds ?? null,
   };
+  // OpenAI Codex AdditionalRateLimitDetails uses limit_name, metered_feature and RateLimitStatusDetails.
+  const additionalWindows = Array.isArray(payload.additional_rate_limits) ? payload.additional_rate_limits.slice(0, 8)
+    .filter(item => object(item) && text(item.limit_name, 128) && text(item.metered_feature, 128) && validLimit(item.rate_limit))
+    .map(item => ({ id: item.metered_feature, name: item.limit_name, allowed: item.rate_limit?.allowed ?? null,
+      limitReached: item.rate_limit?.limit_reached ?? null, primaryWindow: windowInfo(item.rate_limit?.primary_window), secondaryWindow: windowInfo(item.rate_limit?.secondary_window) })) : [];
   return {
     status: "available",
     httpStatus: 200,
@@ -128,6 +133,7 @@ function usageInfo(result, accountId) {
     limitReached: rateLimit?.limit_reached ?? null,
     primaryWindow: windowInfo(rateLimit?.primary_window),
     secondaryWindow: windowInfo(rateLimit?.secondary_window),
+    additionalWindows,
     credits: credits == null ? null : {
       hasCredits: credits.has_credits,
       unlimited: credits.unlimited,
@@ -138,7 +144,7 @@ function usageInfo(result, accountId) {
 
 export async function readCodexAccountInfo(profile) {
   const checkedAt = new Date().toISOString();
-  if (!object(profile) || !text(profile.access) || !text(profile.accountId)
+  if (!object(profile) || !text(profile.access) || !text(profile.accountId, 256)
     || /[\r\n]/.test(profile.access + profile.accountId)) {
     return { checkedAt, account: unavailable("invalid_profile"), usage: unavailable("invalid_profile") };
   }

@@ -28,7 +28,7 @@ declare module "cloudflare:workers" {
 const MODEL = "gpt-6.1-sol",
   USER = "one@example.invalid",
   OTHER = "two@example.invalid";
-const PROFILE = { type: "agent" as const, id: MODEL, name: "Codex subscription" };
+const PROFILE = { type: "agent" as const, id: MODEL, name: "Codex subscription", providerDisplayName: "Codex subscription" };
 const CONFIG: AiModelConfig = { provider: "openai", model: MODEL, apiToken: "", transport: "subscription", subscriptionAccountId: "owner" };
 const PERSONAL = { provider: "anthropic", model: "personal-model", apiToken: "fixture-api-token",
   apiUrl: "https://personal.example.invalid", extraHeaders: { "X-Personal-Key": "fixture-header" } } satisfies AiModelConfig;
@@ -122,6 +122,28 @@ function settings(connections: SubscriptionConnections = [OWNER]) {
   };
 }
 describe("admin-managed subscription models", () => {
+  it("separates canonical connection labels from model aliases and permits renaming disabled logical IDs", async () => {
+    const fixture = settings(CONNECTIONS);
+    await fixture.inDo(async admin => {
+      await admin.setSubscriptionModelEnabled(false, ACCOUNT_A);
+      await admin.setModelDisplayName(A, "  Research writer  ");
+      const config = admin.getAdminConfig();
+      const model = new SubscriptionModels(fixture.deployment, config, USER, CONNECTIONS);
+      expect(model.get(A)).toMatchObject({ id: A, name: "Research writer", providerDisplayName: "Research", mode: "disabled" });
+      const descriptor = (await admin.getSettings(USER)).subscriptionModel!;
+      expect(descriptor.connections.find(connection => connection.id === A)).toMatchObject({
+        accountId: ACCOUNT_A, name: "Research writer", providerDisplayName: "Research", enabled: false,
+      });
+      await admin.setSubscriptionModelEnabled(true, ACCOUNT_A);
+      const active = new SubscriptionModels(fixture.deployment, admin.getAdminConfig(), USER, CONNECTIONS);
+      expect(active.resolve(A)?.profile).toEqual({ type: "agent", id: A, name: "Research writer", providerDisplayName: "Research" });
+      expect(active.resolve(A)?.config).toEqual({ ...CONFIG, subscriptionAccountId: ACCOUNT_A });
+      await expect(admin.setModelDisplayName("unknown-model", "Other")).rejects.toThrow("No such");
+      await admin.setModelDisplayName(A, null);
+      expect(new SubscriptionModels(fixture.deployment, admin.getAdminConfig(), USER, CONNECTIONS).get(A)?.name).toBe("Research");
+    });
+  });
+
 
   it("preserves the configured legacy account without calling the optional setup catalog or emitting a selector", async () => {
     const calls: unknown[] = [];
@@ -143,7 +165,7 @@ describe("admin-managed subscription models", () => {
     await fixture.inDo(async admin => {
       admin.env = deployment;
       expect((await admin.getSettings(USER)).subscriptionModel?.connections).toEqual([
-        { id: MODEL, accountId: "owner", name: PROFILE.name, provider: null, ready: null, enabled: true },
+        { id: MODEL, accountId: "owner", name: PROFILE.name, providerDisplayName: PROFILE.providerDisplayName, provider: null, ready: null, enabled: true },
       ]);
       await admin.setSubscriptionModelEnabled(false);
       expect(admin.getAdminConfig().modelModes).toEqual({ [MODEL]: "disabled" });
@@ -425,7 +447,7 @@ describe("admin-managed subscription models", () => {
         name: PROFILE.name,
         enabled: false,
         userModelsEnabled: true,
-        connections: [{ id: MODEL, accountId: "owner", name: PROFILE.name, provider: "siwc", ready: true,
+        connections: [{ id: MODEL, accountId: "owner", name: PROFILE.name, providerDisplayName: PROFILE.providerDisplayName, provider: "siwc", ready: true,
           enabled: false }],
         setupUrl: "/gatekeeper/subscription",
       });
@@ -448,7 +470,7 @@ describe("admin-managed subscription models", () => {
         name: PROFILE.name,
         enabled: true,
         userModelsEnabled: true,
-        connections: [{ id: MODEL, accountId: "owner", name: PROFILE.name, provider: "siwc", ready: true,
+        connections: [{ id: MODEL, accountId: "owner", name: PROFILE.name, providerDisplayName: PROFILE.providerDisplayName, provider: "siwc", ready: true,
           enabled: true }],
         setupUrl: "/gatekeeper/subscription",
       });
@@ -522,7 +544,7 @@ describe("admin-managed subscription models", () => {
           name: PROFILE.name,
           enabled: false,
           userModelsEnabled: true,
-          connections: [{ id: MODEL, accountId: "owner", name: PROFILE.name, provider: "siwc", ready: true,
+          connections: [{ id: MODEL, accountId: "owner", name: PROFILE.name, providerDisplayName: PROFILE.providerDisplayName, provider: "siwc", ready: true,
             enabled: false }],
           setupUrl: "/gatekeeper/subscription",
         });
