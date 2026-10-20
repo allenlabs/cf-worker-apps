@@ -70,13 +70,16 @@ export async function runOpenCodeLoop(args: {
   signal: AbortSignal;
   resources?: AgentResource[];
   loadResource?: (id: string) => Promise<AgentResource | undefined>;
+  packagePluginPrompt?: string;
 }): Promise<void> {
   const { storage, chatId, handle, emit, finishTurn, signal } = args;
   const transportMessages: Message[] = args.context.messages.filter((message): message is Message =>
     message.role === 'system' || message.role === 'user' || message.role === 'assistant' || message.role === 'toolResult');
   const scoped = scopedAgentResources({ resources: args.resources ?? [], tools: args.context.tools ?? [],
     loadResource: args.loadResource,
-    setResourcePrompt(text) {
+    setResourcePrompt(resourcePrompt) {
+      const text = [resourcePrompt, args.packagePluginPrompt ?? ''].filter(Boolean).join('\n\n');
+      if (new TextEncoder().encode(text).byteLength > 120_000) throw new Error('Scoped plugin context exceeds the context limit');
       const index = transportMessages.findIndex(message => message.role === 'system');
       const message = transportMessages[index];
       if (message?.role === 'system') transportMessages[index] = { ...message,

@@ -474,7 +474,8 @@ test('Access and public OAuth JWT checks and deployments need no OIDC secret fil
       await writeFile(join(dir, pkg, 'wrangler.jsonc'), JSON.stringify(bases[key]));
     }
     const loader = join(dir, 'loader.mjs');
-    const replacement = `export async function prepare() { return ${JSON.stringify(dir)}; }
+    const replacement = `export const wrapperRoot = ${JSON.stringify(dir)};
+      export async function prepare() { return ${JSON.stringify(dir)}; }
       export function run(command, args, options) { console.log(JSON.stringify({command, args, cwd: options.cwd})); }`;
     await writeFile(loader, `import { registerHooks } from 'node:module';
       registerHooks({ resolve(specifier, context, nextResolve) {

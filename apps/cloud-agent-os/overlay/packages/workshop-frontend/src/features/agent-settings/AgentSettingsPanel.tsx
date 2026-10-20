@@ -2,9 +2,9 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Button, Checkbox, Input, Select, Textarea } from '@cloudflare/kumo'
 import {
   AGENT_PERMISSIONS,
-  type AgentPermission, type AgentProviderCatalog, type AgentResource, type AgentScope,
+  type AgentJson, type AgentPluginInstallation, type AgentPluginSource, type AgentPermission, type AgentProviderCatalog, type AgentResource, type AgentScope,
   type AgentSettingsCommand, type AgentSettingsView, type AgentTeam,
-} from '@gadgets/workshop-shared/api'
+} from '@gadgets/workshop-shared/agent-settings'
 
 type SettingsApi = {
   getAgentSettings(): Promise<AgentSettingsView>
@@ -43,6 +43,42 @@ const Permissions = ({ value, available, onChange }: {
     onCheckedChange={checked => onChange(checked ? [...value, permission] : value.filter(item => item !== permission))} />)}</div>
 </fieldset>
 
+const pluginSourceLabel = (source: AgentPluginSource) => source.kind === 'npm' ? `${source.name}@${source.version}` : `R2 bundle · ${source.digest}`
+const samePluginSource = (left: AgentPluginSource, right: AgentPluginSource) => left.kind === 'npm'
+  ? right.kind === 'npm' && left.name === right.name && left.version === right.version : right.kind === 'bundle' && left.digest === right.digest
+const isAgentJson = (value: unknown): value is AgentJson => value === null || typeof value === 'string' || typeof value === 'boolean'
+  || (typeof value === 'number' && Number.isFinite(value)) || (Array.isArray(value) ? value.every(isAgentJson)
+    : typeof value === 'object' && Object.values(value).every(isAgentJson))
+const parsePluginOptions = (text: string): string => {
+  const value: unknown = JSON.parse(text || '{}')
+  if (!isAgentJson(value) || value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('Use a JSON object for plugin options.')
+  return JSON.stringify(value)
+}
+const PluginInstallationStatus = ({ execution, installation }: { execution: 'pending' | 'host' | 'dynamic'; installation?: AgentPluginInstallation }) => {
+  const labels = { queued: 'Queued', building: 'Building', verifying: 'Verifying', deploying: 'Deploying', ready: execution === 'host' ? 'Waiting for deployment' : 'Ready to load', active: 'Active', failed: 'Installation failed' }
+  return <div className="mt-1 text-sm text-kumo-subtle">
+    <p>{execution === 'pending' ? 'Waiting for organization approval' : `${execution === 'host' ? 'Included in OpenCode DO' : 'Dynamic Worker'} · ${installation ? labels[installation.status] : 'Waiting for installer'}`}</p>
+    {installation?.error && <p role="alert">{installation.error}</p>}
+  </div>
+}
+const PluginExecutionSettings = ({ view, disabled, onSave }: {
+  view: AgentSettingsView; disabled: boolean; onSave: (command: AgentSettingsCommand) => Promise<boolean>
+}) => view.canManagePluginExecution ? <section aria-label="Organization plugin execution" className="space-y-3 rounded-lg border border-kumo-line p-4">
+  <h3 className="text-lg font-medium">Plugin execution · organization administrator</h3>
+  <p className="text-sm text-kumo-subtle">Choose execution for each pinned package, including team and personal requests. Changes to package code require approval again. Private plugin options are not included in this review.</p>
+  <p className="text-sm text-kumo-subtle">Included in OpenCode DO trusts the package in the OS Worker and requires an OS deployment. Dynamic Worker loads the R2 bundle in isolation and has separate Cloudflare usage charges. Both require a compatible JavaScript bundle; Bun, subprocesses and native addons are unsupported.</p>
+  {view.pluginReviews.length === 0 && <p className="text-sm text-kumo-subtle">No package plugins submitted.</p>}
+  <ul className="space-y-3">{view.pluginReviews.map(plugin => <li key={plugin.id} className="space-y-2 rounded-lg border border-kumo-line p-3">
+    <p className="font-medium">{plugin.name}</p><p className="break-all text-sm text-kumo-subtle">{scopeKey(plugin.scope)} · {pluginSourceLabel(plugin.source)}</p>
+    <Select label={`Execution for ${plugin.name}`} aria-label={`Execution for ${plugin.name}`} value={plugin.execution} disabled={disabled}
+      items={{ pending: 'Awaiting decision', host: 'Include in OpenCode DO · redeploy OS', dynamic: 'Dynamic Worker · isolated' }}
+      onValueChange={execution => {
+        if (execution === 'host' || execution === 'dynamic') void onSave({ type: 'setPluginExecution', expectedRevision: view.revision, resourceId: plugin.id, source: plugin.source, execution })
+      }} />
+    <PluginInstallationStatus execution={plugin.execution} installation={view.pluginInstallations.find(item => item.resourceId === plugin.id)} />
+  </li>)}</ul>
+</section> : null
+
 const ResourceForm = ({ scope, revision, permissions, resource, disabled, onSave, onCancel }: {
   scope: AgentScope; revision: number; permissions: AgentPermission[]; resource?: AgentResource; disabled: boolean
   onSave: (command: AgentSettingsCommand) => Promise<boolean>; onCancel: () => void
@@ -51,6 +87,8 @@ const ResourceForm = ({ scope, revision, permissions, resource, disabled, onSave
   const [kind, setKind] = useState(resource?.kind ?? choices[0]?.[0] ?? 'skill')
   const [pluginId, setPluginId] = useState(resource?.kind === 'plugin' ? resource.pluginId : 'instructions')
   const [enabled, setEnabled] = useState(resource?.enabled ?? true)
+  const [sourceKind, setSourceKind] = useState(resource?.kind === 'plugin' && resource.pluginId === 'package' ? resource.source.kind : 'npm')
+  const [formError, setFormError] = useState<string | null>(null)
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const data = new FormData(event.currentTarget)
@@ -61,7 +99,15 @@ const ResourceForm = ({ scope, revision, permissions, resource, disabled, onSave
     else if (kind === 'provider') next = { ...base, kind, baseUrl: field(data, 'baseUrl') }
     else if (kind === 'plugin' && pluginId === 'instructions') next = { ...base, kind, pluginId, instructions: field(data, 'instructions') }
     else if (kind === 'plugin' && pluginId === 'tool-policy') next = { ...base, kind, pluginId, deniedTools: ids(field(data, 'deniedTools')) }
-    else return
+    else if (kind === 'plugin' && pluginId === 'package') {
+      try {
+        const source: AgentPluginSource = sourceKind === 'npm' ? { kind: 'npm', name: field(data, 'packageName'), version: field(data, 'packageVersion') }
+          : { kind: 'bundle', digest: field(data, 'bundleDigest') }
+        const execution = resource?.kind === 'plugin' && resource.pluginId === 'package' && samePluginSource(resource.source, source) ? resource.execution : 'pending'
+        next = { ...base, kind, pluginId, source, execution, options: parsePluginOptions(field(data, 'pluginOptions')) }
+      } catch { setFormError('Use a JSON object for plugin options.'); return }
+    } else return
+    setFormError(null)
     const apiToken = field(data, 'apiToken')
     // Clear the write-only credential before the RPC can settle or an error is shown.
     const tokenInput = event.currentTarget.elements.namedItem('apiToken')
@@ -70,9 +116,10 @@ const ResourceForm = ({ scope, revision, permissions, resource, disabled, onSave
   }
   return <form aria-label={resource ? `Edit ${resource.name}` : 'Add agent resource'} onSubmit={submit} className="space-y-3 rounded-lg border border-kumo-line p-4">
     <h4 className="font-medium">{resource ? 'Edit resource' : 'Add resource'}</h4>
+    {formError && <p role="alert">{formError}</p>}
     <fieldset disabled={disabled} className="space-y-3">
       <Select label="Resource type" aria-label="Resource type" value={kind} disabled={!!resource} onValueChange={value => value && setKind(value)}
-        items={Object.fromEntries(choices.map(([value]) => [value, { skill: 'Skill', mcp: 'MCP server', plugin: 'Bundled plugin', provider: 'OpenAI-compatible provider' }[value]]))} />
+        items={Object.fromEntries(choices.map(([value]) => [value, { skill: 'Skill', mcp: 'MCP server', plugin: 'Plugin', provider: 'OpenAI-compatible provider' }[value]]))} />
       <Input label="Resource name" name="name" required maxLength={100} defaultValue={resource?.name ?? ''} />
       <Checkbox label="Enabled" checked={enabled} onCheckedChange={setEnabled} />
       {(kind === 'skill' || kind === 'mcp') && <Input label="Description" name="description" maxLength={1000} defaultValue={resource && 'description' in resource ? resource.description : ''} />}
@@ -81,13 +128,28 @@ const ResourceForm = ({ scope, revision, permissions, resource, disabled, onSave
       {kind === 'mcp' && <><Input label="MCP HTTPS endpoint" name="endpoint" type="url" required pattern="https://.*"
         defaultValue={resource?.kind === 'mcp' ? resource.endpoint : ''} />
         <p className="text-sm text-kumo-subtle">This shares the server configuration. Each user connects through MCP Connectors and authorizes OAuth separately; credentials are not shared.</p></>}
-      {kind === 'plugin' && <><Select label="Bundled plugin" aria-label="Bundled plugin" value={pluginId} disabled={!!resource}
-        onValueChange={value => value && setPluginId(value)} items={{ instructions: 'Additional instructions', 'tool-policy': 'Tool policy' }} />
-        <p className="text-sm text-kumo-subtle">These plugins are bundled for this Cloudflare runtime. Arbitrary npm plugins and plugins requiring Bun cannot be installed here.</p>
-        {pluginId === 'instructions' ? <Textarea label="Plugin instructions" name="instructions" required rows={6}
-          defaultValue={resource?.kind === 'plugin' && resource.pluginId === 'instructions' ? resource.instructions : ''} />
-          : <Input label="Denied tool names" name="deniedTools" required description="Separate exact tool names with commas or spaces."
-            defaultValue={resource?.kind === 'plugin' && resource.pluginId === 'tool-policy' ? resource.deniedTools.join(', ') : ''} />}</>}
+      {kind === 'plugin' && <><Select label="Plugin type" aria-label="Plugin type" value={pluginId} disabled={!!resource}
+        onValueChange={value => value && setPluginId(value)} items={{ instructions: 'Additional instructions', 'tool-policy': 'Tool policy', package: 'npm package or R2 bundle' }} />
+        {pluginId === 'instructions' && <Textarea label="Plugin instructions" name="instructions" required rows={6}
+          defaultValue={resource?.kind === 'plugin' && resource.pluginId === 'instructions' ? resource.instructions : ''} />}
+        {pluginId === 'tool-policy' && <Input label="Denied tool names" name="deniedTools" required description="Separate exact tool names with commas or spaces."
+          defaultValue={resource?.kind === 'plugin' && resource.pluginId === 'tool-policy' ? resource.deniedTools.join(', ') : ''} />}
+        {pluginId === 'package' && <>
+          <Select label="Plugin source" aria-label="Plugin source" value={sourceKind} onValueChange={value => value && setSourceKind(value)}
+            items={{ npm: 'npm package · exact version', bundle: 'Prebuilt R2 artifact · SHA-256' }} />
+          {sourceKind === 'npm' ? <><Input label="npm package name" name="packageName" required maxLength={214} placeholder="@example/plugin"
+            defaultValue={resource?.kind === 'plugin' && resource.pluginId === 'package' && resource.source.kind === 'npm' ? resource.source.name : ''} />
+            <Input label="Exact npm version" name="packageVersion" required maxLength={128} placeholder="1.2.3"
+              description="Pin a full version. Ranges, tags, URLs and Git sources are not accepted."
+              defaultValue={resource?.kind === 'plugin' && resource.pluginId === 'package' && resource.source.kind === 'npm' ? resource.source.version : ''} /></>
+            : <Input label="R2 artifact SHA-256" name="bundleDigest" required pattern="[a-f0-9]{64}" minLength={64} maxLength={64}
+              description="Digest of the uploaded JavaScript bundle; enter 64 lowercase hexadecimal characters."
+              defaultValue={resource?.kind === 'plugin' && resource.pluginId === 'package' && resource.source.kind === 'bundle' ? resource.source.digest : ''} />}
+          <Textarea label="Plugin options (JSON object)" name="pluginOptions" rows={5}
+            defaultValue={resource?.kind === 'plugin' && resource.pluginId === 'package' ? resource.options : '{}'} />
+          <p className="text-sm text-kumo-subtle">Use non-secret options only. New packages and code changes wait for an organization administrator to choose execution. Saving a request does not mean installation succeeded.</p>
+        </>}
+      </>}
       {kind === 'provider' && <><Input label="OpenAI-compatible base URL" name="baseUrl" type="url" required pattern="https://.*"
         description="Use the HTTPS API base, including /v1 when required."
         defaultValue={resource?.kind === 'provider' ? resource.baseUrl : ''} />
@@ -216,7 +278,10 @@ const ScopeSettings = ({ view, selected, disabled, onSave }: {
         {item.kind === 'provider' && <p className="mt-1 break-all text-sm text-kumo-subtle">{item.baseUrl}</p>}
         {item.kind === 'mcp' && <p className="mt-1 break-all text-sm text-kumo-subtle">{item.endpoint}</p>}
         {item.kind === 'skill' && <p className="mt-1 text-sm text-kumo-subtle">{item.description}</p>}
-        {item.kind === 'plugin' && <p className="mt-1 text-sm text-kumo-subtle">Bundled plugin: {item.pluginId}</p>}
+        {item.kind === 'plugin' && (item.pluginId === 'package' ? <>
+          <p className="mt-1 break-all text-sm text-kumo-subtle">{pluginSourceLabel(item.source)}</p>
+          <PluginInstallationStatus execution={item.execution} installation={view.pluginInstallations.find(installation => installation.resourceId === item.id)} />
+        </> : <p className="mt-1 text-sm text-kumo-subtle">Bundled plugin: {item.pluginId}</p>)}
       </li>)}</ul>
       {Object.values(resourcePermission).some(can) && <ResourceForm key={resource?.id ?? `new-${view.revision}`} scope={scope} revision={view.revision}
         permissions={permissions} resource={resource} disabled={disabled} onSave={save} onCancel={() => setEditingResourceId(null)} />}
@@ -371,6 +436,8 @@ export const AgentSettingsPanel = ({ api }: { api: SettingsApi }) => {
       </div>
       {view.easyMode && <p className="text-sm text-kumo-subtle">Easy mode shows administrators, team membership and resources. An organization administrator can turn it off to configure roles, delegated permissions and sharing audiences.</p>}
       {selected.permissions.length === 0 && <p className="text-sm text-kumo-subtle">Read-only scope. Ask a scope administrator for delegated management permissions.</p>}
+      {view.pluginInstallerError && <p role="alert" className="rounded-lg border border-kumo-line p-3 text-sm">{view.pluginInstallerError}</p>}
+      <PluginExecutionSettings view={view} disabled={disabled} onSave={save} />
       <ScopeSettings key={scopeKey(selected.scope)} view={view} selected={selected} disabled={disabled} onSave={save} />
       <details className="rounded-lg border border-kumo-line p-3"><summary className="cursor-pointer font-medium">Resources effective for your account · {view.effectiveResources.length}</summary>
         <ul className="mt-2 space-y-1 text-sm">{view.effectiveResources.map(item => <li key={item.id}>{item.name} · {item.kind} · {view.scopes.find(candidate => sameScope(candidate.scope, item.scope))?.label ?? scopeKey(item.scope)}</li>)}</ul>

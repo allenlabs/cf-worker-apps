@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { AGENT_PERMISSIONS, type AgentDelegation, type AgentPermission, type AgentResource, type AgentScope, type AgentSettingsCommand, type AgentSettingsView, type AgentTeam } from '@gadgets/workshop-shared/agent-settings';
+import { AGENT_PERMISSIONS, type AgentDelegation, type AgentPermission, type AgentPluginSource, type AgentResource, type AgentScope, type AgentSettingsCommand, type AgentSettingsView, type AgentTeam } from '@gadgets/workshop-shared/agent-settings';
 import { validateWebFetchUrl } from './web-fetch.js';
 
 export type AgentActor = { userId: string; organizationAdmin: boolean };
@@ -33,12 +33,33 @@ export function validateAgentEndpoint(value: string): boolean {
   } catch { return false; }
 }
 const endpoint = z.string().min(1).max(2048).refine(validateAgentEndpoint, 'Use a public HTTPS endpoint without credentials, query, or fragment.');
+const npmName = z.string().max(214).regex(/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/);
+const npmVersion = z.string().max(128).regex(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/);
+const pluginSource = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('npm'), name: npmName, version: npmVersion }).strict(),
+  z.object({ kind: z.literal('bundle'), digest: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
+]);
+const pluginOptions = z.string().max(16_384).refine(text => {
+  try {
+    if (new TextEncoder().encode(text).byteLength > 16_384) return false;
+    const value: unknown = JSON.parse(text);
+    const queue = [{ value, depth: 0 }];
+    for (let index = 0; index < queue.length; index++) {
+      const item = queue[index];
+      if (!item || item.depth > 16 || queue.length > 2048) return false;
+      if (item.value !== null && typeof item.value === 'object')
+        queue.push(...Object.values(item.value).map(value => ({ value, depth: item.depth + 1 })));
+    }
+    return z.record(z.string().min(1).max(128), z.json()).safeParse(value).success;
+  } catch { return false; }
+}, 'Use a bounded JSON object for plugin options.');
 const base = { id, name, scope, enabled: z.boolean() };
 const resource = z.union([
   z.object({ ...base, kind: z.literal('skill'), description: z.string().max(1000), content: z.string().min(1).max(16_384) }).strict(),
   z.object({ ...base, kind: z.literal('mcp'), endpoint, description: z.string().max(1000) }).strict(),
   z.object({ ...base, kind: z.literal('plugin'), pluginId: z.literal('instructions'), instructions: z.string().min(1).max(16_384) }).strict(),
   z.object({ ...base, kind: z.literal('plugin'), pluginId: z.literal('tool-policy'), deniedTools: z.array(z.string().min(1).max(200)).max(100) }).strict(),
+  z.object({ ...base, kind: z.literal('plugin'), pluginId: z.literal('package'), source: pluginSource, execution: z.enum(['pending', 'host', 'dynamic']), options: pluginOptions }).strict(),
   z.object({ ...base, kind: z.literal('provider'), baseUrl: endpoint }).strict(),
 ]);
 const grant = z.object({ id, providerId: id, scope, enabled: z.boolean() }).strict();
@@ -55,6 +76,7 @@ const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('removeDelegation'), expectedRevision: revision, delegationId: id }).strict(),
   z.object({ type: z.literal('saveResource'), expectedRevision: revision, resource, apiToken: z.string().max(4096).refine(value => !/[\x00-\x20\x7f]/u.test(value)).optional() }).strict(),
   z.object({ type: z.literal('removeResource'), expectedRevision: revision, resourceId: id }).strict(),
+  z.object({ type: z.literal('setPluginExecution'), expectedRevision: revision, resourceId: id, source: pluginSource, execution: z.enum(['host', 'dynamic']) }).strict(),
   z.object({ type: z.literal('saveProviderGrant'), expectedRevision: revision, grant }).strict(),
   z.object({ type: z.literal('removeProviderGrant'), expectedRevision: revision, grantId: id }).strict(),
 ]);
@@ -174,7 +196,7 @@ function authorization(policy: Policy, actor: AgentActor) {
     cached.set(key, result);
     return result;
   };
-  return { audience, permissions };
+  return { audience, permissions, organizationAdmin };
 }
 type Authorization = ReturnType<typeof authorization>;
 function requirePermissions(policy: Policy, access: Authorization, value: AgentScope, required: AgentPermission[]) {
@@ -209,6 +231,10 @@ function view(policy: Policy, actor: AgentActor): AgentSettingsView {
   const visibleResourceIds = new Set(policy.resources.filter(value => effectiveIds.has(value.id) || can(value.scope, permissionFor(value)) || (value.kind === 'provider' && (can(value.scope, 'providers:grant') || policy.providerGrants.some(grant => grant.providerId === value.id && can(grant.scope, 'providers:grant'))))).map(value => value.id));
   return {
     revision: policy.revision, easyMode: policy.easyMode, viewerId: actor.userId, scopes,
+    canManagePluginExecution: access.organizationAdmin,
+    pluginReviews: access.organizationAdmin ? policy.resources.flatMap(value => value.kind === 'plugin' && value.pluginId === 'package'
+      ? [{ id: value.id, name: value.name, scope: value.scope, source: value.source, execution: value.execution }] : []) : [],
+    pluginInstallations: [], pluginInstallerError: null,
     teams: policy.teams.filter(value => visibleTeams.has(value.id)),
     memberships: policy.memberships.filter(value => value.userId === actor.userId || can({ kind: 'team', teamId: value.teamId }, 'members:manage')),
     roles: policy.roles.filter(value => value.members.includes(actor.userId) || can(value.scope, 'roles:manage')),
@@ -216,6 +242,10 @@ function view(policy: Policy, actor: AgentActor): AgentSettingsView {
     resources: policy.resources.filter(value => visibleResourceIds.has(value.id)), effectiveResources,
     providerGrants: policy.providerGrants.filter(value => (access.audience(value.scope) && visibleResourceIds.has(value.providerId)) || can(value.scope, 'providers:grant')),
   };
+}
+function samePluginSource(left: AgentPluginSource, right: AgentPluginSource): boolean {
+  return left.kind === 'npm' ? right.kind === 'npm' && left.name === right.name && left.version === right.version
+    : right.kind === 'bundle' && left.digest === right.digest;
 }
 function change(policy: Policy, secrets: Secrets, actor: AgentActor, command: AgentSettingsCommand): void {
   const access = authorization(policy, actor);
@@ -266,6 +296,12 @@ function change(policy: Policy, secrets: Secrets, actor: AgentActor, command: Ag
       immutableScope(previous, command.resource);
       if (previous && previous.kind !== command.resource.kind) fail('An existing resource cannot change kind.');
       requirePermissions(policy, access, command.resource.scope, [permissionFor(command.resource)]);
+      if (command.resource.kind === 'plugin' && command.resource.pluginId === 'package') {
+        const unchanged = previous?.kind === 'plugin' && previous.pluginId === 'package' && samePluginSource(previous.source, command.resource.source);
+        const allowedExecution = unchanged ? previous.execution : 'pending';
+        if (command.resource.execution !== allowedExecution && command.resource.execution !== 'pending')
+          fail('Organization administrator approval is required for plugin execution.', 403);
+      }
       if (command.resource.kind === 'provider') {
         if (previous?.kind === 'provider' && previous.baseUrl !== command.resource.baseUrl && command.apiToken === undefined)
           fail('Re-enter the API key when changing the provider address, or explicitly choose no API key.');
@@ -273,6 +309,13 @@ function change(policy: Policy, secrets: Secrets, actor: AgentActor, command: Ag
         if (!Object.hasOwn(secrets, command.resource.id)) fail('Enter a provider API key, or explicitly choose no API key.');
       } else if (command.apiToken !== undefined) fail('Only providers accept API tokens.');
       policy.resources = upsert(policy.resources, command.resource); break;
+    }
+    case 'setPluginExecution': {
+      if (!access.organizationAdmin) fail('Only an organization administrator can choose plugin execution.', 403);
+      const previous = policy.resources.find(value => value.id === command.resourceId);
+      if (!previous || previous.kind !== 'plugin' || previous.pluginId !== 'package') fail('Package plugin does not exist.', 404);
+      if (!samePluginSource(previous.source, command.source)) fail('Plugin source changed. Reload before approving execution.', 409);
+      policy.resources = upsert(policy.resources, { ...previous, execution: command.execution }); break;
     }
     case 'removeResource': {
       const previous = policy.resources.find(value => value.id === command.resourceId);
@@ -327,6 +370,13 @@ export class AgentSettingsStore {
   async effective(actor: AgentActor): Promise<AgentResource[]> {
     const current = parsed(actorSchema, actor, 'Invalid actor.');
     return effective(await this.#read(this.storage), current);
+  }
+
+  async pluginDesired() {
+    const policy = await this.#read(this.storage);
+    return { apiVersion: 1 as const, revision: policy.revision,
+      plugins: policy.resources.filter((value): value is Extract<AgentResource, { pluginId: 'package' }> =>
+        value.kind === 'plugin' && value.pluginId === 'package' && value.enabled && value.execution !== 'pending') };
   }
 
   async mutate(actor: AgentActor, command: AgentSettingsCommand): Promise<AgentSettingsView> {

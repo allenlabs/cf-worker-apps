@@ -186,7 +186,7 @@ Omitting `setup` preserves the existing generated configuration.
 ## Scoped agent settings
 
 Open **Providers → Agent settings and teams** to manage organization, team, or personal resources.
-Select a scope, then add a named OpenAI-compatible backend, skill, MCP server, or bundled plugin.
+Select a scope, then add a named OpenAI-compatible backend, skill, MCP server, or plugin.
 A backend uses a public HTTPS API base on port 443, including `/v1` when its API requires it.
 Supply a write-only API key or explicitly choose **Use no API key**. Changing an existing address
 requires a new key or that explicit keyless choice. Model discovery reads `/models` and supported
@@ -208,8 +208,12 @@ are checked again before inference, including previously created gadget bindings
 
 Skills contain bounded Markdown instructions and load through the native `loadSkill` tool after a
 current access check. The bundled **Additional instructions** and **Tool policy** plugins run in
-OpenCode's Workerd adapter. This runtime cannot install arbitrary npm or Bun plugins, local files,
-subprocesses, or stdio MCP servers. MCP resources share HTTPS endpoint configuration. Each user
+OpenCode's Workerd adapter. Package plugins support pinned npm versions or content-addressed R2
+JavaScript bundles through the [plugin installer](plugin-installer.md). The organization administrator
+approves each package's exact source and chooses an existing DO with a verified rebuild, or an
+isolated Dynamic Worker. Changing the source requires approval again. The portable plugin profile
+supports JSON-schema tools and appended system instructions. Native modules, subprocesses, Bun APIs,
+and unsupported OpenCode domains fail installation or setup. MCP resources share HTTPS endpoint configuration. Each user
 connects and authorizes OAuth separately through the existing connector flow, consistent with
 [OpenCode remote MCP configuration](https://docs.opencode.ai/docs/mcp-servers/). Existing observation,
 write-approval, and tool restrictions still apply.

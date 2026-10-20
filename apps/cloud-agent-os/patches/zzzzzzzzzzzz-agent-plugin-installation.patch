@@ -1,0 +1,277 @@
+diff --git a/packages/workshop-backend/src/admin-settings.ts b/packages/workshop-backend/src/admin-settings.ts
+--- a/packages/workshop-backend/src/admin-settings.ts
++++ b/packages/workshop-backend/src/admin-settings.ts
+@@ -1,4 +1,6 @@
+ import { AgentSettingsStore, type AgentActor } from './agent-settings';
++import { AgentPluginInstallations } from './agent-plugin-artifacts';
++import { installedAgentPlugins } from './installed-agent-plugins';
+ import type { AgentSettingsView, AgentSettingsCommand } from '@gadgets/workshop-shared/api';
+ import { AdminApi, AdminFormat, AdminFormatPatch, AdminModel, AdminResourceVendor, AdminSettingsView, AiModelConfig, AiModelProvider, AmbientGatekeeperMode, BannerColor, BlueprintPublicInfo, GatewayModel, GatewayModelLevelTest, GatewayModelMode, GatewayModelSettings, GatewayModelTest, MAX_ANNOUNCEMENT_LENGTH, MAX_INSTANCE_INSTRUCTIONS_LENGTH, MAX_SITE_NAME_LENGTH, ReasoningLevel, SUGGESTED_MODELS, isAmbientGatekeeperMode, isBannerColor, isHexColor, validateDisplayName } from '@gadgets/workshop-shared/api';
+ import { GatekeeperVendor } from '@gadgets/workshop-shared/gatekeeper';
+@@ -81,6 +83,7 @@
+ export class AdminSettings extends DurableObject<Cloudflare.Env> {
+   private storage: AdminSettingsStorage;
+   private agentSettings: AgentSettingsStore;
++  private agentPlugins: AgentPluginInstallations;
+   private users: DurableObjectNamespace<UserDurableObject>;
+   // Every bound gatekeeper, keyed by vendor id. Deployment-global (from env bindings), so admin
+   // resource listing needs no user context.
+@@ -97,6 +100,7 @@
+ 
+     this.storage = makeAdminSettingsStorage(ctx.storage);
+     this.agentSettings = new AgentSettingsStore(ctx.storage);
++    this.agentPlugins = new AgentPluginInstallations(env.BLUEPRINT_CONTENT, installedAgentPlugins);
+     this.users = this.ctx.exports.UserDurableObject;
+     this.vendors = buildGatekeeperVendorMap(env);
+   }
+@@ -108,12 +112,19 @@
+     return { userId, organizationAdmin: Array.isArray(configured) && configured.includes(userId) };
+   }
+ 
+-  getAgentSettings(userId: string): Promise<AgentSettingsView> {
+-    return this.agentSettings.view(this.#agentActor(userId));
+-  }
+-
+-  updateAgentSettings(userId: string, command: AgentSettingsCommand): Promise<AgentSettingsView> {
+-    return this.agentSettings.mutate(this.#agentActor(userId), command);
++  async #agentSettingsView(view: AgentSettingsView): Promise<AgentSettingsView> {
++    let error: string | null = null;
++    try { await this.agentPlugins.sync(() => this.agentSettings.pluginDesired()); }
++    catch { error = 'Settings are saved, but the plugin installer queue is unavailable. Reload to retry.'; }
++    return this.agentPlugins.view(view, error);
++  }
++
++  async getAgentSettings(userId: string): Promise<AgentSettingsView> {
++    return this.#agentSettingsView(await this.agentSettings.view(this.#agentActor(userId)));
++  }
++
++  async updateAgentSettings(userId: string, command: AgentSettingsCommand): Promise<AgentSettingsView> {
++    return this.#agentSettingsView(await this.agentSettings.mutate(this.#agentActor(userId), command));
+   }
+ 
+   getEffectiveAgentResources(userId: string) {
+diff --git a/packages/workshop-backend/src/agent.ts b/packages/workshop-backend/src/agent.ts
+--- a/packages/workshop-backend/src/agent.ts
++++ b/packages/workshop-backend/src/agent.ts
+@@ -1,5 +1,7 @@
+ import type { AgentResource } from '@gadgets/workshop-shared/api';
+ import { scopedResourcePrompt } from './scoped-agent-resources';
++import { resolvePackagePluginResources, type AgentPluginServices } from './agent-plugin-runtime';
++import { isAgentPluginToolCall } from '@gadgets/workshop-shared/api';
+ import { AiChatMessage, AiChatAuthorInfo, AiToolCall, AiChatMessageBody, AiChatStreamEvent, BlueprintBinding, BlueprintMerge, BlueprintOutput, ChatGadgetPin, ChatGadgetPinRecord, MainlineMergeGadget, WorkpieceId, type AiModelConfig, isTextLikeAttachmentMimeType, validateBindingName } from '@gadgets/workshop-shared/api';
+ import { applyCodeChange, codeChangeSerializedSize, replaceSpanChange, type CodeContent,
+   type CodeChange, type FileChange } from '@gadgets/workshop-shared/code-change';
+@@ -306,6 +308,7 @@
+  */
+ export interface AgentHooks {
+   getAgentResources(initiator: AiChatAuthorInfo): Promise<AgentResource[]>;
++  getAgentPluginRuntime?(initiator: AiChatAuthorInfo): AgentPluginServices | undefined;
+ 
+   /** Disposable native loop tables share this DO, separately from canonical OS storage. */
+   getAgentLoopStorage(): DurableObjectStorage;
+@@ -2202,6 +2205,10 @@
+             try {
+               if (toolCall.error) {
+                 toolOutput = {text: `${toolCall.error}`, isError: true};
++              } else if (isAgentPluginToolCall(toolCall)) {
++                toolOutput = { text: toolCall.pluginResourceId && agentResources.some(resource => resource.id === toolCall.pluginResourceId)
++                  ? toolCall.output ?? 'Historical plugin result is unavailable.'
++                  : 'Historical plugin result omitted because current access is unavailable.' };
+               } else switch (toolCall.toolName) {
+                 // Note that if we get here, we know the tool succeeded originally, so for many
+                 // branches below we can just return success unconditionally.
+@@ -3036,6 +3043,11 @@
+   if (instanceInstructions) {
+     systemPromptSlots[0] += `\n\n${instanceInstructions}`;
+   }
++  const loadAgentResource = async (id: string) => (await hooks.getAgentResources(initiator)).find(resource => resource.id === id && resource.enabled);
++  const pluginServices = agentContext.spawnerConfig ? undefined : hooks.getAgentPluginRuntime?.(initiator);
++  const packagePlugins = pluginServices ? await resolvePackagePluginResources({ resources: agentResources,
++    loadResource: loadAgentResource, services: pluginServices }) : { tools: [], prompt: '' };
++  const resourcePrompt = [scopedResourcePrompt(agentResources), packagePlugins.prompt].filter(Boolean).join('\n\n');
+   // Prompt caches are shared across the provider account, so anyone on it could probe for a cached
+   // prefix. The workspace's random salt leads the project-specific part, so nobody without this
+   // prompt can probe that part, or the chat after it.
+@@ -3044,7 +3056,7 @@
+     sections: {
+       environment: `Prompt cache salt (ignore): ${hooks.getPromptCacheSalt()}\n\n` +
+           systemPromptSlots[1],
+-      ...(agentResources.length ? { agentResources: scopedResourcePrompt(agentResources) } : {}),
++      ...(resourcePrompt ? { agentResources: resourcePrompt } : {}),
+     },
+     timestamp: 0,
+   };
+@@ -3061,7 +3073,9 @@
+   // `measuredTokens` covers the prompt and response of the last model step, so estimate only what
+   // was added after it. A tool result carries the call's sequence but wasn't in that usage.
+   // (The system prompt is not part of the projection, so the pure estimate adds it separately.)
+-  let contextTokens = measuredTokens > 0 && lastMeasuredSequence !== undefined
++  // Prior usage cannot account for package hooks changed since that request.
++  const hasPackagePlugins = agentResources.some(resource => resource.enabled && resource.kind === 'plugin' && resource.pluginId === 'package');
++  let contextTokens = !hasPackagePlugins && measuredTokens > 0 && lastMeasuredSequence !== undefined
+     ? measuredTokens + estimateProjectionTokens(
+         projection.filter(({message, sequence}) => sequence !== undefined &&
+           (sequence > lastMeasuredSequence ||
+@@ -3857,7 +3871,7 @@
+ 
+   // Calls that reached a tool's execute(), so tool_execution_end can tell the ones pi rejected.
+   let executedToolCalls = new Set<string>();
+-  let toolList = Object.values(tools).map(tool => traceTool(tool, executedToolCalls));
++  let toolList = [...Object.values(tools), ...packagePlugins.tools].map(tool => traceTool(tool, executedToolCalls));
+ 
+   // Records a turn that ended with a provider error, so it can be retried or rethrown for the
+   // overseer's error triage after the loop settles. (pi never throws for provider failures; the
+@@ -4090,7 +4104,8 @@
+   await runOpenCodeLoop({
+     storage: hooks.getAgentLoopStorage(), chatId, context, handle,
+     resources: agentResources,
+-    loadResource: async id => (await hooks.getAgentResources(initiator)).find(resource => resource.id === id && resource.enabled),
++    loadResource: loadAgentResource,
++    packagePluginPrompt: packagePlugins.prompt,
+     maxTokens: maxOutputTokens, emit, signal: abortSignal,
+     finishTurn: ({message, toolResults}) => {
+       if (message.stopReason === "error" || message.stopReason === "aborted") return;
+diff --git a/packages/workshop-backend/src/overseer.ts b/packages/workshop-backend/src/overseer.ts
+--- a/packages/workshop-backend/src/overseer.ts
++++ b/packages/workshop-backend/src/overseer.ts
+@@ -1,4 +1,5 @@
+ import { accountIdForTrustedAgentAuthor } from './agent-principal';
++import type { AgentPluginServices } from './agent-plugin-runtime';
+ import { scopedModelResolver } from './scoped-models';
+ import { RpcCompatible, RpcStub, RpcTarget } from "capnweb";
+ import { validateRpc } from "capnweb-validate";
+@@ -656,6 +657,11 @@
+ type SessionKind = CollaboratorRole | "owner";
+ 
+ class OverseerImpl implements AgentHooks {
++  getAgentPluginRuntime(initiator: AiChatAuthorInfo): AgentPluginServices | undefined {
++    const principal = accountIdForTrustedAgentAuthor(initiator);
++    return principal ? { principal, bucket: this.env.BLUEPRINT_CONTENT, loader: this.env.LOADER } : undefined;
++  }
++
+   async getAgentResources(initiator: AiChatAuthorInfo) {
+     const accountId = accountIdForTrustedAgentAuthor(initiator);
+     if (!accountId) return [];
+diff --git a/packages/workshop-frontend/src/ChatInterface.actions.test.tsx b/packages/workshop-frontend/src/ChatInterface.actions.test.tsx
+--- a/packages/workshop-frontend/src/ChatInterface.actions.test.tsx
++++ b/packages/workshop-frontend/src/ChatInterface.actions.test.tsx
+@@ -398,3 +398,23 @@
+         { title: 'Failed to retry agent', description: undefined, variant: 'error' })
+   })
+ })
++
++
++describe('package plugin tool history', () => {
++  it('renders a recorded plugin tool with its stable name', async () => {
++    const server = makeOverseer()
++    const chat = withChatApi(server, undefined, [
++      { id: 1, title: 'Plugin chat', started: new Date(), lastActive: new Date() },
++    ])
++    await renderChat(server.overseer, { selectedChatId: 1 })
++    await server.resolveSubscription()
++    await server.resolvePendingQuery({ entries: [] })
++    chat.emitMessage({ chatId: 1, sequence: 0, timestamp: new Date(),
++      author: { type: 'agent', id: 'model', name: 'Model' },
++      type: 'message', message: '', toolCalls: [{ toolCallId: 'plugin-call',
++        toolName: 'plugin_0123456789abcdef_echo', input: { text: 'fixture' },
++        output: 'fixture result', pluginResourceId: 'fixture-resource' }] })
++    expect(document.body.textContent).toContain('Ran plugin tool')
++    expect(document.body.textContent).toContain('plugin_0123456789abcdef_echo')
++  })
++})
+diff --git a/packages/workshop-frontend/src/ChatInterface.tsx b/packages/workshop-frontend/src/ChatInterface.tsx
+--- a/packages/workshop-frontend/src/ChatInterface.tsx
++++ b/packages/workshop-frontend/src/ChatInterface.tsx
+@@ -74,6 +74,8 @@
+   CapsuleSpecifier,
+   AiChatStreamEvent,
+   AiToolCall,
++  isAgentPluginToolCall,
++  isAgentPluginToolName,
+   SlashCommandId,
+   SlashCommandRequest,
+   ChatAttachmentHandle,
+@@ -583,6 +585,7 @@
+   tc: AiToolCall,
+   outputOf?: ToolOutputResolver,
+ ): { verb: string; target?: string } {
++  if (isAgentPluginToolCall(tc)) return { verb: 'Ran plugin tool', target: tc.toolName };
+   switch (tc.toolName) {
+     case "loadSkill": return { verb: "Loaded skill", target: tc.input.id };
+     case "readFile":
+@@ -721,6 +724,7 @@
+ }
+ 
+ function describeToolCallCount(toolName: AiToolCall["toolName"], count: number): string {
++  if (isAgentPluginToolName(toolName)) return `Ran ${pluralize(count, 'plugin tool')}`;
+   switch (toolName) {
+     case "loadSkill": return `Loaded ${pluralize(count, "skill")}`;
+     case "readFile":
+@@ -802,6 +806,7 @@
+ }
+ 
+ function getProvisionalToolLabel(toolName: AiToolCall["toolName"] | null | undefined) {
++  if (isAgentPluginToolName(toolName)) return 'Running plugin tool';
+   switch (toolName) {
+     case "loadSkill": return "Loading skill";
+     case "readFile":
+@@ -843,6 +848,7 @@
+ 
+ // Present-tense verb for an in-progress tool call.
+ function getProvisionalToolVerb(toolName: AiToolCall["toolName"]): string {
++  if (isAgentPluginToolName(toolName)) return 'Running plugin tool';
+   switch (toolName) {
+     case "loadSkill": return "Loading skill";
+     case "readFile": return "Reading";
+@@ -869,6 +875,7 @@
+ 
+ // Present-tense, count-aware label mirroring describeToolCallCount (e.g. "Writing 5 files").
+ function describeProvisionalToolCount(toolName: AiToolCall["toolName"], count: number): string {
++  if (isAgentPluginToolName(toolName)) return `Running ${pluralize(count, 'plugin tool')}`;
+   if (count <= 1) return getProvisionalToolLabel(toolName);
+   switch (toolName) {
+     case "loadSkill": return `Loading ${pluralize(count, "skill")}`;
+diff --git a/packages/workshop-shared/src/api.ts b/packages/workshop-shared/src/api.ts
+--- a/packages/workshop-shared/src/api.ts
++++ b/packages/workshop-shared/src/api.ts
+@@ -1,4 +1,4 @@
+-import type { AgentSettingsView, AgentSettingsCommand, AgentProviderCatalog } from './agent-settings';
++import type { AgentJson, AgentSettingsView, AgentSettingsCommand, AgentProviderCatalog } from './agent-settings';
+ export * from './agent-settings';
+ 
+ // This file defines the API spoken between the Gadgets Workshop service and the front-end UI.
+@@ -3974,6 +3974,7 @@
+  * these names; when a name is absent, the workspace's `defaultGadgetId` (from `GadgetMetadata`)
+  * is assumed, and it is an error for it to be omitted when there is no default.
+  */
++export type AgentPluginToolName = `plugin_${string}`;
+ export type AiToolCall = {
+   /** ID of the original tool call, useful to reproduce the model messages. */
+   toolCallId: string;
+@@ -3991,6 +3992,11 @@
+ } & ({
+   toolName: "loadSkill";
+   input: { id: string };
++} | {
++  toolName: AgentPluginToolName;
++  input: { [key: string]: AgentJson };
++  output?: string;
++  pluginResourceId?: string;
+ } | {
+   /**
+    * Any workpiece can potentially export files. Gadgets, in particular, export their source code
+@@ -4271,6 +4277,14 @@
+   };
+   output?: string;
+ });
++
++export function isAgentPluginToolName(name: string | null | undefined): name is AgentPluginToolName {
++  return typeof name === 'string' && name.startsWith('plugin_');
++}
++
++export function isAgentPluginToolCall(call: AiToolCall): call is Extract<AiToolCall, { toolName: AgentPluginToolName }> {
++  return isAgentPluginToolName(call.toolName);
++}
+ 
+ // TODO: Extend AiToolCall for code-mode tool calls.
+ // - Includes inline audit logs from the action.

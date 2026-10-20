@@ -37,7 +37,7 @@ export function scopedResourcePrompt(resources: readonly AgentResource[]): strin
   return prompt;
 }
 
-/** These plugins are bundled for Workerd; configured resources never load executable packages. */
+/** Built-in plugins share the OS prompt slot and tool policy. */
 export function scopedAgentResources(args: {
   resources: readonly AgentResource[];
   tools: readonly AgentTool[];

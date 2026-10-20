@@ -3,12 +3,12 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AGENT_PERMISSIONS, type AgentProviderCatalog, type AgentSettingsCommand, type AgentSettingsView } from '@gadgets/workshop-shared/api'
+import { AGENT_PERMISSIONS, type AgentProviderCatalog, type AgentSettingsCommand, type AgentSettingsView } from '@gadgets/workshop-shared/agent-settings'
 import { AgentSettingsPanel } from './AgentSettingsPanel'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 const initial = (): AgentSettingsView => ({
-  revision: 7, easyMode: true, viewerId: 'viewer',
+  revision: 7, easyMode: true, viewerId: 'viewer', canManagePluginExecution: true, pluginReviews: [], pluginInstallations: [], pluginInstallerError: null,
   scopes: [
     { scope: { kind: 'organization' }, label: 'Organization', permissions: [...AGENT_PERMISSIONS] },
     { scope: { kind: 'team', teamId: 'research' }, label: 'Research', permissions: [...AGENT_PERMISSIONS] },
@@ -57,6 +57,7 @@ describe('scoped agent settings', () => {
       saved = { ...saved, revision: saved.revision + 1 }
       if (command.type === 'setMode') saved.easyMode = command.easyMode
       if (command.type === 'saveResource') saved.resources = [...saved.resources.filter(item => item.id !== command.resource.id), command.resource]
+      if (command.type === 'setPluginExecution') saved.pluginReviews = saved.pluginReviews.map(item => item.id === command.resourceId ? { ...item, execution: command.execution } : item)
       if (command.type === 'saveRole') saved.roles = [...saved.roles.filter(item => item.id !== command.role.id), command.role]
       if (command.type === 'saveDelegation') saved.delegations = [...saved.delegations.filter(item => item.id !== command.delegation.id), command.delegation]
       if (command.type === 'saveMembership') saved.memberships = [...saved.memberships.filter(item => item.userId !== command.membership.userId || item.teamId !== command.membership.teamId), command.membership]
@@ -122,13 +123,73 @@ describe('scoped agent settings', () => {
     expect(updateAgentSettings).not.toHaveBeenCalled()
     await select('Resource type', 'MCP server')
     expect(document.body.textContent).toContain('authorizes OAuth separately')
-    await select('Resource type', 'Bundled plugin')
-    expect(document.body.textContent).toContain('plugins requiring Bun cannot be installed here')
+    await select('Resource type', 'Plugin')
+    expect(document.body.textContent).toContain('Plugin execution · organization administrator')
     expect(document.querySelector('textarea[name="instructions"]')).not.toBeNull()
-    await select('Bundled plugin', 'Tool policy')
+    await select('Plugin type', 'Tool policy')
     fill('name', 'Policy'); fill('deniedTools', 'write_file, execute_command')
     await submit('Add agent resource')
     expect(updateAgentSettings).toHaveBeenLastCalledWith(expect.objectContaining({ expectedRevision: 7, resource: expect.objectContaining({ kind: 'plugin', pluginId: 'tool-policy', deniedTools: ['write_file', 'execute_command'] }) }))
+  })
+
+  it('submits pinned npm requests as pending and rejects non-object options before writing', async () => {
+    saved.canManagePluginExecution = false
+    await render()
+    await select('Resource type', 'Plugin'); await select('Plugin type', 'npm package or R2 bundle')
+    fill('name', 'Authored plugin'); fill('packageName', '@example/authored-plugin'); fill('packageVersion', '1.2.3')
+    fill('pluginOptions', '[]'); await submit('Add agent resource')
+    expect(updateAgentSettings).not.toHaveBeenCalled()
+    expect(document.body.textContent).toContain('Use a JSON object for plugin options')
+    fill('pluginOptions', '{"language":"한글","nested":{"enabled":true}}'); await submit('Add agent resource')
+    expect(updateAgentSettings).toHaveBeenLastCalledWith({ type: 'saveResource', expectedRevision: 7, resource: {
+      id: expect.any(String), name: 'Authored plugin', kind: 'plugin', pluginId: 'package', enabled: true, scope: { kind: 'personal', userId: 'viewer' },
+      source: { kind: 'npm', name: '@example/authored-plugin', version: '1.2.3' }, execution: 'pending', options: JSON.stringify({ language: '한글', nested: { enabled: true } }),
+    } })
+    expect(document.body.textContent).toContain('Waiting for organization approval')
+    expect(document.querySelector('[aria-label="Execution for Authored plugin"]')).toBeNull()
+  })
+
+  it('submits prebuilt R2 digests and resets execution when changing approved source code', async () => {
+    saved.canManagePluginExecution = false
+    saved.resources = [{ id: 'package', name: 'Existing plugin', kind: 'plugin', pluginId: 'package', enabled: true, scope: { kind: 'personal', userId: 'viewer' },
+      source: { kind: 'npm', name: 'authored-plugin', version: '1.2.3' }, execution: 'host', options: JSON.stringify({ language: 'en' }) }]
+    await render(); await click('Edit resource Existing plugin')
+    fill('pluginOptions', '{"language":"ko"}'); await submit('Edit Existing plugin')
+    expect(updateAgentSettings).toHaveBeenLastCalledWith(expect.objectContaining({ resource: expect.objectContaining({ execution: 'host', options: JSON.stringify({ language: 'ko' }) }) }))
+    await click('Edit resource Existing plugin'); await select('Plugin source', 'Prebuilt R2 artifact · SHA-256')
+    fill('bundleDigest', 'a'.repeat(64)); await submit('Edit Existing plugin')
+    expect(updateAgentSettings).toHaveBeenLastCalledWith(expect.objectContaining({ expectedRevision: 8,
+      resource: expect.objectContaining({ source: { kind: 'bundle', digest: 'a'.repeat(64) }, execution: 'pending' }) }))
+  })
+
+  it('lets only organization administrators choose pinned execution from the narrow review list', async () => {
+    saved.resources = []
+    saved.pluginReviews = [{ id: 'private-package', name: 'Private request', scope: { kind: 'personal', userId: 'colleague' },
+      source: { kind: 'npm', name: 'authored-plugin', version: '1.2.3' }, execution: 'pending' }]
+    await render()
+    expect(document.body.textContent).toContain('Private plugin options are not included')
+    await select('Execution for Private request', 'Include in OpenCode DO · redeploy OS')
+    expect(updateAgentSettings).toHaveBeenLastCalledWith({ type: 'setPluginExecution', expectedRevision: 7, resourceId: 'private-package',
+      source: { kind: 'npm', name: 'authored-plugin', version: '1.2.3' }, execution: 'host' })
+    expect(document.body.textContent).toContain('Waiting for installer')
+    expect(document.querySelector('form[aria-label="Edit Private request"]')).toBeNull()
+    saved = { ...saved, canManagePluginExecution: false, pluginReviews: [] }
+    await click('Reload settings')
+    expect(document.querySelector('[aria-label="Organization plugin execution"]')).toBeNull()
+  })
+
+  it('shows real installation progress and queue errors without treating host readiness as active deployment', async () => {
+    saved.resources = [{ id: 'package', name: 'Queued plugin', kind: 'plugin', pluginId: 'package', enabled: true, scope: { kind: 'personal', userId: 'viewer' },
+      source: { kind: 'npm', name: 'authored-plugin', version: '1.2.3' }, execution: 'host', options: '{}' }]
+    saved.pluginInstallations = [{ id: 'installation', resourceId: 'package', execution: 'host', status: 'ready', artifactDigest: 'a'.repeat(64), error: null, updatedAt: null }]
+    saved.pluginInstallerError = 'Settings saved; installer queue unavailable. Reload settings to retry.'
+    await render()
+    expect(document.body.textContent).toContain('Waiting for deployment')
+    expect(document.body.textContent).not.toContain(' · Active')
+    expect(document.body.textContent).toContain('installer queue unavailable')
+    expect(button('Add administrator').disabled).toBe(false)
+    saved = { ...saved, pluginInstallerError: null, pluginInstallations: saved.pluginInstallations.map(item => ({ ...item, status: 'active' })) }
+    await click('Reload settings'); expect(document.body.textContent).toContain(' · Active')
   })
 
   it('saves an OpenAI-compatible backend in its selected scope with a write-only key and exact revision', async () => {
@@ -153,6 +214,7 @@ describe('scoped agent settings', () => {
   })
 
   it('shows read-only organization resources without granting actions from the scope name', async () => {
+    saved.canManagePluginExecution = false
     saved.scopes = [{ scope: { kind: 'organization' }, label: 'Organization', permissions: [] }]
     saved.resources = [{ id: 'shared', kind: 'provider', name: 'Organization models', scope: { kind: 'organization' }, enabled: true, baseUrl: 'https://models.example.org/v1' }]
     await render()
@@ -297,7 +359,7 @@ describe('scoped agent settings', () => {
     const pending = deferred<AgentSettingsView>()
     updateAgentSettings.mockReturnValueOnce(pending.promise)
     fill('adminUser', 'delegate'); await submit('Add administrator')
-    const nextView: AgentSettingsView = { ...initial(), viewerId: 'another-viewer', scopes: [{ scope: { kind: 'personal', userId: 'another-viewer' }, label: 'Another personal scope', permissions: [] }] }
+    const nextView: AgentSettingsView = { ...initial(), canManagePluginExecution: false, viewerId: 'another-viewer', scopes: [{ scope: { kind: 'personal', userId: 'another-viewer' }, label: 'Another personal scope', permissions: [] }] }
     const nextApi = { getAgentSettings: vi.fn<() => Promise<AgentSettingsView>>(async () => nextView), updateAgentSettings,
       getAgentProviderCatalog: vi.fn<(refresh?: boolean) => Promise<AgentProviderCatalog>>(async () => ({ providers: [] })) }
     await act(async () => root?.render(<AgentSettingsPanel api={nextApi} />))

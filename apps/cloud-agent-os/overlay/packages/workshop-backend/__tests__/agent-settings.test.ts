@@ -39,6 +39,78 @@ async function denied(call: Promise<unknown>, message = 'Permission denied') {
 }
 
 describe('scoped agent policy', () => {
+  it('requires organization approval for every new package source and preserves approval only for the same pinned source', async () => {
+    const f = fixture();
+    const resource: AgentResource = { id: 'package', name: 'Package', scope: personal('alice'), enabled: true, kind: 'plugin', pluginId: 'package',
+      source: { kind: 'npm', name: '@example/authored-plugin', version: '1.2.3' }, execution: 'pending', options: JSON.stringify({ style: 'concise' }) };
+    await denied(f.update(alice, { type: 'saveResource', resource: { ...resource, execution: 'dynamic' } }), 'administrator approval');
+    await f.update(alice, { type: 'saveResource', resource });
+    await denied(f.update(alice, { type: 'setPluginExecution', resourceId: resource.id, source: resource.source, execution: 'dynamic' }), 'organization administrator');
+    await f.update(admin, { type: 'setPluginExecution', resourceId: resource.id, source: resource.source, execution: 'host' });
+    await f.update(alice, { type: 'saveResource', resource: { ...resource, execution: 'host', options: JSON.stringify({ style: 'expanded' }) } });
+    await denied(f.update(alice, { type: 'saveResource', resource: { ...resource, execution: 'dynamic' } }), 'administrator approval');
+    const replacement = { ...resource, source: { kind: 'npm', name: '@example/authored-plugin', version: '1.2.4' } } satisfies AgentResource;
+    await denied(f.update(alice, { type: 'saveResource', resource: { ...replacement, execution: 'host' } }), 'administrator approval');
+    await f.update(alice, { type: 'saveResource', resource: replacement });
+    expect((await f.view(alice)).resources[0]).toMatchObject({ execution: 'pending', source: replacement.source });
+    await denied(f.update(admin, { type: 'setPluginExecution', resourceId: resource.id, source: resource.source, execution: 'host' }), 'source changed');
+    await f.update(admin, { type: 'setPluginExecution', resourceId: resource.id, source: replacement.source, execution: 'dynamic' });
+    expect((await f.view(alice)).resources[0]).toMatchObject({ execution: 'dynamic' });
+  });
+
+  it('provides narrow organization review without exposing private options or other personal resources', async () => {
+    const f = fixture();
+    const resource: AgentResource = { id: 'private-package', name: 'Private package', scope: personal('alice'), enabled: true, kind: 'plugin', pluginId: 'package',
+      source: { kind: 'bundle', digest: 'a'.repeat(64) }, execution: 'pending', options: JSON.stringify({ project: 'synthetic-private-setting' }) };
+    await f.update(alice, { type: 'saveResource', resource });
+    await f.update(alice, { type: 'saveResource', resource: skill('private-skill', personal('alice')) });
+    const reviewed = await f.view(admin);
+    expect(reviewed.canManagePluginExecution).toBe(true);
+    expect(reviewed.resources).toEqual([]);
+    expect(reviewed.pluginReviews).toEqual([{ id: resource.id, name: resource.name, scope: resource.scope, source: resource.source, execution: 'pending' }]);
+    expect(JSON.stringify(reviewed)).not.toContain('synthetic-private-setting');
+    expect(reviewed.pluginInstallations).toEqual([]);
+    expect((await f.view(bob)).pluginReviews).toEqual([]);
+    await denied(f.update(admin, { type: 'saveResource', resource }));
+    await f.update(admin, { type: 'setPluginExecution', resourceId: resource.id, source: resource.source, execution: 'dynamic' });
+    expect((await f.view(alice)).resources.find(value => value.id === resource.id)).toMatchObject({ options: resource.options, execution: 'dynamic' });
+  });
+
+  it('allows full delegated organization admins, while team admins and plugin managers cannot decide execution', async () => {
+    const f = fixture(); await f.team('nested-root'); await f.team('nested-child', 'nested-root'); await f.member('nested-root', 'alice', 'admin');
+    const resource: AgentResource = { id: 'team-package', name: 'Team package', scope: teamScope('nested-child'), enabled: true, kind: 'plugin', pluginId: 'package',
+      source: { kind: 'npm', name: 'authored-plugin', version: '2.0.0-beta.1+build.4' }, execution: 'pending', options: '{}' };
+    await f.update(alice, { type: 'saveResource', resource });
+    await denied(f.update(alice, { type: 'setPluginExecution', resourceId: resource.id, source: resource.source, execution: 'host' }), 'organization administrator');
+    await f.update(admin, { type: 'saveDelegation', delegation: { id: 'org-plugin-manager', scope: org, subject: { kind: 'user', id: 'bob' }, permissions: ['plugins:manage'] } });
+    expect((await f.view(bob)).canManagePluginExecution).toBe(false);
+    await denied(f.update(bob, { type: 'setPluginExecution', resourceId: resource.id, source: resource.source, execution: 'dynamic' }), 'organization administrator');
+    await f.update(admin, { type: 'saveDelegation', delegation: { id: 'full-admin', scope: org, subject: { kind: 'user', id: 'bob' }, permissions: [...AGENT_PERMISSIONS] } });
+    expect((await f.view(bob)).canManagePluginExecution).toBe(true);
+    await f.update(bob, { type: 'setPluginExecution', resourceId: resource.id, source: resource.source, execution: 'host' });
+    await f.update(admin, { type: 'removeDelegation', delegationId: 'full-admin' });
+    await denied(f.update(bob, { type: 'setPluginExecution', resourceId: resource.id, source: resource.source, execution: 'dynamic' }), 'organization administrator');
+  });
+
+  it('validates package identity, exact semver, bundle digests and bounded JSON options at the command boundary', async () => {
+    const f = fixture();
+    const resource = { id: 'package', name: 'Package', scope: personal('alice'), enabled: true, kind: 'plugin', pluginId: 'package',
+      source: { kind: 'npm', name: '@example/authored-plugin', version: '1.2.3' }, execution: 'pending', options: '{}' };
+    const invalidSources = [
+      { kind: 'npm', name: 'https://example.org/plugin', version: '1.2.3' },
+      { kind: 'npm', name: 'plugin', version: '^1.2.3' }, { kind: 'npm', name: 'plugin', version: 'latest' },
+      { kind: 'npm', name: 'plugin', version: '1.02.3' }, { kind: 'npm', name: 'plugin', version: '1.2.3-01' },
+      { kind: 'npm', name: '../plugin', version: '1.2.3' }, { kind: 'npm', name: '@example/plugin/extra', version: '1.2.3' },
+      { kind: 'bundle', digest: 'A'.repeat(64) }, { kind: 'bundle', digest: 'a'.repeat(63) },
+      { kind: 'bundle', digest: 'a'.repeat(64), url: 'https://example.org/plugin.js' },
+    ];
+    for (const source of invalidSources) await denied(f.inStore(store => Reflect.apply(store.mutate, store, [alice, { type: 'saveResource', expectedRevision: 0, resource: { ...resource, source } }])), 'Invalid agent settings command');
+    for (const options of ['[]', '{invalid', JSON.stringify({ text: 'x'.repeat(16_385) }), '{\"value\":1e999}', JSON.stringify({ nested: Array.from({ length: 2049 }, () => null) })])
+      await denied(f.inStore(store => Reflect.apply(store.mutate, store, [alice, { type: 'saveResource', expectedRevision: 0, resource: { ...resource, options } }])), 'Invalid agent settings command');
+    await f.update(alice, { type: 'saveResource', resource: { ...resource, kind: 'plugin', pluginId: 'package', execution: 'pending', source: { kind: 'bundle', digest: 'b'.repeat(64) }, options: JSON.stringify({ list: [true, null, 1, { text: 'Unicode 한글' }] }) } });
+    expect((await f.view(alice)).revision).toBe(1);
+  });
+
   it('requires a new explicit secret when an editor changes the provider endpoint', async () => {
     const f = fixture();
     await f.team('private-team');

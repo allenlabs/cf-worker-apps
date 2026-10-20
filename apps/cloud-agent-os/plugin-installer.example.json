@@ -1,0 +1,13 @@
+{
+  "apiVersion": 1,
+  "transportCommand": ["/usr/local/bin/cloud-agent-plugin-transport", "--config", "/srv/cloud-agent-os/private/transport.json"],
+  "deployCommand": ["/usr/local/bin/cloud-agent-plugin-deploy", "--config", "/srv/cloud-agent-os/private/deploy.json"],
+  "stateDir": "/srv/cloud-agent-os/plugin-state",
+  "esbuildModule": "/srv/cloud-agent-os/build-tools/node_modules/esbuild/lib/main.js",
+  "typescriptModule": "/srv/cloud-agent-os/build-tools/node_modules/typescript/lib/typescript.js",
+  "npmCommand": "/usr/bin/npm",
+  "sourceRoot": "/srv/cloud-agent-os/source",
+  "deploymentConfig": "/srv/cloud-agent-os/private/deployment.json",
+  "maxJobs": 10,
+  "pollSeconds": 60
+}
