@@ -19,7 +19,7 @@ document.querySelector('#sign-in a').href = signInPath();
 ` : `const oidc = false;\nfunction sessionHeaders() { return {}; }\n`) + String.raw`
 const byId = id => document.getElementById(id);
 let pollTimer, pollGeneration = 0, accountGeneration = 0, accountLoaded = false, activeProvider;
-let pageVisible = true, selectedAccountId = 'owner', selectionGeneration = 0, connections = [];
+let pageVisible = true, selectedAccountId = 'owner', selectionGeneration = 0, connections = [], deleting = false;
 const capture = () => ({ id: selectedAccountId, generation: selectionGeneration });
 const current = target => pageVisible && target.id === selectedAccountId && target.generation === selectionGeneration;
 window.addEventListener('pagehide', () => { pageVisible = false; selectionGeneration++; pollGeneration++; accountGeneration++; clearTimeout(pollTimer); });
@@ -30,7 +30,8 @@ function controls(enabled) {
   const recovered = enabled && !authenticated;
   authenticated = enabled;
   if (recovered) for (const id of ['start-button', 'complete-button', 'device-start-button', 'add-button']) if (byId(id)) byId(id).disabled = false;
-  for (const id of ['setup-start', 'setup-complete', 'setup-device', 'setup-connections', 'setup-add']) if (byId(id)) byId(id).disabled = !enabled;
+  for (const id of ['setup-start', 'setup-complete', 'setup-device', 'setup-connections', 'setup-add']) if (byId(id)) byId(id).disabled = !enabled || deleting;
+  byId('delete-connection').disabled = !enabled || deleting;
   byId('metadata-refresh').disabled = !enabled || !canRefreshMetadata;
 }
 
@@ -122,10 +123,11 @@ function renderConnections() {
   selector.replaceChildren();
   for (const item of connections) {
     const option = document.createElement('option'); option.value = item.id;
-    option.textContent = item.label + (item.ready ? ' · 연결 준비 완료' : ' · 연결 필요');
+    option.textContent = item.label + (item.ready === undefined ? '' : item.ready ? ' · 연결 준비 완료' : ' · 연결 필요');
     selector.append(option);
   }
   selector.value = selectedAccountId;
+  byId('delete-connection').hidden = selectedAccountId === 'owner';
 }
 function clearConnection() {
   selectionGeneration++; pollGeneration++; accountGeneration++; clearTimeout(pollTimer);
@@ -141,6 +143,7 @@ function clearConnection() {
   status.textContent = '연결 상태를 확인하고 있습니다.';
 }
 async function selectConnection(id) {
+  if (deleting) { renderConnections(); return; }
   if (!connections.some(item => item.id === id)) return;
   selectedAccountId = id; history.replaceState(null, '', '#connection=' + id); clearConnection(); renderConnections();
   const target = capture();
@@ -160,6 +163,18 @@ async function loadConnections() {
 }
 byId('connection-select').addEventListener('change', event => selectConnection(event.target.value));
 window.addEventListener('hashchange', selectHash);
+byId('delete-connection').addEventListener('click', async () => {
+  if (!authenticated || deleting || selectedAccountId === 'owner') return;
+  const connection = connections.find(item => item.id === selectedAccountId);
+  if (!connection || !window.confirm('"' + connection.label + '" 연결을 영구 삭제할까요? 저장된 로그인과 계정·사용량 정보를 삭제합니다. 이 작업은 되돌릴 수 없습니다.')) return;
+  deleting = true; clearConnection(); controls(authenticated);
+  const target = capture();
+  try {
+    const value = await post('connections/delete', { accountId: target.id, confirmed: true }, target);
+    connections = value.connections; deleting = false; controls(authenticated); await selectConnection('owner');
+  } catch (error) { failed(error, target); }
+  finally { deleting = false; controls(authenticated); }
+});
 byId('add-connection').addEventListener('submit', async event => {
   event.preventDefault(); if (!authenticated) return;
   const target = capture(), button = byId('add-button'); button.disabled = true;
@@ -228,7 +243,7 @@ export function subscriptionPage(nonce, mode = 'access', dual = false) {
   const disabled = mode === 'oidc' ? ' disabled' : '';
   return `<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>ChatGPT 구독 연결</title>
 <style nonce="${nonce}">body{font:18px/1.6 system-ui,sans-serif;max-width:44rem;margin:3rem auto;padding:0 1rem;color:#17212b;background:#fafafa}textarea{box-sizing:border-box;width:100%;padding:.7rem;font:inherit}button,a{font:inherit}button{padding:.5rem 1rem;margin:.5rem 0}label{display:block;margin:.7rem 0}fieldset{border:1px solid #b8c2ca;padding:1rem;margin:1rem 0}a{color:#0645ad}#status{padding:1rem;background:#eaf1f8}#identity,#account-info{white-space:pre-line}small{display:block}</style>
-<main><h1>개인 ChatGPT 구독 연결</h1><p id="status" role="status" aria-live="polite">연결 상태를 확인하고 있습니다.</p><form id="connections"><fieldset id="setup-connections"${disabled}><legend>구독 연결 선택</legend><label for="connection-select">관리할 연결</label><select id="connection-select"><option value="owner">owner</option></select></fieldset></form><form id="add-connection" autocomplete="off"><fieldset id="setup-add"${disabled}><legend>새 구독 연결 추가</legend><label for="connection-label">표시 이름</label><input id="connection-label" maxlength="128" required autocomplete="off"><button id="add-button" type="submit">연결 추가</button><small>이름을 지정한 다음 OpenAI에서 계정을 선택하세요. 각 연결은 별도로 로그인합니다.</small></fieldset></form><p id="active-provider"></p><p id="identity" aria-live="polite"></p><p id="account-info" aria-live="polite"></p>${dual ? '<button id="select-siwc" type="button" hidden>SIWC 연결 사용</button><button id="select-codex" type="button" hidden>Codex device 연결 사용</button>' : ''}<button id="metadata-refresh" type="button" hidden disabled>계정 정보 새로 확인</button><p>SIWC는 전체 구독 사용량을 제공하지 않습니다. Codex device 연결에서는 제공되는 사용 한도를 자동 조회합니다. <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">ChatGPT 설정에서 사용량 확인</a></p><p id="sign-in" hidden><a href="/">OS 로그인</a></p><button id="refresh" type="button">상태 다시 확인</button>
+<main><h1>개인 ChatGPT 구독 연결</h1><p id="status" role="status" aria-live="polite">연결 상태를 확인하고 있습니다.</p><form id="connections"><fieldset id="setup-connections"${disabled}><legend>구독 연결 선택</legend><label for="connection-select">관리할 연결</label><select id="connection-select"><option value="owner">owner</option></select><button id="delete-connection" type="button" hidden>선택한 연결 삭제</button></fieldset></form><form id="add-connection" autocomplete="off"><fieldset id="setup-add"${disabled}><legend>새 구독 연결 추가</legend><label for="connection-label">표시 이름</label><input id="connection-label" maxlength="128" required autocomplete="off"><button id="add-button" type="submit">연결 추가</button><small>이름을 지정한 다음 OpenAI에서 계정을 선택하세요. 각 연결은 별도로 로그인합니다.</small></fieldset></form><p id="active-provider"></p><p id="identity" aria-live="polite"></p><p id="account-info" aria-live="polite"></p>${dual ? '<button id="select-siwc" type="button" hidden>SIWC 연결 사용</button><button id="select-codex" type="button" hidden>Codex device 연결 사용</button>' : ''}<button id="metadata-refresh" type="button" hidden disabled>계정 정보 새로 확인</button><p>SIWC는 전체 구독 사용량을 제공하지 않습니다. Codex device 연결에서는 제공되는 사용 한도를 자동 조회합니다. <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">ChatGPT 설정에서 사용량 확인</a></p><p id="sign-in" hidden><a href="/">OS 로그인</a></p><button id="refresh" type="button">상태 다시 확인</button>
 <form id="start" autocomplete="off"><fieldset id="setup-start"${disabled}><legend>SIWC · ChatGPT 로그인</legend><p>이메일을 입력할 필요 없이 OpenAI에서 계정을 선택하세요. 이메일·요금제·조직은 인증된 로그인 결과에 제공된 정보만 표시합니다.</p><label><input id="approval" type="checkbox" required> 이 연결을 통한 모델 요청이 내 ChatGPT 구독 사용량을 사용할 수 있음에 동의합니다.</label><button id="start-button" type="submit">ChatGPT로 계속</button></fieldset></form>
 <section id="authorization" hidden><h2>2. 직접 로그인</h2><p><a id="login" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">OpenAI 로그인 열기</a></p><p>OpenAI에서 사용할 계정과 워크스페이스를 선택하세요. 기존 연결을 다시 인증할 때는 같은 계정과 워크스페이스를 사용하세요.</p></section>
 <form id="complete" autocomplete="off"><fieldset id="setup-complete"${disabled}><legend>3. 로그인 완료 주소 입력</legend><p>로그인을 마치면 <code>http://127.0.0.1:1455/auth/callback</code> 주소로 이동합니다. 페이지가 열리지 않는다는 메시지가 보여도 주소 표시줄의 전체 주소를 복사해 아래 칸에 입력하세요.</p><p>이 주소에는 일회용 인증 코드가 있습니다. 이 화면에만 입력하고 채팅이나 메시지로 보내지 마세요. 제출하면 입력 칸이 비워집니다.</p><label for="callback">127.0.0.1 콜백 전체 주소</label><textarea id="callback" rows="4" maxlength="16384" required autocomplete="off" autocapitalize="none" spellcheck="false"></textarea><button id="complete-button" type="submit">연결 완료</button></fieldset></form>${dual ? `<form id="device-start" autocomplete="off"><fieldset id="setup-device"${disabled}><legend>Codex device · 코드로 로그인</legend><p>콜백 주소를 붙여넣지 않고 OpenAI 페이지에서 일회용 코드를 승인합니다. 계정의 디바이스 코드 로그인이 허용되어야 하며, 원격 환경에서 OpenAI가 요청을 거부하면 SIWC를 사용할 수 있습니다.</p><label><input id="device-approval" type="checkbox" required> 모델 요청에 내 ChatGPT 구독을 사용하는 데 동의합니다.</label><button id="device-start-button" type="submit">디바이스 코드 받기</button></fieldset></form>` : ''}<section id="device" hidden><h2>OpenAI에서 코드 승인</h2><p>일회용 코드: <strong id="device-code"></strong></p><p><a id="device-login" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">OpenAI 코드 승인 열기</a></p><p>이 화면을 열어 두세요. 완료되면 연결이 자동으로 전환됩니다.</p></section></main><script nonce="${nonce}">${browserScript(mode)}</script></html>`;

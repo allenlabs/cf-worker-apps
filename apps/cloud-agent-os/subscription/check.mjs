@@ -28,7 +28,7 @@ function jwt(keys, kid, claims, header = {}) {
   return `${input}.${sign("RSA-SHA256", Buffer.from(input), keys.privateKey).toString("base64url")}`;
 }
 const accessJwt = (changes = {}, keys = accessKeys) => jwt(keys, accessJwk.kid, { iss: issuer, aud: audience, sub: "synthetic-admin", email, iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 3600, ...changes });
-let accountReads = 0, usageReads = 0, duringAccountRead = null, usageHttpStatus = 200, usedPercent = 12;
+let accountReads = 0, usageReads = 0, duringAccountRead = null, duringDeviceStart = null, duringStatus = null, usageHttpStatus = 200, usedPercent = 12;
 let devicePolls = 0, deviceExchanges = 0, deviceSubject = "device-owner", deviceAccount = "device-account", deviceHtmlDenied = false, deviceStartDenied = false, deviceDeniedType = "text/html", deviceResponses = [], deviceJsonDenied = false;
 const deviceClient = "app_EMoamEEZ73f0CkXaXp7hrann";
 const deviceVerifier = "fixture-device-verifier-abcdefghijklmnopqrstuvwxyz";
@@ -47,20 +47,38 @@ export class Credentials extends BaseCredentials {
   async configureAccount(input) { events.push('configureAccount'); return super.configureAccount(input); }
   async start(approval, intent) { events.push('start:' + approval + ':' + intent); return super.start(approval, intent); }
   async startCodex(intent) { events.push('startCodex:' + intent); return super.startCodex(intent); }
-  async status() { events.push('status'); if(statusError||this.fixtureStatusFailed)throw Error(${JSON.stringify(accessToken)});return super.status(); }
+  async status() { events.push('status'); if(statusError||this.fixtureStatusFailed)throw Error(${JSON.stringify(accessToken)});const status=await super.status();if(this.fixtureHoldStatus){this.fixtureHoldStatus=false;await fetch('https://fixture.invalid/hold-status');}return status; }
+  async adminSession(value) { return value==='synthetic-admin-session'?{csrf:'synthetic-csrf',principal:{subject:'synthetic-admin'}}:super.adminSession(value); }
   async complete(callback) { events.push('complete'); return super.complete(callback); }
   async access(force) { events.push('access'); return super.access(force); }
   async codexAccess(force) { events.push('codexAccess'); return super.codexAccess(force); }
   async open(value) {
     const opened=await super.open(value);
+    if(this.deleteOnCredentialOpen && opened?.access && opened?.refresh) { const accountId=this.deleteOnCredentialOpen;this.deleteOnCredentialOpen=null;await this.env.Credentials.getByName('owner').deleteSubscriptionConnection({accountId,confirmed:true}); }
     if(this.flipOnHistoryRead && opened?.key && Array.isArray(opened.history)) { this.flipOnHistoryRead=false;await this.ctx.storage.put('subscriptionProvider','siwc'); }
     return opened;
   }
   async fetch(request) {
+    if(new URL(request.url).pathname==='/fixture-selection') {
+      const {action,input}=await request.json();
+      try{return Response.json(await this.performAdminMutation(action,input,'synthetic-admin-session','synthetic-csrf'));}
+      catch(error){return Response.json({error:error.message},{status:error.status??400});}
+    }
+    if(new URL(request.url).pathname==='/fixture-late-refresh') {
+      this.deleteOnCredentialOpen=(await request.json()).accountId;
+      try { await this.access(true);return Response.json({ok:true}); }
+      catch(error) { return Response.json({error:error.message},{status:400}); }
+    }
+    if(new URL(request.url).pathname==='/fixture-auth') {
+      const {kind}=await request.json();
+      try { return Response.json(await (kind==='siwc'?this.start(true,'connect'):kind==='codex'?this.startCodex('connect'):this.startCodexImages())); }
+      catch(error) { return Response.json({error:error.message},{status:400}); }
+    }
     if(new URL(request.url).pathname==='/fixture-info') {
       if(request.method==='POST') {
         const input=await request.json();
         if(Object.hasOwn(input,'failStatus'))this.fixtureStatusFailed=input.failStatus;
+        if(input.holdStatus)this.fixtureHoldStatus=true;
         if(input.flipOnHistoryRead)this.flipOnHistoryRead=true;
         if(input.expireCache) { const cached=await this.open(await this.ctx.storage.get('subscriptionAccountInfo')); if(cached)await this.ctx.storage.put('subscriptionAccountInfo',await this.seal({...cached,expiresAt:0})); }
         if(input.subjectHash) {
@@ -129,6 +147,7 @@ delete oidcBindings.CF_ACCESS_AUD;
 const sse = events => new Response(events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
 const outboundService = async request => {
   outboundUrls.push(request.url);
+  if(request.url==='https://fixture.invalid/hold-status') { await duringStatus();return new Response('ok'); }
   if (request.url === `${issuer}/cdn-cgi/access/certs`) return Response.json({ keys: [accessJwk] });
   if (request.url === "https://auth.openai.com/.well-known/jwks.json") return Response.json({ keys: [openaiJwk] });
   if (request.url === "https://chatgpt.com/backend-api/wham/accounts/check") {
@@ -142,6 +161,7 @@ const outboundService = async request => {
   }
   if (request.url === "https://auth.openai.com/api/accounts/deviceauth/usercode") {
     assert.deepEqual(await request.json(), { client_id: deviceClient });
+    if(duringDeviceStart) { const action=duringDeviceStart;duringDeviceStart=null;await action(); }
     return deviceStartDenied ? new Response('<html>blocked</html>', {status:403, headers:{'content-type':'text/html'}}) : Response.json({device_auth_id:'fixture-device-private', user_code:'FIXTURE-CODE', interval:1});
   }
   if (request.url === "https://auth.openai.com/api/accounts/deviceauth/token") {
@@ -285,7 +305,7 @@ try {
   assert.equal(directDocument.status,200,"direct authenticated requests can receive a fresh document nonce");
   assert.ok((await directDocument.text()).includes('id="complete"'));
   assert.deepEqual(await oidcEvents(),[],"HTML authentication and nonce validation never access Credentials");
-  for (const path of ["connections", "connections/create", "connections/rename", "overview"]) {
+  for (const path of ["connections", "connections/create", "connections/rename", "connections/delete", "overview"]) {
     await assertError(await oidcSend(null, {label:'Denied'}, path),401,"access_denied");
     await assertError(await oidcSend(osOtherToken, {}, path),403,"admin_denied");
   }
@@ -316,7 +336,7 @@ try {
   const freshProduction = await production.fetch(origin + "/gatekeeper/subscription/start", { method: "POST", headers: headers(), body: JSON.stringify({ planUsageConfirmed: true }) });
   assert.equal(freshProduction.status, 200);
   assert.equal(new URL((await freshProduction.json()).authorizationUrl).searchParams.get("client_id"), "dynamic_agent_client", "unmodified production starts a new namespace grant");
-  for (const path of ["/gatekeeper/subscription/overview", "/gatekeeper/subscription/connections/rename", "/gatekeeper/subscription/connections", "/gatekeeper/subscription/connections/create", "/gatekeeper/subscription/device/start", "/gatekeeper/subscription/device/check", "/gatekeeper/subscription/select", "/gatekeeper/subscription/account-info", "/gatekeeper/subscription", "/gatekeeper/subscription/status", "/gatekeeper/subscription/start", "/gatekeeper/subscription/complete", "/gatekeeper/subscription/refresh"]) {
+  for (const path of ["/gatekeeper/subscription/connections/delete", "/gatekeeper/subscription/overview", "/gatekeeper/subscription/connections/rename", "/gatekeeper/subscription/connections", "/gatekeeper/subscription/connections/create", "/gatekeeper/subscription/device/start", "/gatekeeper/subscription/device/check", "/gatekeeper/subscription/select", "/gatekeeper/subscription/account-info", "/gatekeeper/subscription", "/gatekeeper/subscription/status", "/gatekeeper/subscription/start", "/gatekeeper/subscription/complete", "/gatekeeper/subscription/refresh"]) {
     await assertError(await send(path, {}, { headers: { origin, "content-type": "application/json" } }), 401, "access_denied");
   }
   for (const token of ["invalid", accessJwt({ iss: "https://wrong.example.invalid" }), accessJwt({ aud: "wrong" }), accessJwt({ exp: 1 }), accessJwt({ nbf: Math.floor(Date.now() / 1000) + 3600 }), accessJwt({}, openaiKeys), accessJwt({ exp: undefined }), accessJwt({ sub: undefined }), accessJwt({ iat: "invalid" }), accessJwt({ iat: Math.floor(Date.now() / 1000) + 3600 })]) {
@@ -324,6 +344,8 @@ try {
   }
   await assertError(await send("/gatekeeper/subscription/start", {}, { headers: headers({ "cf-access-jwt-assertion": accessJwt({ email: other }) }) }), 403, "admin_denied");
   for (const requestOrigin of ["https://cross.example.invalid", "null", ""]) await assertError(await send("/gatekeeper/subscription/start", {}, { headers: headers({ origin: requestOrigin }) }), 403, "origin_denied");
+  for (const requestOrigin of ["https://cross.example.invalid", "null", ""]) await assertError(await send("/gatekeeper/subscription/connections/delete", {accountId:"owner",confirmed:true}, {headers:headers({origin:requestOrigin})}),403,"origin_denied");
+  await assertError(await send("/gatekeeper/subscription/connections/delete", {accountId:"owner",confirmed:true}, {headers:headers({"cf-access-jwt-assertion":accessJwt({email:other})})}),403,"admin_denied");
   const missingOrigin = headers(); delete missingOrigin.origin;
   await assertError(await send("/gatekeeper/subscription/complete", {}, { headers: missingOrigin }), 403, "origin_denied");
   await assertError(await send("/gatekeeper/subscription/start", {}, { headers: headers({ "content-type": "text/plain" }) }), 415, "json_required");
@@ -337,6 +359,8 @@ try {
   await assertError(await send("/gatekeeper/subscription/status", { accountId: "arbitrary" }), 400, "body_invalid");
   await assertError(await send("/gatekeeper/subscription/refresh", { email }), 400, "body_invalid");
   await assertError(await send("/gatekeeper/subscription/overview", { accountId: "owner" }), 400, "body_invalid");
+  for(const input of [{},{accountId:'owner'},{accountId:'owner',confirmed:true,extra:true},{accountId:'arbitrary',confirmed:true}]) await assertError(await send('/gatekeeper/subscription/connections/delete',input),400,'body_invalid');
+  for(const confirmed of [false,null,'true']) await assertError(await send('/gatekeeper/subscription/connections/delete',{accountId:'owner',confirmed}),400,'subscription_delete_confirmation_required');
   for(const input of [{label:'Only label'},{accountId:'owner'},{accountId:'owner',label:'Name',extra:true},{accountId:'arbitrary',label:'Name'}]) await assertError(await send('/gatekeeper/subscription/connections/rename',input),400,'body_invalid');
   for(const label of ['', 'x'.repeat(129), '한'.repeat(43), 'bad\nlabel', 'bad\u0085label']) await assertError(await send('/gatekeeper/subscription/connections/rename',{accountId:'owner',label}),400,'subscription_label_invalid');
   await assertError(await send('/gatekeeper/subscription/connections/create',{label:'bad\u0085label'}),400,'subscription_label_invalid');
@@ -781,6 +805,82 @@ try {
   await put({adminAccounts:[...storedInventory,...Array.from({length:20-storedInventory.length},(_,i)=>({id:`account-00000000-0000-0000-0000-${String(i+10).padStart(12,'0')}`,label:'Inventory fixture'}))]});
   await assertError(await send('/gatekeeper/subscription/connections/create',{label:'Over limit'}),400,'account_limit');
   await put({adminAccounts:storedInventory});
+  const remove=accountId=>send('/gatekeeper/subscription/connections/delete',{accountId,confirmed:true});
+  for(const accountId of ['owner',excludedId,unknownId]) await assertError(await remove(accountId),400,'subscription_account_not_found');
+  const beforeDelete=await inspect(), siblingBeforeDelete=await targetState(connectionA);
+  for(const reference of [
+    {accountSelection:{mode:'fixed',defaultAccountId:connectionB,poolAccountIds:[]}},
+    {accountSelection:{mode:'round_robin',defaultAccountId:'owner',poolAccountIds:[connectionB]}},
+    {defaultAccountId:connectionB},
+    {threadIndex:[{threadKey:'synthetic-pinned-thread',accountId:connectionB}]},
+  ]) {
+    await put({accountSelection:fixedSelection,defaultAccountId:'owner',threadIndex:null,...reference});
+    await assertError(await remove(connectionB),400,'subscription_account_in_use');
+    assert.deepEqual(await targetState(connectionB),namedB,'routing references prevent any target disconnect');
+    assert.deepEqual((await inspect()).adminAccounts,storedInventory);
+  }
+  await put({accountSelection:beforeDelete.accountSelection??null,defaultAccountId:beforeDelete.defaultAccountId??null,threadIndex:beforeDelete.threadIndex??null});
+  const pendingConnection=(await create('Pending connection')).id;
+  const pendingAuthorization=await start(pendingConnection);
+  duringToken=async()=>{
+    await assertError(await remove(pendingConnection),400,'oauth_busy');
+    assert.ok((await inspect()).adminAccounts.some(row=>row.id===pendingConnection),'busy SIWC completion keeps its catalog row');
+  };
+  assert.equal((await send('/gatekeeper/subscription/complete',{accountId:pendingConnection,callbackUrl:callback(pendingAuthorization)})).status,200);
+  duringDeviceStart=async()=>{
+    await assertError(await remove(pendingConnection),400,'codex_image_auth_busy');
+    assert.ok((await inspect()).adminAccounts.some(row=>row.id===pendingConnection),'busy Codex work keeps its catalog row');
+  };
+  assert.equal((await send('/gatekeeper/subscription/device/start',{accountId:pendingConnection,planUsageConfirmed:true})).status,200);
+  await start(pendingConnection);
+  const pendingState=await targetState(pendingConnection);
+  assert.ok(pendingState.pending && pendingState.codexImagePending,'both pending protocols are covered by deletion');
+  await targetObject(connectionB).fetch('https://fixture.invalid/fixture-info',{method:'POST',body:JSON.stringify({failStatus:true})});
+  for(const accountId of [pendingConnection,connectionB,connectionA]) {
+    if(accountId===connectionA) {
+      const refresh=await targetObject(accountId).fetch('https://fixture.invalid/fixture-late-refresh',{method:'POST',body:JSON.stringify({accountId})});
+      assert.equal(refresh.status,400);assert.deepEqual(await refresh.json(),{error:'subscription_account_not_found'});
+    }
+    else {
+      const deletion=await remove(accountId);assert.equal(deletion.status,200,await deletion.clone().text());const connections=(await deletion.json()).connections;
+      assert.ok(!connections.some(row=>row.id===accountId),'deleted row leaves the catalog even when a sibling status is unavailable');
+      for(const row of connections)assert.deepEqual(Object.keys(row).sort(),['id','label'],'deletion returns safe inventory metadata without another status probe');
+    }
+    const deleted=await targetState(accountId);
+    for(const key of ['credential','pending','identity','registration','codexImagePending','codexImageProfile','codexRegistration','subscriptionProvider','subscriptionAccountInfo','subscriptionAccountHistory']) assert.equal(deleted[key],undefined,'deletion removes only the selected account authentication and quota records');
+    assert.equal(deleted.subscriptionDeleted,true);
+    const outboundBeforeLate=outboundUrls.length;
+    for(const kind of ['siwc','codex','image']) {
+      const late=()=>targetObject(accountId).fetch('https://fixture.invalid/fixture-auth',{method:'POST',body:JSON.stringify({kind})});
+      if(kind==='siwc')await assert.rejects(late,/subscription_account_not_found/);
+      else { const denied=await late();assert.equal(denied.status,400);assert.deepEqual(await denied.json(),{error:'subscription_account_not_found'}); }
+    }
+    assert.equal(outboundUrls.length,outboundBeforeLate,'already-resolved late starts cannot make provider requests');
+    const beforeRemovedEvents=(await events()).length;
+    for(const [path,input] of [['status',{}],['start',{planUsageConfirmed:true}],['complete',{callbackUrl:'http://127.0.0.1:1455/auth/callback?synthetic'}],['refresh',{}],['device/start',{planUsageConfirmed:true}],['device/check',{}],['select',{provider:'codex'}],['account-info',{}]]) await assertError(await send('/gatekeeper/subscription/'+path,{accountId,...input}),400,'subscription_account_not_found');
+    assert.equal((await privateClient.fetch('https://fixture.invalid/infer',{method:'POST',body:JSON.stringify(wire({subscriptionAccountId:accountId}))})).status,403);
+    assert.equal((await events()).length,beforeRemovedEvents,'removed IDs fail before target access');
+    if(accountId!==connectionA)assert.deepEqual(await targetState(connectionA),siblingBeforeDelete,'deleting another connection preserves its sibling');
+  }
+  const ownerAfterDelete=await inspect();
+  assert.deepEqual(ownerAfterDelete,{...beforeDelete,adminAccounts:storedInventory.filter(row=>![connectionA,connectionB].includes(row.id))},'deletion preserves owner, general inventory, routing and unrelated state');
+  for(const action of ['account.selection','account.default']) {
+    const raceConnection=(await create('Routing race')).id,authorization=await start(raceConnection);
+    assert.equal((await send('/gatekeeper/subscription/complete',{accountId:raceConnection,callbackUrl:callback(authorization)})).status,200);
+    let enteredStatus,releaseStatus;
+    const statusEntered=new Promise(resolve=>enteredStatus=resolve),statusReleased=new Promise(resolve=>releaseStatus=resolve);
+    duringStatus=async()=>{enteredStatus();await statusReleased;};
+    await targetObject(raceConnection).fetch('https://fixture.invalid/fixture-info',{method:'POST',body:JSON.stringify({holdStatus:true})});
+    const input=action==='account.selection'?{mode:'fixed',defaultAccountId:raceConnection,poolAccountIds:[]}:{id:raceConnection};
+    const selection=owner.fetch('https://fixture.invalid/fixture-selection',{method:'POST',body:JSON.stringify({action,input})});
+    await statusEntered;
+    try { assert.equal((await remove(raceConnection)).status,200); }
+    finally { releaseStatus(); }
+    const result=await selection;assert.equal(result.status,404);assert.deepEqual(await result.json(),{error:'account_not_found'});
+    const state=await inspect();assert.ok(!state.adminAccounts.some(row=>row.id===raceConnection));
+    assert.deepEqual(state.accountSelection,ownerAfterDelete.accountSelection,'a stale health check cannot route to a deleted account');
+    assert.equal(state.defaultAccountId,ownerAfterDelete.defaultAccountId);
+  }
   deviceAccount=deviceAccountBeforeNamed;deviceSubject=deviceSubjectBeforeNamed;
   const browserConnections={connections:[{id:'owner',label:'owner',provider:'siwc',ready:true}]};
   const browserFlush = () => new Promise(resolve => setImmediate(resolve));
@@ -934,14 +1034,15 @@ try {
     assert.equal(deviceDom.window.localStorage.length,0); assert.equal(deviceDom.window.sessionStorage.length,0);
     assert.deepEqual(JSON.parse(devicePosts.find(item=>item.url.endsWith('/device/start')).options.body),{planUsageConfirmed:true});
   } finally {deviceDom.window.close();}
-  const namedPosts=[], namedTimers=new Map(), held=new Map();let namedTimerId=0;
+  const namedPosts=[], namedTimers=new Map(), held=new Map(), confirmations=[];let namedTimerId=0, deleteConfirmed=false;
   const browserA='account-00000000-0000-0000-0000-000000000011',browserB='account-00000000-0000-0000-0000-000000000012',browserC='account-00000000-0000-0000-0000-000000000013';
   const namedConnections=[{id:'owner',label:'owner',provider:'siwc',ready:true},{id:browserA,label:'Connection A',provider:'siwc',ready:true},{id:browserB,label:'Connection B',provider:'siwc',ready:true}];
   const namedStatus=id=>({...ready,provider:'siwc',codexInferenceReady:true,identity:{...ready.identity,email:id+'@example.invalid'}});
   const hold=(path,id)=>{let release;const promise=new Promise(resolve=>release=resolve);held.set(path+':'+id,promise);return release;};
   const flush=()=>new Promise(resolve=>setImmediate(resolve));
   const namedDom=new JSDOM(subscriptionPage('synthetic-nonce','access',true),{url:origin+'/gatekeeper/subscription#add',runScripts:'dangerously',beforeParse(window){
-    window.setTimeout=(callback,delay)=>{const id=++namedTimerId;namedTimers.set(id,{callback,delay});return id;};window.clearTimeout=id=>namedTimers.delete(id);
+    window.confirm=message=>{confirmations.push(message);return deleteConfirmed;};
+    window.setTimeout=(callback,delay)=>{const id=++namedTimerId;namedTimers.set(id,{callback:()=>{namedTimers.delete(id);return callback();},delay});return id;};window.clearTimeout=id=>namedTimers.delete(id);
     window.fetch=async(url,options)=>{
       const input=JSON.parse(options.body),id=input.accountId??'owner',path=url.slice('/gatekeeper/subscription/'.length);namedPosts.push({path,input});
       let value;
@@ -949,6 +1050,7 @@ try {
       if(waiting){held.delete(path+':'+id);value=await waiting;}
       else if(path==='connections') value={connections:namedConnections};
       else if(path==='connections/create'){namedConnections.push({id:browserC,label:input.label,provider:'siwc',ready:false});value={id:browserC,connections:namedConnections};}
+      else if(path==='connections/delete'){namedConnections.splice(namedConnections.findIndex(item=>item.id===id),1);value={connections:namedConnections};}
       else if(path==='account-info')value={account:{status:'available',workspaceName:id},usage:{status:'unavailable'}};
       else if(path==='device/start')value=browserAttempt;
       else value=namedStatus(id);
@@ -984,6 +1086,26 @@ try {
     namedDom.window.location.hash='connection='+browserA;namedDom.window.dispatchEvent(new namedDom.window.HashChangeEvent('hashchange'));await flush();assert.equal(document.getElementById('connection-select').value,browserA,'known hash selects its connection');
     namedDom.window.location.hash='connection='+unknownId;namedDom.window.dispatchEvent(new namedDom.window.HashChangeEvent('hashchange'));await flush();assert.equal(document.getElementById('connection-select').value,browserA,'unknown hash does not select a target');
     select(browserB);await flush();document.getElementById('refresh').click();await flush();assert.equal(document.getElementById('connection-select').value,browserB,'refresh preserves the current editor selection');
+    for(const timer of [...namedTimers.values()])if(timer.delay===0)timer.callback();await flush();
+    select('owner');await flush();assert.equal(document.getElementById('delete-connection').hidden,true,'owner cannot be deleted from the page');
+    select(browserB);await flush();assert.equal(document.getElementById('delete-connection').hidden,false);
+    document.getElementById('delete-connection').click();await flush();
+    assert.equal(namedPosts.some(item=>item.path==='connections/delete'),false,'cancelled deletion sends no request');
+    assert.ok(confirmations[0].includes('Connection B'),'confirmation names the selected connection');
+    document.getElementById('device-approval').checked=true;document.getElementById('device-start').dispatchEvent(new Event('submit',{cancelable:true}));await flush();
+    const releaseDeletePoll=hold('device/check',browserB),deletePoll=[...namedTimers.values()][0].callback();await flush();
+    const releaseDeleteInfo=hold('account-info',browserB);document.getElementById('metadata-refresh').click();await flush();
+    const releaseDeleteStart=hold('start',browserB);document.getElementById('approval').checked=true;document.getElementById('start').dispatchEvent(new Event('submit',{cancelable:true}));
+    document.getElementById('callback').value='discard-on-delete';deleteConfirmed=true;document.getElementById('delete-connection').click();await flush();
+    releaseDeletePoll(namedStatus(browserB));await deletePoll;
+    releaseDeleteInfo({account:{status:'available',workspaceName:'Deleted workspace'},usage:{status:'unavailable'}});
+    releaseDeleteStart({authorizationUrl:'https://auth.openai.com/api/accounts/authorize?deleted'});await flush();
+    assert.deepEqual(namedPosts.find(item=>item.path==='connections/delete').input,{accountId:browserB,confirmed:true});
+    assert.equal(document.getElementById('connection-select').value,'owner','successful deletion selects the protected owner');
+    assert.ok(![...document.getElementById('connection-select').options].some(option=>option.value===browserB));
+    assert.equal(namedTimers.size,0);assert.equal(document.getElementById('callback').value,'');
+    assert.equal(document.getElementById('device').hidden,true);assert.equal(document.getElementById('authorization').hidden,true);
+    assert.ok(!document.getElementById('identity').textContent.includes(browserB));assert.ok(!document.getElementById('account-info').textContent.includes('Deleted workspace'),'late deleted-account responses stay cleared');
     assert.equal(namedDom.window.localStorage.length,0);assert.equal(namedDom.window.sessionStorage.length,0);
   }finally{namedDom.window.close();}
   for (const denialStatus of [401,403]) for (const failureAt of ['initial', 'start', 'complete']) {
@@ -1060,5 +1182,5 @@ try {
   assert.equal(oidcConfig.vars.CF_ACCESS_AUD, undefined);
   assert.deepEqual(oidcConfig.durable_objects, config.durable_objects);
   assert.deepEqual(oidcConfig.migrations, config.migrations);
-  console.log(JSON.stringify({ result: "PASS", nativeRuntime: "Miniflare/workerd", checks: ["Access signature/issuer/audience/expiry/admin", "OIDC private session and exact issuer/subject/email pins before Credentials", "OIDC no-form bootstrap, authenticated document GET and matching CSP nonce, same-tab 401 recovery and 403 denial", "same-origin JSON bounded requests before DO", "automatic verified SIWC identity, legacy pins and concurrent registration conflicts", "independent encrypted SIWC and Codex completion in either order", "device empty/arbitrary pending objects, interval, expiry and terminal denial or invalid response", "explicit active transport and unavailable selection fails closed", "account cache privacy and in-flight selection change", "both login choices and bounded device polling with navigation guard", "automatic metadata and manual callback UI with no browser persistence", "owner plus two named isolated connections, bounded catalog and explicit private inference selectors", "rendered add/list/switch ignores late status, login, metadata and device-poll responses"], tokenCalls, inferenceCalls, temporaryBuild: work }));
+  console.log(JSON.stringify({ result: "PASS", nativeRuntime: "Miniflare/workerd", checks: ["Access signature/issuer/audience/expiry/admin", "OIDC private session and exact issuer/subject/email pins before Credentials", "OIDC no-form bootstrap, authenticated document GET and matching CSP nonce, same-tab 401 recovery and 403 denial", "same-origin JSON bounded requests before DO", "automatic verified SIWC identity, legacy pins and concurrent registration conflicts", "independent encrypted SIWC and Codex completion in either order", "device empty/arbitrary pending objects, interval, expiry and terminal denial or invalid response", "explicit active transport and unavailable selection fails closed", "account cache privacy and in-flight selection change", "both login choices and bounded device polling with navigation guard", "automatic metadata and manual callback UI with no browser persistence", "owner plus two named isolated connections, bounded catalog and explicit private inference selectors", "confirmed named deletion removes connected/pending credentials and quota, blocks busy/routing references, preserves owner/siblings, rejects removed IDs and late login starts", "rendered add/list/switch/delete ignores late status, login, metadata and device-poll responses"], tokenCalls, inferenceCalls, temporaryBuild: work }));
 } finally { await mf.dispose(); }

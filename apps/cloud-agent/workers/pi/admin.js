@@ -316,6 +316,7 @@ export class ManagementCredentials extends DurableObject {
           }
           requireValue(candidates.includes(selected), "account_not_connected", 409);
         }
+        requireValue(selected === "owner" || (await transaction.get("adminAccounts") || []).some(row => row.id === selected), "account_not_found", 404);
         if (identity.accountId === undefined && preferenceKey && !await transaction.get("threadStart:" + identity.threadKey)) await transaction.put("threadStart:" + identity.threadKey, { operationId: "staff-default:" + identity.threadKey, target: { channelId: identity.channelId, groupId: identity.groupId, rootMessageId: identity.rootMessageId }, intent: permittedSettings(this.env, preferenceKey ? await transaction.get(preferenceKey) : null) });
         const at = new Date().toISOString(); rows.push({ channelId: identity.channelId, groupId: identity.groupId, rootMessageId: identity.rootMessageId, threadKey: identity.threadKey, accountId: selected, firstObservedAt: at, lastObservedAt: at });
       }
@@ -367,6 +368,8 @@ export class ManagementCredentials extends DurableObject {
       requireValue(input.poolAccountIds.every(id => connected.includes(id)) && (input.mode === "fixed" ? connected.includes(input.defaultAccountId) : input.poolAccountIds.length > 0), "account_not_connected", 409);
       const selection = { mode: input.mode, defaultAccountId: input.defaultAccountId, poolAccountIds: input.poolAccountIds };
       await this.ctx.storage.transaction(async transaction => {
+        const inventory = await transaction.get("adminAccounts") || [];
+        requireValue([selection.defaultAccountId, ...selection.poolAccountIds].every(id => id === "owner" || inventory.some(row => row.id === id)), "account_not_found", 404);
         const previous = await transaction.get("accountSelection") || { mode: "fixed", defaultAccountId: await transaction.get("defaultAccountId") || "owner", poolAccountIds: [] };
         await transaction.put({ accountSelection: selection, defaultAccountId: selection.defaultAccountId });
         if (JSON.stringify(previous) !== JSON.stringify(selection)) await transaction.put("accountCursor", 0);
@@ -393,7 +396,7 @@ export class ManagementCredentials extends DurableObject {
       else if (action === "account.refresh") { result = await credentials.refreshStatus(); }
       else if (action === "account.complete") { string(input.callbackUrl, 16384, "callback_url_invalid"); result = await credentials.complete(input.callbackUrl); }
       else if (action === "account.disconnect") { requireValue(input.confirmed === true, "disconnect_confirmation_required"); result = await credentials.disconnect(); }
-      else if (action === "account.default") { const status = await credentials.status(); requireValue(status.connected && status.inferenceReady, "account_not_connected", 409); const selection = { ...await this.accountSelection(), mode: "fixed", defaultAccountId: input.id }; await this.ctx.storage.transaction(async transaction => { await transaction.put({ defaultAccountId: input.id, accountSelection: selection, accountCursor: 0 }); }); result = { ...selection, appliesTo: "new_roots_only" }; }
+      else if (action === "account.default") { const status = await credentials.status(); requireValue(status.connected && status.inferenceReady, "account_not_connected", 409); const selection = { ...await this.accountSelection(), mode: "fixed", defaultAccountId: input.id }; await this.ctx.storage.transaction(async transaction => { const inventory = await transaction.get("adminAccounts") || []; requireValue([selection.defaultAccountId, ...selection.poolAccountIds].every(id => id === "owner" || inventory.some(row => row.id === id)), "account_not_found", 404); await transaction.put({ defaultAccountId: input.id, accountSelection: selection, accountCursor: 0 }); }); result = { ...selection, appliesTo: "new_roots_only" }; }
       else throw new AdminError("action_not_found", 404);
       await this.audit(actor, action, input.id); return result;
     }

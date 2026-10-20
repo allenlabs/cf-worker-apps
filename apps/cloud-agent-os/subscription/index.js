@@ -6,7 +6,7 @@ const encoder = new TextEncoder();
 const jwks = new Map();
 const BODY_LIMIT = 20480;
 const emailPattern = /^[^\s@\x00-\x1f]+@[^\s@\x00-\x1f]+\.[^\s@\x00-\x1f]+$/;
-const safeErrors = new Set(["account_identity_policy_pinned", "account_provider_conflict", "account_registration_changed", "account_selection_changed", "oauth_busy", "selected_email_mismatch", "selected_user_mismatch", "selected_workspace_mismatch", "oauth_attempt_expired", "callback_state_mismatch", "authorization_declined", "plan_usage_scope_missing", "callback_uri_mismatch", "callback_parameter_repeated", "callback_issuer_mismatch", "callback_registration_incomplete", "callback_client_mismatch", "subscription_account_not_found", "subscription_label_invalid", "subscription_configuration_invalid", "account_limit"]);
+const safeErrors = new Set(["account_identity_policy_pinned", "account_provider_conflict", "account_registration_changed", "account_selection_changed", "oauth_busy", "selected_email_mismatch", "selected_user_mismatch", "selected_workspace_mismatch", "oauth_attempt_expired", "callback_state_mismatch", "authorization_declined", "plan_usage_scope_missing", "callback_uri_mismatch", "callback_parameter_repeated", "callback_issuer_mismatch", "callback_registration_incomplete", "callback_client_mismatch", "subscription_account_not_found", "subscription_label_invalid", "subscription_delete_confirmation_required", "subscription_account_in_use", "subscription_configuration_invalid", "account_limit"]);
 
 class RequestError extends Error {
   constructor(code, status = 400) { super(code); this.status = status; }
@@ -120,10 +120,16 @@ export default {
         const nonce = suppliedNonce ?? crypto.randomUUID().replaceAll("-", "");
         return secure(new Response(subscriptionPage(nonce, config.mode, config.dual), { headers: { "content-type": "text/html; charset=utf-8" } }), nonce);
       }
-      if (!["/gatekeeper/subscription/overview", "/gatekeeper/subscription/connections/rename", "/gatekeeper/subscription/connections", "/gatekeeper/subscription/connections/create", "/gatekeeper/subscription/status", "/gatekeeper/subscription/start", "/gatekeeper/subscription/complete", "/gatekeeper/subscription/refresh", "/gatekeeper/subscription/device/start", "/gatekeeper/subscription/device/check", "/gatekeeper/subscription/select", "/gatekeeper/subscription/account-info"].includes(url.pathname)) throw new RequestError("not_found", 404);
+      if (!["/gatekeeper/subscription/overview", "/gatekeeper/subscription/connections/delete", "/gatekeeper/subscription/connections/rename", "/gatekeeper/subscription/connections", "/gatekeeper/subscription/connections/create", "/gatekeeper/subscription/status", "/gatekeeper/subscription/start", "/gatekeeper/subscription/complete", "/gatekeeper/subscription/refresh", "/gatekeeper/subscription/device/start", "/gatekeeper/subscription/device/check", "/gatekeeper/subscription/select", "/gatekeeper/subscription/account-info"].includes(url.pathname)) throw new RequestError("not_found", 404);
       if (request.method !== "POST") throw new RequestError("method_not_allowed", 405);
       if (request.headers.get("origin") !== config.origin) throw new RequestError("origin_denied", 403);
       const supplied = await body(request);
+      if (url.pathname === "/gatekeeper/subscription/connections/delete") {
+        if (Object.keys(supplied).length !== 2 || !Object.hasOwn(supplied, "accountId") || !Object.hasOwn(supplied, "confirmed") || typeof supplied.accountId !== "string" || !/^(?:owner|account-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/.test(supplied.accountId)) throw new RequestError("body_invalid");
+        if (supplied.confirmed !== true) throw new RequestError("subscription_delete_confirmation_required");
+        const owner = env.Credentials.getByName("owner");
+        return secure(Response.json({ connections: await owner.deleteSubscriptionConnection(supplied) }));
+      }
       if (url.pathname === "/gatekeeper/subscription/overview") {
         if (Object.keys(supplied).length) throw new RequestError("body_invalid");
         return secure(Response.json({ connections: await env.Credentials.getByName("owner").subscriptionOverview() }));

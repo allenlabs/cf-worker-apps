@@ -222,6 +222,28 @@ export function SubscriptionDashboard({ onChanged, availability }: {
     } }
     finally { writeLocked.current = false; if (!controller.signal.aborted) setSaving(false) }
   }
+  const remove = async (connection: SubscriptionConnection) => {
+    const controller = lifetime.current
+    if (!controller || controller.signal.aborted || writeLocked.current || activeRefresh.current.size || authState.current !== 'ready' || connection.id === 'owner') return
+    if (!window.confirm(`Delete subscription "${connection.label}" and its saved login from Cloudflare OS? This cannot be undone. Your provider subscription will remain active.`)) return
+    writeLocked.current = true; setSaving(true)
+    overviewGeneration.current++
+    setSelected(current => current === connection.id ? null : current)
+    let deleted = false
+    try {
+      const saved = await subscriptionPost('connections/delete', { accountId: connection.id, confirmed: true }, parseSaved, controller.signal)
+      if (saved.some(item => item.id === connection.id)) throw new SubscriptionRequestError('invalid')
+      deleted = true
+      if (!controller.signal.aborted) setConnections(current => current.filter(item => item.id !== connection.id))
+      await load(controller.signal)
+      await onChanged()
+    } catch (error) { if (!controller.signal.aborted) {
+      report(error)
+      if (deleted && authState.current === 'ready') setNotice('Subscription deleted, but settings could not be reloaded. Reopen Providers to refresh the model choices.')
+      else if (error instanceof SubscriptionRequestError && error.kind === 'request') setNotice('Deletion could not be confirmed. It may be blocked by an active sign-in or another service using this connection. Reopen Providers to check the saved list.')
+    } }
+    finally { writeLocked.current = false; if (!controller.signal.aborted) setSaving(false) }
+  }
   const disabled = auth !== 'ready'
   return <div className="space-y-4">
     <p className="text-sm text-kumo-subtle">Codex supplies these subscription quotas. They are separate from Cloudflare OS token counts. Compare each connection and quota window separately; percentages are never added together.</p>
@@ -253,7 +275,8 @@ export function SubscriptionDashboard({ onChanged, availability }: {
       </form>
       <Reading connection={connection} now={now} threshold={threshold} error={rowErrors[connection.id] ?? (connection.error === 'account_selection_changed' ? 'The account changed while reading its saved quota. Refresh this connection.' : connection.error ? 'This connection could not be read. Other connections remain available.' : undefined)} />
       <div className="mt-3 flex flex-wrap gap-2"><button className={SUBSCRIPTION_BUTTON} type="button" aria-label={`Refresh quota for ${connection.label}`} disabled={disabled || saving || refreshing.size > 0 || connection.provider !== 'codex'} onClick={() => { void refresh([connection.id]) }}>{refreshing.has(connection.id) ? 'Refreshing…' : 'Refresh quota'}</button>
-        <button className={SUBSCRIPTION_BUTTON} type="button" aria-expanded={selected === connection.id} onClick={() => setSelected(selected === connection.id ? null : connection.id)} disabled={disabled || saving || refreshing.size > 0}>Connect {connection.label}</button></div>
+        <button className={SUBSCRIPTION_BUTTON} type="button" aria-expanded={selected === connection.id} onClick={() => setSelected(selected === connection.id ? null : connection.id)} disabled={disabled || saving || refreshing.size > 0}>Connect {connection.label}</button>
+        {connection.id !== 'owner' && <button className={SUBSCRIPTION_BUTTON} type="button" aria-label={`Delete ${connection.label}`} disabled={disabled || saving || refreshing.size > 0} onClick={() => { void remove(connection) }}>Delete</button>}</div>
       {selected === connection.id && <SubscriptionDashboardConnect key={connection.id} accountId={connection.id} label={connection.label} onChanged={async () => { const signal = lifetime.current?.signal; if (signal) await load(signal); await onChanged() }} onError={report} />}
     </article>)}</div>
     <form className="flex flex-wrap items-end gap-2 border-t border-kumo-line pt-4" onSubmit={event => { event.preventDefault(); void write('connections/create', event.currentTarget) }}>

@@ -133,7 +133,10 @@ quick-model selection. The owner keeps its existing physical-model profile ID. A
 `subscription-account-<UUID>` profile IDs, while inference still uses the configured physical model.
 Admin's Providers card shows each connection's name and readiness with its own availability toggle.
 The native subscription panel compares saved quota windows, reset times, credits, and lookup status.
-Administrators add, rename, and connect subscriptions inside the OS. The standalone protected setup
+Administrators add, rename, connect, and delete named subscriptions inside the OS. Deletion requires
+confirmation, disconnects the saved connection, and removes its model choice. The owner connection
+and connections referenced by Channel Talk conversations or account selection are protected. Deleting
+a connection does not cancel its provider subscription. The standalone protected setup
 page remains available for recovery. Unconnected objects remain visible;
 inference requires that object's own connected grant and never falls back to another connection.
 

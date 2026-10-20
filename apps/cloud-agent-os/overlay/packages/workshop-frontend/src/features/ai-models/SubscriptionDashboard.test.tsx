@@ -42,6 +42,7 @@ describe('native subscription dashboard', () => {
       if (path === 'overview') return response({ connections: saved })
       if (path === 'account-info') { const result = reading(42); saved = saved.map(item => item.id === body.accountId ? { ...item, snapshot: result, lastAttempt: result } : item); return response(result) }
       if (path === 'connections/rename') { saved = saved.map(item => item.id === body.accountId ? { ...item, label: String(body.label) } : item); return response({ connections: saved }) }
+      if (path === 'connections/delete') { saved = saved.filter(item => item.id !== body.accountId); return response({ connections: saved }) }
       if (path === 'connections/create') { const next = { ...connection(2), label: String(body.label), ready: false, snapshot: null, lastAttempt: null, history: [] }; saved.push(next); return response({ id: next.id, connections: saved }) }
       return response(status())
     }
@@ -124,6 +125,75 @@ describe('native subscription dashboard', () => {
     expect(new Headers(requests[0]?.input.headers).get('authorization')).toBe('Bearer synthetic-first-session')
     expect(new Headers(requests[1]?.input.headers).get('authorization')).toBe('Bearer synthetic-second-session')
     expect(requests.every(item => item.input.credentials === 'same-origin' && item.input.redirect === 'error')).toBe(true)
+  })
+
+  it('requires confirmation to delete a named connection and never offers deletion of the owner', async () => {
+    const confirm = vi.spyOn(globalThis, 'confirm').mockReturnValue(false)
+    await render()
+    expect(Array.from(document.querySelectorAll('button')).some(item => item.getAttribute('aria-label') === 'Delete Research')).toBe(false)
+    await click('Delete Connection 1')
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Connection 1'))
+    expect(requests.some(item => item.path === 'connections/delete')).toBe(false)
+    expect(document.querySelector('article[aria-label="Subscription Connection 1"]')).not.toBeNull()
+  })
+
+  it('deletes the confirmed stable ID, stops its open setup, and reloads model choices', async () => {
+    vi.spyOn(globalThis, 'confirm').mockReturnValue(true)
+    await render()
+    await click('Connect Connection 1')
+    const setupRequest = requests.find(item => item.path === 'status')
+    expect(setupRequest?.input.signal?.aborted).toBe(false)
+    await click('Delete Connection 1')
+    expect(requests.find(item => item.path === 'connections/delete')?.body).toEqual({ accountId: id(1), confirmed: true })
+    expect(setupRequest?.input.signal?.aborted).toBe(true)
+    expect(document.querySelector('article[aria-label="Subscription Connection 1"]')).toBeNull()
+    expect(document.querySelector('article[aria-label="Subscription Research"]')).not.toBeNull()
+    expect(onChanged).toHaveBeenCalledOnce()
+  })
+
+  it('keeps a connection after deletion fails and prevents duplicate deletion requests', async () => {
+    vi.spyOn(globalThis, 'confirm').mockReturnValue(true)
+    const pending = deferred<Response>()
+    const normal = route
+    route = async (path, body) => path === 'connections/delete' ? pending.promise : normal(path, body)
+    await render()
+    await click('Delete Connection 1')
+    expect(button('Delete Connection 1').disabled).toBe(true)
+    await click('Delete Connection 1')
+    expect(requests.filter(item => item.path === 'connections/delete')).toHaveLength(1)
+    await act(async () => pending.resolve(response({ error: 'subscription_account_in_use' }, 400)))
+    expect(document.querySelector('article[aria-label="Subscription Connection 1"]')).not.toBeNull()
+    expect(document.body.textContent).toContain('could not be confirmed')
+    expect(document.body.textContent).not.toContain('subscription_account_in_use')
+    expect(onChanged).not.toHaveBeenCalled()
+    expect(button('Delete Connection 1').disabled).toBe(false)
+  })
+
+  it('does not report deletion success when the returned catalog still contains the selected ID', async () => {
+    vi.spyOn(globalThis, 'confirm').mockReturnValue(true)
+    route = async () => response({ connections: saved })
+    await render()
+    await click('Delete Connection 1')
+    expect(document.querySelector('article[aria-label="Subscription Connection 1"]')).not.toBeNull()
+    expect(document.body.textContent).toContain('invalid response')
+    expect(onChanged).not.toHaveBeenCalled()
+  })
+
+  it('preserves sign-in recovery if authorization expires while reloading after deletion', async () => {
+    vi.spyOn(globalThis, 'confirm').mockReturnValue(true)
+    const normal = route
+    let deleted = false
+    route = async (path, body) => {
+      if (path === 'overview' && deleted) return response({ error: 'unauthorized' }, 401)
+      const result = await normal(path, body)
+      if (path === 'connections/delete') deleted = true
+      return result
+    }
+    await render()
+    await click('Delete Connection 1')
+    expect(document.body.textContent).toContain('Sign in to Cloudflare OS')
+    expect(document.body.textContent).not.toContain('Subscription deleted, but settings could not be reloaded')
+    expect(document.querySelector('article')).toBeNull()
   })
 
   it('refreshes a row and all Codex connections with at most three concurrent provider requests', async () => {

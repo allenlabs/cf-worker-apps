@@ -223,6 +223,23 @@ export class Credentials extends ManagementCredentials {
     });
   }
 
+  async deleteSubscriptionConnection(input) {
+    requireCondition(input && typeof input === "object" && !Array.isArray(input) && Object.keys(input).length === 2 && Object.hasOwn(input, "accountId") && Object.hasOwn(input, "confirmed") && input.confirmed === true, "subscription_delete_confirmation_required");
+    requireCondition(typeof input.accountId === "string" && /^account-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(input.accountId), "subscription_account_not_found");
+    const result = await this.ctx.blockConcurrencyWhile(async () => {
+      try {
+        await this.resolveSubscriptionAccount(input.accountId);
+        const [rows, selection, defaultAccountId, threads] = await Promise.all([this.accountInventory(), this.ctx.storage.get("accountSelection"), this.ctx.storage.get("defaultAccountId"), this.ctx.storage.get("threadIndex")]);
+        requireCondition(selection?.defaultAccountId !== input.accountId && !selection?.poolAccountIds?.includes(input.accountId) && defaultAccountId !== input.accountId && !(threads || []).some(row => row.accountId === input.accountId), "subscription_account_in_use");
+        await this.env.Credentials.getByName(input.accountId).disconnect(true);
+        await this.ctx.storage.put("adminAccounts", rows.filter(row => row.id !== input.accountId));
+        return (await this.#subscriptionInventory()).map(({ id, label }) => ({ id, label }));
+      } catch (error) { return error; }
+    });
+    if (result instanceof Error) throw result;
+    return result;
+  }
+
   async subscriptionOverview() {
     return Promise.all((await this.#subscriptionInventory()).map(async ({ id, label }) => {
       try { return { id, label, ...await (id === "owner" ? this : this.env.Credentials.getByName(id)).subscriptionConnectionOverview() }; }
@@ -273,10 +290,10 @@ export class Credentials extends ManagementCredentials {
   }
 
   async verifyCodexImageIdentity(token, clientId, expectedEmailHash, explicitPin) { return identityFromToken(token, clientId, undefined, explicitPin === undefined ? await this.ctx.storage.get("registration") : explicitPin, expectedEmailHash); }
-  startCodex(intent) { requireCondition(intent === undefined || (intent === "connect" && this.env.SUBSCRIPTION_INFERENCE_PROVIDER === "auto"), "account_intent_invalid"); requireCondition(!this.completing && !this.refreshing, "oauth_busy"); return codexImageStart(this, true, intent === "connect"); }
+  async startCodex(intent) { requireCondition(intent === undefined || (intent === "connect" && this.env.SUBSCRIPTION_INFERENCE_PROVIDER === "auto"), "account_intent_invalid"); requireCondition(!this.completing && !this.refreshing, "oauth_busy"); requireCondition(!await this.ctx.storage.get("subscriptionDeleted"), "subscription_account_not_found"); return codexImageStart(this, true, intent === "connect"); }
   checkCodex() { return codexImageCheck(this, this.verifyCodexImageIdentity.bind(this)); }
   codexAccess(forceRefresh = false) { subscriptionInferenceProvider(this.env.SUBSCRIPTION_INFERENCE_PROVIDER); return codexImageAccess(this, this.verifyCodexImageIdentity.bind(this), forceRefresh, true); }
-  startCodexImages() { return codexImageStart(this); }
+  async startCodexImages() { requireCondition(!await this.ctx.storage.get("subscriptionDeleted"), "subscription_account_not_found"); return codexImageStart(this); }
   checkCodexImages() { return codexImageCheck(this, this.verifyCodexImageIdentity.bind(this)); }
   codexImageAccess() { return codexImageAccess(this, this.verifyCodexImageIdentity.bind(this)); }
   disconnectCodexImages() { return codexImageDisconnect(this); }
@@ -292,13 +309,21 @@ export class Credentials extends ManagementCredentials {
     });
   }
 
-  async disconnect() {
+  async disconnect(subscriptionDelete = false) {
     requireCondition(!this.completing && !this.refreshing, "oauth_busy");
-    return this.ctx.blockConcurrencyWhile(async () => {
-      await codexImageDisconnect(this, true);
-      await this.ctx.storage.delete(["credential", "pending"]);
-      return this.status();
+    const result = await this.ctx.blockConcurrencyWhile(async () => {
+      try {
+        await codexImageDisconnect(this, true);
+        await this.ctx.storage.delete(["credential", "pending"]);
+        if (subscriptionDelete === true) {
+          await this.ctx.storage.delete(["identity", "registration", "codexRegistration", "subscriptionProvider", "subscriptionAccountInfo", "subscriptionAccountHistory"]);
+          await this.ctx.storage.put("subscriptionDeleted", true);
+        }
+        return subscriptionDelete === true ? undefined : await this.status();
+      } catch (error) { return error; }
     });
+    if (result instanceof Error) throw result;
+    return result;
   }
   async native(method, params, accessToken, signal) {
     let response, envelope;
@@ -379,6 +404,7 @@ export class Credentials extends ManagementCredentials {
     const automaticIdentity = accountIntent === "connect" && (!pinned || pinned.identitySelection === "oauth");
     if (!automaticIdentity) await this.expectedEmailHash();
     return this.ctx.blockConcurrencyWhile(async () => {
+      requireCondition(!await this.ctx.storage.get("subscriptionDeleted"), "subscription_account_not_found");
       await this.wrappingKey();
       let host = await this.ctx.storage.get("host");
       if (!host) { host = `urn:uuid:${crypto.randomUUID()}`; await this.ctx.storage.put("host", host); }
@@ -526,6 +552,7 @@ export class Credentials extends ManagementCredentials {
     requireCondition(!this.completing, "oauth_busy");
     if (this.refreshing) return this.refreshing;
     const credential = await this.open(await this.ctx.storage.get("credential"));
+    requireCondition(!await this.ctx.storage.get("subscriptionDeleted"), "subscription_account_not_found");
     requireCondition(credential, "login_required");
     requireCondition(credential.scopes?.includes("resource.invoke") && credential.scopes.includes("chatgpt.tokens.use.direct"), "plan_usage_scope_missing");
     requireCondition(!this.completing, "oauth_busy");
@@ -540,7 +567,11 @@ export class Credentials extends ManagementCredentials {
         requireCondition(registration?.clientId === credential.clientId, "account_registration_changed");
         verified = await identityFromToken(token.id_token, credential.clientId, undefined, registration, registration.identitySelection === "oauth" ? null : await this.expectedEmailHash());
       }
-      await this.ctx.storage.put({ credential: await this.seal({ ...renewed, clientId: credential.clientId }), ...(verified ? { identity: await this.seal(verified.metadata) } : {}) });
+      const stored = { credential: await this.seal({ ...renewed, clientId: credential.clientId }), ...(verified ? { identity: await this.seal(verified.metadata) } : {}) };
+      await this.ctx.storage.transaction(async transaction => {
+        requireCondition(!await transaction.get("subscriptionDeleted"), "subscription_account_not_found");
+        await transaction.put(stored);
+      });
       return renewed.access;
     })();
     try { return await this.refreshing; }
