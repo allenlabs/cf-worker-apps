@@ -13,7 +13,7 @@ function token(t) {
   process.env.CLOUDFLARE_API_TOKEN = 'synthetic-unit-test-token';
   t.after(() => { if (before === undefined) delete process.env.CLOUDFLARE_API_TOKEN; else process.env.CLOUDFLARE_API_TOKEN = before; });
 }
-function transport({ trace = [], bindings = [visible], active = [{ percentage: 100, version_id: activeId }], latest = activeId, settingsResponse } = {}) {
+function transport({ trace = [], bindings = [visible], active = [{ percentage: 100, version_id: activeId }], latest = activeId, settingsResponse, deploymentsResponse, versionsResponse } = {}) {
   return async (url, init) => {
     const parsed = new URL(url), endpoint = parsed.pathname.split('/').at(-1), name = parsed.pathname.split('/').at(-2);
     trace.push(`${name}:${endpoint}`);
@@ -22,8 +22,8 @@ function transport({ trace = [], bindings = [visible], active = [{ percentage: 1
     assert.equal(init.method, 'GET'); assert.equal(init.redirect, 'error');
     assert.ok(init.signal instanceof AbortSignal); assert.ok(init.headers.Authorization.startsWith('Bearer '));
     if (endpoint === 'settings') return settingsResponse ? settingsResponse() : success({ bindings });
-    if (endpoint === 'deployments') return success({ deployments: [{ versions: active }] });
-    assert.equal(endpoint, 'versions'); return success({ items: [{ id: latest }] });
+    if (endpoint === 'deployments') return deploymentsResponse ? deploymentsResponse() : success({ deployments: [{ versions: active }] });
+    assert.equal(endpoint, 'versions'); return versionsResponse ? versionsResponse() : success({ items: [{ id: latest }] });
   };
 }
 
@@ -63,6 +63,44 @@ test('opaque props are not claimed as read, and omitted optional source identity
   token(t);
   await verifyInheritedServiceBindings({ accountId, worker: { ...worker, preservedServiceBindings: [{ binding: 'CONTEXT', service: 'synthetic-context', props: { opaque: true } }] },
     fetchImpl: transport() });
+});
+
+test('explicit null errors on successful Versions responses preserves identity and active-version checks', async t => {
+  token(t);
+  const versionsResponse = () => Response.json({ success: true, errors: null, messages: null, result: { items: [{ id: activeId }] } });
+  let writes = 0;
+  assert.equal(await uploadVerifiedWorker({ accountId, worker, configPath: 'synthetic.json', fetchImpl: transport({ versionsResponse }),
+    execute: async () => { writes++; return uploadedId; } }), uploadedId);
+  assert.equal(writes, 1);
+  for (const result of [{ items: [{ id: uploadedId }] }, { items: [{ id: 'invalid-uuid' }] }, { items: [] }, { items: {} }, {}]) {
+    await assert.rejects(uploadVerifiedWorker({ accountId, worker, configPath: 'synthetic.json',
+      fetchImpl: transport({ versionsResponse: () => Response.json({ success: true, errors: null, messages: null, result }) }),
+      execute: async () => { writes++; return uploadedId; } }), /ARTIFACT_INHERITANCE_LATEST_NOT_ACTIVE/);
+  }
+  assert.equal(writes, 1);
+});
+
+test('nullable Versions compatibility rejects missing, malformed and reported errors or unsuccessful responses', async t => {
+  token(t);
+  const result = { items: [{ id: activeId }] };
+  for (const envelope of [
+    { success: true, result }, { success: true, errors: {}, result }, { success: true, errors: '', result },
+    { success: true, errors: [{ code: 1000 }], result }, { success: false, errors: null, result },
+    { success: true, errors: null, result: null },
+  ]) {
+    let writes = 0;
+    await assert.rejects(uploadVerifiedWorker({ accountId, worker, configPath: 'synthetic.json',
+      fetchImpl: transport({ versionsResponse: () => Response.json(envelope) }), execute: async () => { writes++; return uploadedId; } }),
+    /ARTIFACT_INHERITANCE_RESPONSE_INVALID/);
+    assert.equal(writes, 0);
+  }
+  await assert.rejects(verifyInheritedServiceBindings({ accountId, worker,
+    fetchImpl: transport({ settingsResponse: () => Response.json({ success: true, errors: null, result: { bindings: [visible] } }) }) }),
+  /ARTIFACT_INHERITANCE_RESPONSE_INVALID/);
+  await assert.rejects(verifyInheritedServiceBindings({ accountId, worker,
+    fetchImpl: transport({ deploymentsResponse: () => Response.json({ success: true, errors: null,
+      result: { deployments: [{ versions: [{ percentage: 100, version_id: activeId }] }] } }) }) }),
+  /ARTIFACT_INHERITANCE_RESPONSE_INVALID/);
 });
 
 test('HTTP denial stops without another endpoint, credential path or write', async t => {

@@ -10,7 +10,7 @@ const check = (value, code) => assert(value, code);
 const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 
-async function inheritanceRead(url, fetchImpl) {
+async function inheritanceRead(url, fetchImpl, allowNullErrors = false) {
   check(Boolean(process.env.CLOUDFLARE_API_TOKEN), 'ARTIFACT_INHERITANCE_TOKEN_REQUIRED');
   const response = await fetchImpl(url, { method: 'GET', redirect: 'error', signal: AbortSignal.timeout(30_000),
     headers: { Authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}`, Accept: 'application/json' } });
@@ -34,7 +34,9 @@ async function inheritanceRead(url, fetchImpl) {
   } finally { reader.releaseLock(); }
   let envelope;
   try { envelope = JSON.parse(text); } catch { throw new Error('ARTIFACT_INHERITANCE_JSON_INVALID'); }
-  check(object(envelope) && envelope.success === true && Array.isArray(envelope.errors) && envelope.errors.length === 0 && object(envelope.result), 'ARTIFACT_INHERITANCE_RESPONSE_INVALID');
+  // Cloudflare/api-schemas#47: successful Workers Versions responses can contain explicit null.
+  check(object(envelope) && envelope.success === true && ((Array.isArray(envelope.errors) && envelope.errors.length === 0)
+    || (allowNullErrors && envelope.errors === null)) && object(envelope.result), 'ARTIFACT_INHERITANCE_RESPONSE_INVALID');
   return envelope.result;
 }
 
@@ -59,7 +61,7 @@ export async function verifyInheritedServiceBindings({ accountId, worker, fetchI
   check(object(active) && Array.isArray(active.versions) && active.versions.length === 1
     && object(active.versions[0]) && active.versions[0].percentage === 100 && uuid(active.versions[0].version_id), 'ARTIFACT_INHERITANCE_ACTIVE_VERSION_UNVERIFIED');
   // Legacy inherit selects the latest uploaded version, which may be staged and inactive.
-  const versions = await inheritanceRead(`${base}/versions`, fetchImpl);
+  const versions = await inheritanceRead(`${base}/versions`, fetchImpl, true);
   check(Array.isArray(versions.items) && object(versions.items[0]) && uuid(versions.items[0].id)
     && versions.items[0].id === active.versions[0].version_id, 'ARTIFACT_INHERITANCE_LATEST_NOT_ACTIVE');
 }
