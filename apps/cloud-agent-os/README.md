@@ -146,6 +146,12 @@ administrators manage shared provider and model names. Users name their own cust
 model selection IDs, and physical provider/model routing. Existing chat messages retain their saved
 author names; subsequent model choices and turns use the current names.
 
+New chats start with **Choose provider**, then **Choose model**. The model menu lists only the
+selected connection's models; changing providers clears the model choice and keeps the draft.
+Saved defaults do not select a provider or model automatically. Send and Enter require a model
+choice, or an explicit **No agent** choice. Connections retain separate identities even when their
+names and physical models match. Existing chats keep their current model, including hidden models.
+
 Opening the subscription panel reads saved state without querying every provider. Row refresh and
 bounded refresh-all reuse the existing account-scoped cache. A failed lookup retains the last
 successful reading and shows its age and failure separately. Recorded quota history contains at most

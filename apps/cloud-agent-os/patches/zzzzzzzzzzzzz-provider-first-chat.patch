@@ -1,0 +1,1001 @@
+diff --git a/packages/workshop-backend/__tests__/ai-gateway.test.ts b/packages/workshop-backend/__tests__/ai-gateway.test.ts
+--- a/packages/workshop-backend/__tests__/ai-gateway.test.ts
++++ b/packages/workshop-backend/__tests__/ai-gateway.test.ts
+@@ -31,7 +31,7 @@
+     const id = "claude-fable-5-1";
+     const models = new GatewayModels(gateway, { ...DEFAULT_ADMIN_CONFIG,
+       providerDisplayNames: { anthropic: "Research" }, modelDisplayNames: { [id]: "Writing" } });
+-    const profile = { type: "agent", id, name: "Writing", providerDisplayName: "Research" };
++    const profile = { type: "agent", id, name: "Writing", providerDisplayName: "Research", provider: { id: "gateway:anthropic", name: "Research", source: "Organization" } };
+     expect(models.get(id)?.name).toBe("Writing");
+     expect(models.list().find(model => model.id === id)).toEqual(profile);
+     expect(models.resolve(id)?.profile).toEqual(profile);
+@@ -219,7 +219,7 @@
+   it("still resolves a hidden model that it doesn't list", () => {
+     const record = gatewayModels().resolve("gpt-6-sol");
+     expect(record).toStrictEqual({
+-      profile: { type: "agent", id: "gpt-6-sol", name: "GPT-6 Sol" },
++      profile: { type: "agent", id: "gpt-6-sol", name: "GPT-6 Sol", provider: { id: "gateway:openai", name: "OpenAI", source: "Organization" } },
+       config: { provider: "openai", model: "gpt-6-sol", apiToken: "" },
+     });
+     expect(getModel(gatewayEnv(), record!.config, USER).model.id).toBe("gpt-6-sol");
+@@ -295,7 +295,7 @@
+     const models = gatewayModels({ addedModels: ADDED });
+     const record = models.resolve("@cf/test/added");
+     expect(record).toStrictEqual({
+-      profile: { type: "agent", id: "@cf/test/added", name: "Added (Workers AI)" },
++      profile: { type: "agent", id: "@cf/test/added", name: "Added (Workers AI)", provider: { id: "gateway:cloudflare", name: "Cloudflare Workers AI", source: "Organization" } },
+       config: {
+         provider: "cloudflare", model: "@cf/test/added", apiToken: "",
+         contextWindow: 100000, outputLimit: 8000,
+@@ -364,7 +364,7 @@
+     const added = gatewayModels(
+         { addedModels: [{ provider: "anthropic", id, name: "Odd", contextWindow: 1000 }] });
+     expect(added.get(id)).toMatchObject({ mode: "enabled", defaultMode: "enabled", added: true });
+-    expect(added.resolve(id)?.profile).toEqual({ type: "agent", id, name: "Odd" });
++    expect(added.resolve(id)?.profile).toEqual({ type: "agent", id, name: "Odd", provider: { id: "gateway:anthropic", name: "Anthropic", source: "Organization" } });
+   });
+ 
+   describe("settings", () => {
+diff --git a/packages/workshop-backend/__tests__/subscription-models.test.ts b/packages/workshop-backend/__tests__/subscription-models.test.ts
+--- a/packages/workshop-backend/__tests__/subscription-models.test.ts
++++ b/packages/workshop-backend/__tests__/subscription-models.test.ts
+@@ -30,7 +30,7 @@
+ const MODEL = "gpt-6.1-sol",
+   USER = "one@example.invalid",
+   OTHER = "two@example.invalid";
+-const PROFILE = { type: "agent" as const, id: MODEL, name: "Codex subscription", providerDisplayName: "Codex subscription" };
++const PROFILE = { type: "agent" as const, id: MODEL, name: "Codex subscription", providerDisplayName: "Codex subscription", provider: { id: "subscription:owner", name: "Codex subscription", source: "Subscription" } };
+ const CONFIG: AiModelConfig = { provider: "openai", model: MODEL, apiToken: "", transport: "subscription", subscriptionAccountId: "owner" };
+ const PERSONAL = { provider: "anthropic", model: "personal-model", apiToken: "fixture-api-token",
+   apiUrl: "https://personal.example.invalid", extraHeaders: { "X-Personal-Key": "fixture-header" } } satisfies AiModelConfig;
+@@ -123,6 +123,16 @@
+       runInDurableObject(stub, (_u, state) => f(new AdminSettings(state, deployment))),
+   };
+ }
++describe("provider identities", () => {
++  it("keeps equally named subscription accounts distinct across identical physical models", async () => {
++    const model = await getGatewayModels(managed({}, [OWNER, { ...CONNECTIONS[1], label: OWNER.label }]), USER);
++    const listed = model!.list();
++    expect(listed.map(profile => profile.provider?.id)).toEqual(["subscription:owner", `subscription:${ACCOUNT_A}`]);
++    expect(new Set(listed.map(profile => profile.provider?.name)).size).toBe(1);
++    expect(model!.resolve(A)?.config.model).toBe(MODEL);
++  });
++});
++
+ describe("admin-managed subscription models", () => {
+   it("separates canonical connection labels from model aliases and permits renaming disabled logical IDs", async () => {
+     const fixture = settings(CONNECTIONS);
+@@ -138,7 +148,7 @@
+       });
+       await admin.setSubscriptionModelEnabled(true, ACCOUNT_A);
+       const active = new SubscriptionModels(fixture.deployment, admin.getAdminConfig(), USER, CONNECTIONS);
+-      expect(active.resolve(A)?.profile).toEqual({ type: "agent", id: A, name: "Research writer", providerDisplayName: "Research" });
++      expect(active.resolve(A)?.profile).toEqual({ type: "agent", id: A, name: "Research writer", providerDisplayName: "Research", provider: { id: `subscription:${ACCOUNT_A}`, name: "Research", source: "Subscription" } });
+       expect(active.resolve(A)?.config).toEqual({ ...CONFIG, subscriptionAccountId: ACCOUNT_A });
+       await expect(admin.setModelDisplayName("unknown-model", "Other")).rejects.toThrow("No such");
+       await admin.setModelDisplayName(A, null);
+diff --git a/packages/workshop-backend/__tests__/user-models.test.ts b/packages/workshop-backend/__tests__/user-models.test.ts
+--- a/packages/workshop-backend/__tests__/user-models.test.ts
++++ b/packages/workshop-backend/__tests__/user-models.test.ts
+@@ -4,7 +4,7 @@
+ import type { AiModelConfig } from "@gadgets/workshop-shared/api";
+ import { serializeAdminConfig } from "../src/admin-config.js";
+ import { DEFAULT_ADMIN_CONFIG, type AdminConfig } from "../src/storage-schema/admin-settings-storage.js";
+-import type { UserAiModelRecord } from "../src/storage-schema/user-storage.js";
++import { makeUserStorage, type UserAiModelRecord } from "../src/storage-schema/user-storage.js";
+ import type { UserDurableObject } from "../src/user.js";
+ 
+ declare module "cloudflare:workers" {
+@@ -14,6 +14,7 @@
+ }
+ 
+ const PROFILE = { type: "agent" as const, id: "my-model", name: "My Model" };
++const PERSONAL_PROVIDER = { id: `personal:${PROFILE.id}`, name: "OpenAI", source: `Personal · ${PROFILE.name}` };
+ const CONFIG: AiModelConfig = {
+   provider: "openai",
+   model: "my-model",
+@@ -37,7 +38,7 @@
+   };
+   const stored = (id: string) => inDo(async u =>
+       (u as unknown as { storage: { aiModels: { get(id: string): unknown } } }).storage.aiModels.get(id));
+-  await user.addModel(PROFILE, CONFIG);
++  await user.addModel({ ...PROFILE, provider: { id: "gateway:forged", name: "Forged", source: "Organization" } }, CONFIG);
+   return { user, stored, inDo };
+ }
+ 
+@@ -45,9 +46,10 @@
+   it("renames the owner's provider and model while retaining IDs and withheld secrets on every read", async () => {
+     const { user, stored, inDo } = await userWithModel();
+     const { config } = await user.getModelConfig(PROFILE.id);
+-    await user.updateModel({ ...PROFILE, name: "  My renamed model  ", providerDisplayName: "Untrusted" },
++    await user.updateModel({ ...PROFILE, name: "  My renamed model  ", providerDisplayName: "Untrusted", provider: { id: "forged", name: "Forged", source: "Organization" } },
+       { ...config, providerDisplayName: "  Research provider  " });
+-    const canonical = { ...PROFILE, name: "My renamed model", providerDisplayName: "Research provider" };
++    const canonical = { ...PROFILE, name: "My renamed model", providerDisplayName: "Research provider",
++      provider: { ...PERSONAL_PROVIDER, name: "Research provider", source: "Personal · My renamed model" } };
+     expect((await user.getModelConfig(PROFILE.id)).profile).toEqual(canonical);
+     expect(await inDo(u => u.listModels())).toEqual([canonical]);
+     expect((await inDo(u => u.getChatContext(PROFILE.id))).aiModel?.profile).toEqual(canonical);
+@@ -55,8 +57,33 @@
+     const other = env.TEST_USER.getByName(`user-models-other-${++userCounter}`);
+     await expect(runInDurableObject(other, u => u.getModelConfig(PROFILE.id))).rejects.toThrow("No such");
+     await user.updateModel({ ...canonical, providerDisplayName: "Forged" }, config);
+-    expect((await user.getModelConfig(PROFILE.id)).profile).toEqual({ ...PROFILE, name: canonical.name });
++    expect((await user.getModelConfig(PROFILE.id)).profile).toEqual({ ...PROFILE, name: canonical.name, provider: { ...PERSONAL_PROVIDER, source: `Personal · ${canonical.name}` } });
+     expect((await inDo(u => u.listModels()))[0]).not.toHaveProperty("providerDisplayName");
++  });
++
++  it("keeps personal profiles with the same provider label separate", async () => {
++    const { user, inDo } = await userWithModel();
++    await user.addModel({ ...PROFILE, id: "second-profile" }, CONFIG);
++    const listed = await inDo(user => user.listModels());
++    expect(listed.map(model => model.provider?.id)).toEqual(["personal:my-model", "personal:second-profile"]);
++    expect(listed.map(model => model.provider?.name)).toEqual(["OpenAI", "OpenAI"]);
++  });
++
++  it("projects scoped catalog identity into the chat model list", async () => {
++    const stub = env.TEST_USER.getByName(`scoped-chat-models-${++userCounter}`);
++    await runInDurableObject(stub, async (user, state) => {
++      const storage = makeUserStorage(state.storage);
++      storage.created.put(true);
++      storage.profile.put({ type: "user", id: "scoped-user@example.invalid", name: "Scoped user" });
++      const scope = { kind: "team" as const, teamId: "synthetic-team" };
++      Reflect.set(user, "scopedModels", { catalog: async () => ({ providers: [{
++        id: "synthetic-provider", name: "Team models", scope, refreshedAt: null, error: null,
++        models: [{ id: "logical-model", providerId: "synthetic-provider", modelId: "physical-model",
++          name: "Physical model", providerName: "Team models", scope, source: "openai-compatible" }],
++      }] }) });
++      expect(await user.listModels()).toEqual([{ type: "agent", id: "logical-model", name: "Physical model",
++        providerDisplayName: "Team models", provider: { id: "scoped:synthetic-provider", name: "Team models", source: "Team backend" } }]);
++    });
+   });
+ 
+   it("rejects invalid display names before writing", async () => {
+@@ -169,10 +196,10 @@
+   it("lists and resolves models without the admin config outside AI Gateway mode", async () => {
+     const { inDo } = await userWithModel();
+     await inDo(async user => {
+-      expect(await user.listModels()).toEqual([PROFILE]);
++      expect(await user.listModels()).toEqual([{ ...PROFILE, provider: PERSONAL_PROVIDER }]);
+       await user.setPreferredModel(PROFILE.id);
+       expect((await user.getChatContext(PROFILE.id)).aiModel?.config).toEqual(CONFIG);
+-      expect((await user.getExternalMessageChatContext(null)).aiModel?.profile).toEqual(PROFILE);
++      expect((await user.getExternalMessageChatContext(null)).aiModel?.profile).toEqual({ ...PROFILE, provider: PERSONAL_PROVIDER });
+       await user.deleteModel(PROFILE.id);
+       expect(await user.listModels()).toEqual([]);
+     });
+@@ -430,7 +457,7 @@
+     it("keeps a stored model, which still reads, until its user deletes it",
+         () => withStoredModel(async user => {
+       expect(storedModel(user, MINE.id)).toEqual({ profile: MINE, config: MINE_CONFIG });
+-      expect((await user.getModelConfig(MINE.id)).profile).toEqual(MINE);
++      expect((await user.getModelConfig(MINE.id)).profile).toEqual({ ...MINE, provider: { id: `personal:${MINE.id}`, name: "Anthropic", source: `Personal · ${MINE.name}` } });
+       await expect(user.deleteModel(ENABLED_ID))
+           .rejects.toThrow(new Error('Cannot delete built-in model "Claude Opus 5.5".'));
+ 
+@@ -446,9 +473,9 @@
+       admin.userModelsEnabled = true;
+       expect(await listedIds(user)).toEqual([...offered, MINE.id]);
+       expect((await user.getChatContext(MINE.id)).aiModel)
+-          .toEqual({ profile: MINE, config: MINE_CONFIG });
++          .toEqual({ profile: { ...MINE, provider: { id: `personal:${MINE.id}`, name: "Anthropic", source: `Personal · ${MINE.name}` } }, config: MINE_CONFIG });
+       expect(await user.getPreferredModel()).toBe(MINE.id);
+-      expect((await user.getExternalMessageChatContext(null)).aiModel?.profile).toEqual(MINE);
++      expect((await user.getExternalMessageChatContext(null)).aiModel?.profile).toEqual({ ...MINE, provider: { id: `personal:${MINE.id}`, name: "Anthropic", source: `Personal · ${MINE.name}` } });
+       await user.updateModel({ ...MINE, name: "Renamed" }, MINE_CONFIG);
+       expect(storedModel(user, MINE.id)).toMatchObject({ profile: { name: "Renamed" } });
+     }));
+diff --git a/packages/workshop-backend/src/ai-gateway.ts b/packages/workshop-backend/src/ai-gateway.ts
+--- a/packages/workshop-backend/src/ai-gateway.ts
++++ b/packages/workshop-backend/src/ai-gateway.ts
+@@ -1,6 +1,6 @@
+ import {
+   AdminGatewayProvider, AdminModel, AiChatAuthorInfo, AiModelConfig, AiModelProvider, GatewayModel,
+-  GatewayModelMode, HTTPS_ONLY_PROVIDERS, ReasoningLevel, SUGGESTED_MODELS,
++  GatewayModelMode, HTTPS_ONLY_PROVIDERS, ReasoningLevel, SUGGESTED_MODELS, AI_MODEL_PROVIDER_LABELS,
+ } from "@gadgets/workshop-shared/api";
+ import { readAdminConfig } from "./admin-config.js";
+ import type { AdminConfig } from "./storage-schema/admin-settings-storage.js";
+@@ -260,6 +260,7 @@
+     const label = Object.hasOwn(this.#providerDisplayNames, model.provider)
+         ? this.#providerDisplayNames[model.provider] : undefined;
+     return { type: "agent", id: model.id, name: model.name,
++      provider: { id: `gateway:${model.provider}`, name: label ?? AI_MODEL_PROVIDER_LABELS[model.provider], source: "Organization" },
+       ...(label !== undefined && { providerDisplayName: label }) };
+   }
+ 
+diff --git a/packages/workshop-backend/src/subscription-models.ts b/packages/workshop-backend/src/subscription-models.ts
+--- a/packages/workshop-backend/src/subscription-models.ts
++++ b/packages/workshop-backend/src/subscription-models.ts
+@@ -144,7 +144,8 @@
+     if (!this.#authorized) return [];
+     return this.catalog
+       .filter((model) => model.mode === "enabled")
+-      .map(({ id, name, providerDisplayName }) => ({ type: "agent", id, name, providerDisplayName }));
++      .map(({ id, name, providerDisplayName, accountId }) => ({ type: "agent", id, name, providerDisplayName,
++        provider: { id: `subscription:${accountId}`, name: providerDisplayName, source: "Subscription" } }));
+   }
+ 
+   providerCatalog(): AgentProviderCatalog {
+@@ -165,7 +166,8 @@
+     const model = this.get(id);
+     if (!this.#authorized || !model || model.mode === "disabled") return undefined;
+     return {
+-      profile: { type: "agent", id: model.id, name: model.name, providerDisplayName: model.providerDisplayName },
++      profile: { type: "agent", id: model.id, name: model.name, providerDisplayName: model.providerDisplayName,
++        provider: { id: `subscription:${model.accountId}`, name: model.providerDisplayName, source: "Subscription" } },
+       config: { provider: "openai", model: model.modelId, apiToken: "", transport: "subscription",
+         ...(model.catalogSource && model.subscriptionProvider
+           ? { subscriptionProvider: model.subscriptionProvider } : {}),
+diff --git a/packages/workshop-backend/src/user.ts b/packages/workshop-backend/src/user.ts
+--- a/packages/workshop-backend/src/user.ts
++++ b/packages/workshop-backend/src/user.ts
+@@ -2,7 +2,7 @@
+ import type { AgentProviderCatalog } from '@gadgets/workshop-shared/api';
+ import { RpcStub } from "capnweb";
+ import type { AgentSettingsView, AgentSettingsCommand } from '@gadgets/workshop-shared/api';
+-import { GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, RedactedAiModelConfig, CollaboratorRole, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, GadgetMetadata, BlueprintMetadata, BlueprintLibrarySummary, BlueprintSource, BlueprintUserSummary, BLUEPRINT_SCREENSHOT_R2_PREFIX, GatekeeperVendorInfo, OutputSummary, ListOutputsResult, AUTH_ERROR_CODES, createAuthError, ConnectFlowStart, validateCommitEmail, validateDisplayName } from '@gadgets/workshop-shared/api';
++import { GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, RedactedAiModelConfig, CollaboratorRole, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, GadgetMetadata, BlueprintMetadata, BlueprintLibrarySummary, BlueprintSource, BlueprintUserSummary, BLUEPRINT_SCREENSHOT_R2_PREFIX, GatekeeperVendorInfo, OutputSummary, ListOutputsResult, AUTH_ERROR_CODES, createAuthError, ConnectFlowStart, validateCommitEmail, validateDisplayName, AI_MODEL_PROVIDER_LABELS } from '@gadgets/workshop-shared/api';
+ import { Gatekeeper, GatekeeperUser, GatekeeperUserVerifier, GatekeeperVendor, AccountDescription, VendorDescription, GatekeeperConnectCallback, ConnectHandoff, SupportedResource, ResourceConfiguratorFrame, AppUiContext, GatekeeperUiFrame } from "@gadgets/workshop-shared/gatekeeper";
+ import { shouldAutoProvisionAccount, ambientGatekeeperMode } from "./provisioning-policy.js";
+ import { CloudflareGatekeeperUser } from "@gadgets/workshop-shared/cloudflare-gatekeeper";
+@@ -70,8 +70,10 @@
+ /** Project every personal-model read from its owner's config, never a supplied author label. */
+ function personalModelRecord(record: UserAiModelRecord): UserAiModelRecord {
+   const { transport, subscriptionAccountId, subscriptionProvider, scopedProviderId, ...config } = record.config;
+-  const { providerDisplayName, ...profile } = record.profile;
++  const { providerDisplayName, provider, ...profile } = record.profile;
+   return { config, profile: { ...profile,
++    provider: { id: `personal:${profile.id}`, name: config.providerDisplayName ?? AI_MODEL_PROVIDER_LABELS[config.provider],
++      source: `Personal · ${profile.name}` },
+     ...(config.providerDisplayName !== undefined && { providerDisplayName: config.providerDisplayName }) } };
+ }
+ 
+@@ -568,6 +570,9 @@
+     const catalog = await this.scopedModels.catalog();
+     return [...deployment, ...catalog.providers.flatMap(provider => provider.models.map(model => ({
+       type: 'agent' as const, id: model.id, name: model.name, providerDisplayName: model.providerName,
++      provider: { id: `scoped:${provider.id}`, name: provider.name,
++        source: provider.scope.kind === 'organization' ? 'Organization backend'
++          : provider.scope.kind === 'team' ? 'Team backend' : 'Personal backend' },
+     })))];
+   }
+ 
+@@ -649,7 +654,7 @@
+     // deployment's to set on its own models.
+     let {reasoning, compactionInputBudget, behavesLike, capabilities, transport, subscriptionAccountId, subscriptionProvider, scopedProviderId, ...own} = config;
+ 
+-    const { providerDisplayName, ...author } = profile;
++    const { providerDisplayName, provider, ...author } = profile;
+     const { providerDisplayName: label, ...connection } = own;
+     this.storage.aiModels.put({
+       profile: { ...author, type: "agent", name: validateDisplayName(author.name) },
+diff --git a/packages/workshop-frontend/src/ChatInterface.actions.test.tsx b/packages/workshop-frontend/src/ChatInterface.actions.test.tsx
+--- a/packages/workshop-frontend/src/ChatInterface.actions.test.tsx
++++ b/packages/workshop-frontend/src/ChatInterface.actions.test.tsx
+@@ -28,7 +28,6 @@
+   return {
+     ...actual,
+     Dialog: parts,
+-    DropdownMenu: parts,
+     Popover: parts,
+     Tooltip: Pass,
+     useKumoToastManager: () => toasts,
+@@ -342,6 +341,9 @@
+     })
+     await renderChat(server.overseer)
+ 
++    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Select provider"]')!.click())
++    const noAgent = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent === 'No agent')
++    await act(async () => noAgent!.click())
+     const textarea = await sendFromComposer('Summarize the report')
+ 
+     expect(addToast).toHaveBeenCalledExactlyOnceWith(
+diff --git a/packages/workshop-frontend/src/ChatInterface.tsx b/packages/workshop-frontend/src/ChatInterface.tsx
+--- a/packages/workshop-frontend/src/ChatInterface.tsx
++++ b/packages/workshop-frontend/src/ChatInterface.tsx
+@@ -2826,7 +2826,9 @@
+   const [availableModels, setAvailableModels] = useState<AiChatAuthorInfo[]>(
+     [],
+   );
+-  const [selectedModel, setSelectedModel] = useState<string | null>(null);
++  const [selectedModel, setSelectedModel] = useState<string | null | undefined>(null);
++  const [newChatModel, setNewChatModel] = useState<string | null | undefined>(undefined);
++  useEffect(() => { setNewChatModel(undefined); }, [workspaceId]);
+   const [sidebarActiveTab, setSidebarActiveTab] = useState<
+     "chat" | "connections"
+   >("chat");
+@@ -4020,10 +4022,12 @@
+     if (!message && (!attachments || attachments.length === 0)) return;
+ 
+     // Use provided modelId or fall back to selectedModel
+-    const model = modelId !== undefined ? modelId : selectedModel;
++    const model = modelId !== undefined ? modelId : selectedChatId === null ? newChatModel : selectedModel;
++    if (model === undefined) throw new Error("Choose a provider and model before sending.");
+ 
+     try {
+       if (selectedChatId === null) {
++        if (newChatModel === undefined) throw new Error("Choose a provider and model before starting a chat.");
+         // Create a new chat (with optional capsules).
+         const newChatId = await overseer.newChat(
+             message, model, capsules, attachments, formats);
+@@ -4061,10 +4065,14 @@
+   ) => {
+     const message = typeof messageText === "string" ? messageText.trim() : messageText ?? "";
+     if (!message && (!attachments || attachments.length === 0)) return;
+-    const model = modelId !== undefined ? modelId : selectedModel;
++    const model = modelId !== undefined ? modelId : newChatModel;
++    if (model === undefined || newChatModel === undefined || (model !== null && !availableModels.some(choice => choice.id === model))) {
++      throw new Error("Choose a provider and model before starting a chat.");
++    }
+     try {
+       const newChatId = await overseer.newChat(
+           message, model, capsules, attachments, formats);
++      setNewChatModel(undefined);
+       onNavigateToChatRef.current(newChatId);
+     } catch (err) {
+       if (!logRpcFailure("Failed to create new chat:", err, { reportSite: "chat.new" })) {
+@@ -4079,9 +4087,9 @@
+   };
+ 
+   // Handle model change
+-  const handleModelChange = (modelId: string | null) => {
++  const handleModelChange = (modelId: string | null | undefined) => {
+     setSelectedModel(modelId);
+-    persistSelectedModel(modelId);
++    if (modelId !== undefined) persistSelectedModel(modelId);
+   };
+ 
+   // Handle stopping the agent
+@@ -4614,7 +4622,7 @@
+   const handleRetry = async () => {
+     if (
+       selectedChatId === null ||
+-      selectedModel === null
++      selectedModel == null
+     ) {
+       return;
+     }
+@@ -5491,8 +5499,11 @@
+             onSend={handleNewChatSend}
+             isAgentActive={false}
+             models={availableModels}
+-            selectedModel={selectedModel === null ? null : { id: selectedModel }}
+-            onModelChange={handleModelChange}
++            selectedModel={newChatModel == null ? newChatModel : { id: newChatModel }}
++            onModelChange={modelId => {
++              setNewChatModel(modelId);
++              if (modelId !== undefined) persistSelectedModel(modelId);
++            }}
+             showThinkingTraces={showThinkingTraces}
+             onToggleThinkingTraces={toggleShowThinkingTraces}
+             minRows={2}
+@@ -6246,7 +6257,7 @@
+                                       <button
+                                         type="button"
+                                         onClick={() => handleRetry()}
+-                                        disabled={selectedModel === null}
++                                        disabled={selectedModel == null}
+                                         className="flex flex-shrink-0 cursor-pointer items-center gap-1 rounded-md px-1 py-0.5 text-[13px] leading-4 font-medium text-kumo-default transition-[color,opacity,transform] duration-150 ease-out hover:text-kumo-default-hover focus-visible:text-kumo-default-hover focus-visible:outline-none active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
+                                       >
+                                         <ArrowsClockwise size={12} weight="bold" />
+@@ -6497,7 +6508,7 @@
+                     onSend={handleSend}
+                     isAgentActive={isAgentActive}
+                     models={availableModels}
+-                    selectedModel={selectedModel === null ? null : {
++                    selectedModel={selectedModel == null ? selectedModel : {
+                       id: selectedModel,
+                       name: chatAgent?.id === selectedModel ? chatAgent.name : undefined,
+                     }}
+diff --git a/packages/workshop-frontend/src/features/ai-models/modelForm.ts b/packages/workshop-frontend/src/features/ai-models/modelForm.ts
+--- a/packages/workshop-frontend/src/features/ai-models/modelForm.ts
++++ b/packages/workshop-frontend/src/features/ai-models/modelForm.ts
+@@ -1,17 +1,10 @@
+ import type {
+-  AiModelProvider,
+   BuiltInReasoning,
+   ReasoningLevel,
+ } from '@gadgets/workshop-shared/api'
+ 
+ /** Each provider's name as the model forms and lists show it. */
+-export const PROVIDER_LABELS: Record<AiModelProvider, string> = {
+-  anthropic: 'Anthropic',
+-  openai: 'OpenAI',
+-  google: 'Google',
+-  cloudflare: 'Cloudflare Workers AI',
+-  ollama: 'Ollama',
+-}
++export { AI_MODEL_PROVIDER_LABELS as PROVIDER_LABELS } from '@gadgets/workshop-shared/api'
+ 
+ /** Each reasoning level's name as the Models tab shows it. */
+ export const REASONING_LEVEL_LABELS: Record<ReasoningLevel, string> = {
+diff --git a/packages/workshop-frontend/src/features/chat/composer/ChatComposer.test.tsx b/packages/workshop-frontend/src/features/chat/composer/ChatComposer.test.tsx
+--- a/packages/workshop-frontend/src/features/chat/composer/ChatComposer.test.tsx
++++ b/packages/workshop-frontend/src/features/chat/composer/ChatComposer.test.tsx
+@@ -57,6 +57,46 @@
+     sessionStorage.clear();
+     testState.addToast.mockClear();
+     testState.gatekeeperModalProps = undefined;
++  });
++
++  it("blocks click and Enter until provider and model are chosen, preserving the draft", async () => {
++    const onSend = vi.fn<Parameters<typeof ChatComposer>[0]["onSend"]>();
++    const overseer = {} as RpcStub<Overseer>;
++    container = document.createElement("div"); document.body.append(container); root = createRoot(container);
++    const model = { type: "agent" as const, id: "model-a", name: "Model A",
++      provider: { id: "provider-a", name: "Provider A", source: "Organization" } };
++    const render = async (selectedModel: Parameters<typeof ChatComposer>[0]["selectedModel"], models = [model]) => {
++      await act(async () => root!.render(<ChatComposer createCapsuleGatekeeper={async () => null}
++        getOverseer={() => overseer} onSend={onSend} isAgentActive={false} models={models}
++        selectedModel={selectedModel} onModelChange={() => {}} newChat />));
++    };
++    await render(undefined);
++    const textarea = container.querySelector<HTMLTextAreaElement>('[role="combobox"]')!;
++    await act(async () => {
++      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(textarea, "Keep this draft");
++      textarea.dispatchEvent(new Event("input", { bubbles: true }));
++    });
++    const send = container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!;
++    expect(send.disabled).toBe(true);
++    await act(async () => { send.click(); textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
++    expect(onSend).not.toHaveBeenCalled(); expect(textarea.value).toBe("Keep this draft");
++    await render({ id: model.id }, []);
++    await act(async () => textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
++    expect(onSend).not.toHaveBeenCalled(); expect(textarea.value).toBe("Keep this draft");
++    await render({ id: model.id }); expect(send.disabled).toBe(false);
++    await act(async () => textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
++    expect(onSend).toHaveBeenCalledWith("Keep this draft", model.id, undefined, undefined, undefined);
++  });
++
++  it("allows an explicit No agent choice for a new chat", async () => {
++    const onSend = vi.fn();
++    container = document.createElement("div"); document.body.append(container); root = createRoot(container);
++    await act(async () => root!.render(<ChatComposer createCapsuleGatekeeper={async () => null}
++      getOverseer={() => ({} as RpcStub<Overseer>)} onSend={onSend} isAgentActive={false} models={[]}
++      selectedModel={null} onModelChange={() => {}} seedText="Human message" seedNonce={1} newChat />));
++    const textarea = container.querySelector<HTMLTextAreaElement>('[role="combobox"]')!;
++    await act(async () => textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
++    expect(onSend).toHaveBeenCalledWith("Human message", null, undefined, undefined, undefined);
+   });
+ 
+   it("sends on Enter without clearing document changes made while sending", async () => {
+diff --git a/packages/workshop-frontend/src/features/chat/composer/ChatComposer.tsx b/packages/workshop-frontend/src/features/chat/composer/ChatComposer.tsx
+--- a/packages/workshop-frontend/src/features/chat/composer/ChatComposer.tsx
++++ b/packages/workshop-frontend/src/features/chat/composer/ChatComposer.tsx
+@@ -123,7 +123,7 @@
+   isAgentActive: boolean;
+   models: AiChatAuthorInfo[];
+   selectedModel: SelectedModel;
+-  onModelChange: (modelId: string | null) => void;
++  onModelChange: (modelId: string | null | undefined) => void;
+   pendingConsoleLogCount?: number;
+   consoleLogPreview?: string;
+   consoleLogSeverity?: "error" | "warn" | "info";
+@@ -449,8 +449,10 @@
+     setCatalogVersion((current) => current + 1);
+   };
+ 
++  const modelChoiceReady = selectedModel !== undefined &&
++    (!newChat || selectedModel === null || models.some(model => model.id === selectedModel.id && model.provider));
+   const handleSend = async () => {
+-    if (sendInFlightRef.current || isSending || isBlocked) return;
++    if (sendInFlightRef.current || isSending || isBlocked || isAgentActive || !modelChoiceReady) return;
+     setSendHiccup(null);
+     const attachmentsSnapshot = pendingAttachments;
+     const readyAttachments = attachmentsSnapshot
+@@ -647,7 +649,7 @@
+   const hasUnreadyAttachment = pendingAttachments.some(
+     (attachment) => attachment.uploadState !== "ready",
+   );
+-  const canSend = !isSending && !isAgentActive && !isBlocked &&
++  const canSend = modelChoiceReady && !isSending && !isAgentActive && !isBlocked &&
+     (inputValue.trim().length > 0 || selectedSlashCommand !== null || hasReadyAttachment) &&
+     !hasUnreadyAttachment && !isCreatingResource;
+   return (
+@@ -898,8 +900,8 @@
+         />
+ 
+         {/* Footer row: connection/options left, model + send right */}
+-        <div className="flex items-center justify-between gap-1.5 px-3 pb-1.5">
+-          <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
++        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-1.5 px-3 pb-1.5 sm:flex sm:items-center sm:justify-between">
++          <div className="row-start-2 flex min-w-0 items-center gap-1.5 sm:flex-1">
+             <ComposerAddMenu
+               anchorRef={promptCardRef}
+               catalogVersion={catalogVersion}
+@@ -951,9 +953,10 @@
+           </div>
+ 
+           {/* Right actions */}
+-          <div className="ml-auto flex min-w-0 flex-shrink items-center gap-1.5">
++          <div className="contents sm:ml-auto sm:flex sm:min-w-0 sm:flex-shrink sm:items-center sm:gap-1.5">
+               <ComposerModelSelector
+                 models={models}
++                newChat={newChat}
+                 selectedModel={selectedModel}
+                 onModelChange={onModelChange}
+               />
+diff --git a/packages/workshop-frontend/src/features/chat/composer/ComposerModelSelector.test.tsx b/packages/workshop-frontend/src/features/chat/composer/ComposerModelSelector.test.tsx
+--- a/packages/workshop-frontend/src/features/chat/composer/ComposerModelSelector.test.tsx
++++ b/packages/workshop-frontend/src/features/chat/composer/ComposerModelSelector.test.tsx
+@@ -1,67 +1,79 @@
+ // @vitest-environment jsdom
+ /* eslint-disable react/react-in-jsx-scope */
+-
+-import { act } from "react";
++import { act, useState } from "react";
+ import { createRoot, type Root } from "react-dom/client";
+ import { afterEach, describe, expect, it } from "vitest";
+ import type { AiChatAuthorInfo } from "@gadgets/workshop-shared/api";
+ import { ComposerModelSelector, type SelectedModel } from "./ComposerModelSelector";
+ 
+ (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+-
+ const models: AiChatAuthorInfo[] = [
+-  { type: "agent", id: "claude-opus-5-5", name: "Claude Opus 5.5", providerDisplayName: "Research provider" },
++  { type: "agent", id: "account-a-model", name: "Shared physical model", provider: { id: "subscription:a", name: "Research", source: "Subscription" } },
++  { type: "agent", id: "account-a-other", name: "Other model", provider: { id: "subscription:a", name: "Research", source: "Subscription" } },
++  { type: "agent", id: "account-b-model", name: "Shared physical model", provider: { id: "subscription:b", name: "Research", source: "Subscription" } },
++  { type: "agent", id: "personal-model", name: "Personal model", provider: { id: "personal:a", name: "Research", source: "Personal" } },
+ ];
+-
+-let root: Root | null = null;
+-let container: HTMLDivElement | null = null;
+-
+-afterEach(() => {
+-  act(() => root?.unmount());
+-  container?.remove();
+-  root = null;
+-  container = null;
+-});
+-
+-function renderTriggerLabel(selectedModel: SelectedModel): string {
+-  container = document.createElement("div");
+-  document.body.append(container);
+-  root = createRoot(container);
+-  act(() => root!.render(
+-    <ComposerModelSelector
+-      models={models}
+-      selectedModel={selectedModel}
+-      onModelChange={() => {}}
+-    />,
+-  ));
+-  return container.querySelector('[aria-label="Select model"]')!.textContent!;
++let root: Root | undefined;
++let container: HTMLDivElement;
++let changes: Array<string | null | undefined>;
++afterEach(async () => { await act(async () => root?.unmount()); container?.remove(); });
++function Harness({ catalog, initial, newChat = true }: { catalog: AiChatAuthorInfo[]; initial?: SelectedModel; newChat?: boolean }) {
++  const [selected, setSelected] = useState(initial);
++  return <ComposerModelSelector models={catalog} selectedModel={selected} newChat={newChat} onModelChange={id => {
++    changes.push(id); setSelected(id == null ? id : { id });
++  }} />;
+ }
+-
+-describe("ComposerModelSelector", () => {
+-  it("shows provider metadata in the picker and returns the stable selection ID", async () => {
+-    let selected: string | null = null;
+-    renderTriggerLabel({ id: models[0]!.id });
+-    act(() => root!.render(<ComposerModelSelector models={models} selectedModel={null}
+-      onModelChange={id => { selected = id }} />));
+-    const trigger = container!.querySelector<HTMLButtonElement>('[aria-label="Select model"]')!;
+-    await act(async () => trigger.click());
+-    const item = Array.from(document.body.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+-      .find(item => item.textContent?.includes('Research provider'))!;
+-    expect(item.textContent).toContain('Claude Opus 5.5');
+-    await act(async () => item.click());
+-    expect(selected).toBe(models[0]!.id);
++async function render(catalog = models, initial?: SelectedModel, newChat = true) {
++  changes = [];
++  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
++  await act(async () => root!.render(<Harness catalog={catalog} initial={initial} newChat={newChat} />));
++}
++function trigger(label: "provider" | "model") { return container.querySelector<HTMLButtonElement>(`[aria-label="Select ${label}"]`)!; }
++async function open(label: "provider" | "model") { await act(async () => trigger(label).click()); }
++function items() { return Array.from(document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')); }
++async function choose(text: string) {
++  const item = items().find(item => item.textContent === text); expect(item, text).toBeDefined();
++  await act(async () => item!.click());
++}
++describe("provider-first model selection", () => {
++  it("requires a provider, filters its models, and returns logical IDs for matching physical names", async () => {
++    await render(); expect(trigger("model").disabled).toBe(true);
++    await open("provider");
++    expect(items().map(item => item.textContent)).toEqual(["ResearchSubscription 1", "ResearchSubscription 2", "ResearchPersonal", "No agent"]);
++    await choose("ResearchSubscription 2"); expect(changes).toEqual([undefined]);
++    expect(trigger("model").disabled).toBe(false);
++    await open("model"); expect(items().map(item => item.textContent)).toEqual(["Shared physical model"]);
++    await choose("Shared physical model"); expect(changes.at(-1)).toBe("account-b-model");
+   });
+-
+-  it("labels an offered model by its listed name", () => {
+-    expect(renderTriggerLabel({ id: "claude-opus-5-5", name: "Stale name" })).toBe("Claude Opus 5.5");
++  it("clears the old model when changing provider and never picks a replacement", async () => {
++    await render(models, { id: "account-a-model" });
++    await open("provider"); await choose("ResearchPersonal");
++    expect(changes).toEqual([undefined]); expect(trigger("model").textContent).toContain("Choose model");
++    await open("model"); expect(items().map(item => item.textContent)).toEqual(["Personal model"]);
+   });
+-
+-  // An existing chat can still be on a model the picker has since hidden.
+-  it("labels a model the list doesn't offer by the chat's own name for it", () => {
+-    expect(renderTriggerLabel({ id: "claude-opus-5", name: "Claude Opus 5" })).toBe("Claude Opus 5");
++  it("retains a pending provider across relabeling and clears removed models and providers", async () => {
++    await render(); await open("provider"); await choose("ResearchSubscription 1");
++    const renamed = models.map(model => ({ ...model, provider: model.provider && { ...model.provider, name: "Renamed" } }));
++    await act(async () => root!.render(<Harness catalog={renamed} />));
++    expect(trigger("provider").textContent).toContain("Renamed");
++    expect(trigger("model").textContent).toContain("Choose model");
++    await open("model"); await choose("Other model");
++    await act(async () => root!.render(<Harness catalog={renamed.filter(model => model.id !== "account-a-other")} />));
++    expect(changes.at(-1)).toBeUndefined();
++    expect(trigger("provider").textContent).toContain("Renamed");
++    expect(trigger("model").textContent).toContain("Choose model");
++    await act(async () => root!.render(<Harness catalog={[]} />));
++    expect(trigger("provider").textContent).toContain("Choose provider"); expect(trigger("model").disabled).toBe(true);
+   });
+-
+-  it("falls back to the raw id when no name is known", () => {
+-    expect(renderTriggerLabel({ id: "claude-opus-5" })).toBe("claude-opus-5");
++  it("keeps No agent explicit and usable without providers", async () => {
++    await render([]); await open("provider"); await choose("No agent");
++    expect(changes).toEqual([null]); expect(trigger("provider").textContent).toContain("No agent");
++    expect(trigger("model").disabled).toBe(true);
++  });
++  it.each([["Hidden model", "Hidden model"], [undefined, "hidden-id"]])("preserves existing hidden model label %s", async (name, label) => {
++    await render(models, { id: "hidden-id", name }, false);
++    expect(trigger("model").textContent).toContain(label); expect(changes).toEqual([]);
++    await open("provider"); await choose("ResearchSubscription 1");
++    await open("model"); await choose("Other model"); expect(changes.at(-1)).toBe("account-a-other");
+   });
+ });
+diff --git a/packages/workshop-frontend/src/features/chat/composer/ComposerModelSelector.tsx b/packages/workshop-frontend/src/features/chat/composer/ComposerModelSelector.tsx
+--- a/packages/workshop-frontend/src/features/chat/composer/ComposerModelSelector.tsx
++++ b/packages/workshop-frontend/src/features/chat/composer/ComposerModelSelector.tsx
+@@ -1,85 +1,82 @@
++import { useEffect, useState } from "react";
+ import { DropdownMenu } from "@cloudflare/kumo";
+ import { CaretDown, Check } from "@phosphor-icons/react";
+ import type { AiChatAuthorInfo } from "@gadgets/workshop-shared/api";
+ 
+-/**
+- * The composer's model, or null for "No agent". `name` labels it when `models` doesn't offer it,
+- * such as a hidden model an existing chat last ran on; the raw id is shown when that is absent too.
+- */
+-export type SelectedModel = { id: string; name?: string } | null;
++/** Undefined awaits a choice; null explicitly selects No agent. */
++export type SelectedModel = { id: string; name?: string } | null | undefined;
+ 
+ type ComposerModelSelectorProps = {
+   models: readonly AiChatAuthorInfo[];
+   selectedModel: SelectedModel;
+-  onModelChange: (modelId: string | null) => void;
++  onModelChange: (modelId: string | null | undefined) => void;
++  newChat?: boolean;
+ };
+ 
+-export const ComposerModelSelector = ({
+-  models,
+-  selectedModel,
+-  onModelChange,
+-}: ComposerModelSelectorProps) => {
+-  const selectedModelLabel = selectedModel == null
+-    ? "No agent"
+-    : models.find((model) => model.id === selectedModel.id)?.name ??
+-      selectedModel.name ?? selectedModel.id;
++const triggerClass = "group grid h-12 w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] cursor-pointer items-center gap-x-1 rounded-lg px-1 text-left text-[12px] text-kumo-subtle hover:bg-kumo-tint hover:text-kumo-default focus-visible:outline focus-visible:outline-2 disabled:cursor-default disabled:opacity-50 sm:inline-flex sm:h-8 sm:w-auto sm:max-w-[180px] sm:px-2 sm:text-[13px]";
++const itemClass = "!h-auto rounded-xl !px-2 !py-1.5 text-[12px] leading-4 font-normal text-kumo-subtle data-highlighted:bg-kumo-tint/70 data-highlighted:text-kumo-default";
++const contentClass = "themed-floating-shadow-lg !z-[1100] !min-w-[190px] max-w-[min(400px,90vw)] rounded-2xl border border-kumo-line/70 bg-kumo-base p-1";
+ 
+-  return (
++export const ComposerModelSelector = ({ models, selectedModel, onModelChange, newChat = false }: ComposerModelSelectorProps) => {
++  const [pendingProviderId, setPendingProviderId] = useState<string>();
++  const providers = Array.from(new Map(models.flatMap(model => model.provider ? [[model.provider.id, model.provider] as const] : [])).values());
++  const offeredModel = models.find(model => model.id === selectedModel?.id);
++  const selectedProviderId = offeredModel?.provider?.id ?? pendingProviderId;
++  const selectedProvider = providers.find(provider => provider.id === selectedProviderId);
++  const providerModels = models.filter(model => model.provider?.id === selectedProvider?.id && model.provider);
++
++  // Catalog refreshes retain IDs and labels, but never silently replace a removed choice.
++  useEffect(() => {
++    if (pendingProviderId && !providers.some(provider => provider.id === pendingProviderId)) setPendingProviderId(undefined);
++    if (newChat && selectedModel && (!offeredModel || !offeredModel.provider)) onModelChange(undefined);
++  }, [models, selectedModel, newChat, onModelChange, pendingProviderId]);
++
++  const modelLabel = selectedModel === null ? "No agent" : selectedModel === undefined ? "Choose model"
++    : offeredModel?.name ?? selectedModel.name ?? selectedModel.id;
++  const providerLabel = selectedProvider?.name ?? (selectedModel === null ? "No agent" : selectedModel ? "Current provider" : "Choose provider");
++  const providerDetail = (provider: NonNullable<AiChatAuthorInfo["provider"]>) => {
++    const duplicates = providers.filter(candidate => candidate.name === provider.name && candidate.source === provider.source)
++      .toSorted((a, b) => a.id.localeCompare(b.id));
++    return duplicates.length > 1 ? `${provider.source} ${duplicates.findIndex(candidate => candidate.id === provider.id) + 1}` : provider.source;
++  };
++
++  return <div className="col-span-2 row-start-1 grid min-w-0 grid-cols-2 gap-1 sm:flex sm:flex-wrap sm:items-center">
+     <DropdownMenu>
+-      <DropdownMenu.Trigger
+-        render={
+-          <button
+-            type="button"
+-            className="group inline-flex h-10 min-w-0 max-w-[110px] cursor-pointer items-center gap-1.5 rounded-lg px-2 text-[14px] leading-5 text-kumo-subtle transition-[background-color,color,transform] duration-150 ease-out hover:bg-kumo-tint hover:text-kumo-default focus-visible:bg-kumo-tint focus-visible:text-kumo-default focus-visible:outline-none active:scale-[0.97] data-[popup-open]:bg-kumo-tint data-[popup-open]:text-kumo-default sm:h-8 sm:max-w-[180px] sm:text-[13px]"
+-            aria-label="Select model"
+-          >
+-            <span className="min-w-0 truncate">{selectedModelLabel}</span>
+-            <CaretDown
+-              size={12}
+-              weight="bold"
+-              className="flex-shrink-0 text-kumo-inactive transition-transform duration-150 ease-out group-data-[popup-open]:rotate-180"
+-            />
+-          </button>
+-        }
+-      />
+-      <DropdownMenu.Content className="themed-floating-shadow-lg !z-[1100] !min-w-[190px] rounded-2xl border border-kumo-line/70 bg-kumo-base p-1">
+-        {models.map((model) => {
+-          const active = selectedModel?.id === model.id;
+-          return (
+-            <DropdownMenu.Item
+-              key={model.id}
+-              onClick={() => onModelChange(model.id)}
+-              className="!h-auto rounded-xl !px-2 !py-1.5 text-[12px] leading-4 font-normal tracking-[-0.15px] text-kumo-subtle transition-colors data-highlighted:bg-kumo-tint/70 data-highlighted:text-kumo-default"
+-            >
+-              <span className="min-w-0 flex-1 truncate">
+-                {model.name}
+-                {model.providerDisplayName && <span className="ml-2 text-kumo-inactive">{model.providerDisplayName}</span>}
+-              </span>
+-              {active && (
+-                <Check
+-                  size={12}
+-                  weight="bold"
+-                  className="ml-3 flex-shrink-0 text-kumo-inactive"
+-                />
+-              )}
+-            </DropdownMenu.Item>
+-          );
+-        })}
++      <DropdownMenu.Trigger render={<button type="button" className={triggerClass} aria-label="Select provider">
++        <span className="col-start-1 text-[11px] text-kumo-inactive">Provider</span>
++        <span className="col-start-1 row-start-2 min-w-0 truncate">{providerLabel}</span><CaretDown size={12} className="col-start-2 row-span-2 row-start-1" />
++      </button>} />
++      <DropdownMenu.Content className={contentClass}>
++        {providers.map(provider => <DropdownMenu.Item key={provider.id} className={itemClass} onClick={() => {
++          if (provider.id === selectedProviderId && selectedModel !== null) return;
++          setPendingProviderId(provider.id);
++          onModelChange(undefined);
++        }}>
++          <span className="min-w-0 flex-1"><span className="block truncate">{provider.name}</span>
++            <span className="block text-kumo-inactive">{providerDetail(provider)}</span></span>
++          {selectedProviderId === provider.id && <Check size={12} />}
++        </DropdownMenu.Item>)}
++        {providers.length === 0 && <div className="px-2 py-1.5 text-xs text-kumo-inactive">No providers available</div>}
+         <div className="my-1 border-t border-kumo-line/70" />
+-        <DropdownMenu.Item
+-          onClick={() => onModelChange(null)}
+-          className="!h-auto rounded-xl !px-2 !py-1.5 text-[12px] leading-4 font-normal tracking-[-0.15px] text-kumo-subtle transition-colors data-highlighted:bg-kumo-tint/70 data-highlighted:text-kumo-default"
+-        >
+-          <span className="min-w-0 flex-1 truncate">No agent</span>
+-          {selectedModel == null && (
+-            <Check
+-              size={12}
+-              weight="bold"
+-              className="ml-3 flex-shrink-0 text-kumo-inactive"
+-            />
+-          )}
++        <DropdownMenu.Item className={itemClass} onClick={() => { setPendingProviderId(undefined); onModelChange(null); }}>
++          <span className="flex-1">No agent</span>{selectedModel === null && <Check size={12} />}
+         </DropdownMenu.Item>
+       </DropdownMenu.Content>
+     </DropdownMenu>
+-  );
++    <DropdownMenu>
++      <DropdownMenu.Trigger disabled={!selectedProvider} render={<button type="button" className={triggerClass} aria-label="Select model" disabled={!selectedProvider}>
++        <span className="col-start-1 text-[11px] text-kumo-inactive">Model</span>
++        <span className="col-start-1 row-start-2 min-w-0 truncate">{modelLabel}</span><CaretDown size={12} className="col-start-2 row-span-2 row-start-1" />
++      </button>} />
++      <DropdownMenu.Content className={contentClass}>
++        {providerModels.map(model => <DropdownMenu.Item key={model.id} className={itemClass} onClick={() => {
++          setPendingProviderId(selectedProviderId);
++          onModelChange(model.id);
++        }}>
++          <span className="min-w-0 flex-1 truncate">{model.name}</span>
++          {selectedModel?.id === model.id && <Check size={12} />}
++        </DropdownMenu.Item>)}
++      </DropdownMenu.Content>
++    </DropdownMenu>
++  </div>;
+ };
+diff --git a/packages/workshop-frontend/src/homePromptFlow.test.tsx b/packages/workshop-frontend/src/homePromptFlow.test.tsx
+--- a/packages/workshop-frontend/src/homePromptFlow.test.tsx
++++ b/packages/workshop-frontend/src/homePromptFlow.test.tsx
+@@ -14,7 +14,7 @@
+     addToast: vi.fn<(toast: unknown) => void>(),
+     authenticatedApi: { listModels, getPreferredModel, newGadget },
+     getPreferredModel,
+-    selectedModels: [] as Array<string | null>,
++    selectedModels: [] as Array<string | null | undefined>,
+     currentUser: { id: "user-a", name: "User A" },
+     listModels,
+     navigate: vi.fn<(options: unknown) => void>(),
+@@ -45,11 +45,11 @@
+     seedText?: string;
+     seedNonce?: number;
+     draftStorageKey?: string;
+-    selectedModel: { id: string } | null;
++    selectedModel: { id: string } | null | undefined;
+   }) => {
+     testState.seeds.push({ text: seedText, nonce: seedNonce });
+     testState.draftStorageKeys.push(draftStorageKey);
+-    testState.selectedModels.push(selectedModel?.id ?? null);
++    testState.selectedModels.push(selectedModel == null ? selectedModel : selectedModel.id);
+     return <textarea aria-label="Prompt" readOnly value={seedText ?? ""} />;
+   },
+ }));
+@@ -94,39 +94,19 @@
+     expect(testState.draftStorageKeys).toContain("gadgets:composer-draft:v1:user-a:home");
+   });
+ 
+-  it.each([
+-    [null, 'model-two'],
+-    ['model-one', 'model-one'],
+-    ['__gadgets_no_agent__', null],
+-    ['removed-model', 'model-two'],
+-  ])('uses the managed preference as a fallback while preserving stored choice %s', async (stored, expected) => {
+-    vi.stubEnv('VITE_CODEX_BRIDGE_MANAGEMENT', 'admin');
+-    testState.listModels.mockResolvedValue([
+-      { type: 'agent', id: 'model-one', name: 'First model' },
+-      { type: 'agent', id: 'model-two', name: 'Second model' },
+-    ]);
+-    testState.getPreferredModel.mockResolvedValue('model-two');
+-    if (stored !== null) localStorage.setItem('lastSelectedModel', stored);
+-    container = document.createElement('div');
+-    document.body.append(container);
+-    root = createRoot(container);
+-    await act(async () => root!.render(<HomePageContent />));
+-    expect(testState.selectedModels.at(-1)).toBe(expected);
+-    expect(testState.getPreferredModel).toHaveBeenCalledOnce();
+-  });
+-
+-  it('keeps first-model fallback and avoids loading the preference in legacy mode', async () => {
+-    vi.stubEnv('VITE_CODEX_BRIDGE_MANAGEMENT', 'user');
+-    testState.listModels.mockResolvedValue([
+-      { type: 'agent', id: 'model-one', name: 'First model' },
+-      { type: 'agent', id: 'model-two', name: 'Second model' },
+-    ]);
+-    testState.getPreferredModel.mockResolvedValue('model-two');
+-    container = document.createElement('div');
+-    document.body.append(container);
+-    root = createRoot(container);
+-    await act(async () => root!.render(<HomePageContent />));
+-    expect(testState.selectedModels.at(-1)).toBe('model-one');
+-    expect(testState.getPreferredModel).not.toHaveBeenCalled();
+-  });
++  it.each([null, 'model-one', '__gadgets_no_agent__', 'removed-model'])(
++    'awaits an explicit provider and model despite stored choice %s', async (stored) => {
++      vi.stubEnv('VITE_CODEX_BRIDGE_MANAGEMENT', 'admin');
++      testState.listModels.mockResolvedValue([
++        { type: 'agent', id: 'model-one', name: 'First model' },
++        { type: 'agent', id: 'model-two', name: 'Second model' },
++      ]);
++      testState.getPreferredModel.mockResolvedValue('model-two');
++      if (stored !== null) localStorage.setItem('lastSelectedModel', stored);
++      container = document.createElement('div'); document.body.append(container); root = createRoot(container);
++      await act(async () => root!.render(<HomePageContent />));
++      expect(testState.selectedModels.at(-1)).toBeUndefined();
++      expect(testState.getPreferredModel).not.toHaveBeenCalled();
++    },
++  );
+ });
+diff --git a/packages/workshop-frontend/src/routes/index.tsx b/packages/workshop-frontend/src/routes/index.tsx
+--- a/packages/workshop-frontend/src/routes/index.tsx
++++ b/packages/workshop-frontend/src/routes/index.tsx
+@@ -16,13 +16,11 @@
+   SlashCommandRequest,
+ } from "@gadgets/workshop-shared/api";
+ import {
+-  getStoredSelectedModel,
+   persistSelectedModel,
+ } from "../modelSelection";
+ import { useDocumentTitle } from "../useDocumentTitle";
+ import { homePromptFromSearch } from "../homePrompt";
+ import { composerDraftStorageKey } from "../features/chat/composer/draft/composerDraft";
+-import { isAdminManagedSubscription } from '../features/ai-models/modelManagement';
+ 
+ type HomeSearch = { prompt?: string };
+ 
+@@ -48,7 +46,7 @@
+   const toasts = useKumoToastManager();
+ 
+   const [models, setModels] = useState<AiChatAuthorInfo[]>([]);
+-  const [selectedModel, setSelectedModel] = useState<string | null>(null);
++  const [selectedModel, setSelectedModel] = useState<string | null | undefined>(undefined);
+   // Bumped each time a task suggestion is picked; the composer re-seeds its text off the nonce.
+   const [seed, setSeed] = useState<{ text: string; nonce: number } | null>(null);
+ 
+@@ -60,19 +58,10 @@
+ 
+   useEffect(() => {
+     let cancelled = false;
+-    Promise.all([
+-      authenticatedApi.listModels(),
+-      isAdminManagedSubscription()
+-        ? authenticatedApi.getPreferredModel().catch((err) => {
+-          logRpcFailure('Failed to load the preferred model:', err);
+-          return null;
+-        })
+-        : Promise.resolve(null),
+-    ])
+-      .then(([list, preferredModel]) => {
++    authenticatedApi.listModels()
++      .then((list) => {
+         if (cancelled) return;
+         setModels(list);
+-        setSelectedModel(getStoredSelectedModel(list, preferredModel));
+       })
+       .catch((err) => {
+         logRpcFailure("Failed to fetch models:", err);
+@@ -87,9 +76,9 @@
+     };
+   }, [authenticatedApi]);
+ 
+-  const handleModelChange = useCallback((value: string | null) => {
++  const handleModelChange = useCallback((value: string | null | undefined) => {
+     setSelectedModel(value);
+-    persistSelectedModel(value);
++    if (value !== undefined) persistSelectedModel(value);
+   }, []);
+ 
+   // Pre-create a provisional gadget as soon as the user starts interacting, so that navigation
+@@ -118,6 +107,9 @@
+       attachments?: ChatAttachmentHandle[],
+       formats?: MessageFormatRef[],
+     ) => {
++      if (selectedModel === undefined || (modelId !== null && !models.some(model => model.id === modelId))) {
++        throw new Error("Choose a provider and model before starting a chat.");
++      }
+       try {
+         ensureProvisionalGadget();
+         const overseer = provisionalOverseerRef.current!.stub;
+@@ -148,7 +140,7 @@
+         throw err;
+       }
+     },
+-    [ensureProvisionalGadget, navigate, toasts],
++    [ensureProvisionalGadget, navigate, toasts, selectedModel, models],
+   );
+ 
+   const getOverseer = useCallback((): RpcStub<Overseer> => {
+@@ -200,7 +192,7 @@
+           onSend={handleSend}
+           isAgentActive={false}
+           models={models}
+-          selectedModel={selectedModel === null ? null : { id: selectedModel }}
++          selectedModel={selectedModel == null ? selectedModel : { id: selectedModel }}
+           onModelChange={handleModelChange}
+           newChat
+           offerFormats
+diff --git a/packages/workshop-shared/src/api.ts b/packages/workshop-shared/src/api.ts
+--- a/packages/workshop-shared/src/api.ts
++++ b/packages/workshop-shared/src/api.ts
+@@ -1533,6 +1533,12 @@
+ 
+ /** Supported AI providers. */
+ export type AiModelProvider = "openai" | "anthropic" | "google" | "cloudflare" | "ollama";
++
++/** Provider names shared by connection forms and server-derived model choices. */
++export const AI_MODEL_PROVIDER_LABELS: Record<AiModelProvider, string> = {
++  anthropic: 'Anthropic', openai: 'OpenAI', google: 'Google',
++  cloudflare: 'Cloudflare Workers AI', ollama: 'Ollama',
++};
+ 
+ /** Deployment-provided model configuration, returned by `AuthenticatedApi.getAiConfig()`. */
+ export type AiGatewayInfo = {
+@@ -3514,5 +3520,8 @@
+   /** Unique user identifier, e.g. "kenton@cloudflare.com" or "gpt-5.1-pro". */
+   id: string;
+ 
++  /** Server-derived connection identity and labels; never inference routing authority. */
++  provider?: { id: string; name: string; source: string };
++
+   /** Server-derived connection label, captured with new model authors. */
+   providerDisplayName?: string;

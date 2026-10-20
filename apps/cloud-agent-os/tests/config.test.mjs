@@ -502,8 +502,10 @@ test('Access and public OAuth JWT checks and deployments need no OIDC secret fil
       if (mode === '--check') {
         assert.equal(commands.some(command => command.args.includes('__tests__/access.test.ts')), access);
         for (const file of ['src/useAuth.test.tsx', 'src/redirectLogin.test.tsx',
-          'src/ConnectHandoffPage.test.tsx', 'src/components/auth/OAuthButtons.test.tsx', '__tests__/redirect-login.test.ts']) {
-          assert(commands.some(command => command.args.includes(file)), `Missing native sign-in check: ${file}`);
+          'src/ConnectHandoffPage.test.tsx', 'src/components/auth/OAuthButtons.test.tsx', '__tests__/redirect-login.test.ts',
+          'src/features/chat/composer/ComposerModelSelector.test.tsx',
+          'src/features/chat/composer/ChatComposer.test.tsx', 'src/homePromptFlow.test.tsx']) {
+          assert(commands.some(command => command.args.includes(file)), `Missing native UI check: ${file}`);
         }
         if (!access) {
           assert(commands.some(command => command.args.includes('oauth-jwt')));
