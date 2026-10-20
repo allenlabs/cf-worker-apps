@@ -179,11 +179,13 @@ test('--once uploads an immutable artifact before ready and reuses the exact res
   assert.equal(hash(bytes), installed.artifactDigest); assert.equal(JSON.parse(bytes).source.digest, plugin.source.digest);
   const repeated = await runInstaller(context.config); assert.equal(repeated.built, 0); assert.equal(repeated.ready, 1);
   assert.equal(globalThis.__syntheticPluginWasEvaluated, undefined);
+  assert.deepEqual((await readdir(context.config.stateDir)).filter(name => name.startsWith('poll-')), []);
 });
 
 test('an interrupted artifact publication resumes without a dangling digest checkpoint', requiresBuilder, async t => {
   const plugin = resource(), context = await fixture(t, [plugin], 'artifact-cut');
   await assert.rejects(runInstaller(context.config), /PLUGIN_COMMAND_FAILED/);
+  assert.deepEqual((await readdir(context.config.stateDir)).filter(name => name.startsWith('poll-')), []);
   const interrupted = await readJson(join(context.remote, `${PREFIX}results/${installationId(plugin)}.json`));
   assert.equal(interrupted.status, 'verifying');
   assert.equal(interrupted.artifactDigest, null);

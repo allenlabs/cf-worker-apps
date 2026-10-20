@@ -7,6 +7,70 @@ import { parseArgs } from 'node:util';
 import { markUploadAttempt, verifyArtifactManifest } from './frozen-artifacts.mjs';
 
 const check = (value, code) => assert(value, code);
+const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
+const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+async function inheritanceRead(url, fetchImpl) {
+  check(Boolean(process.env.CLOUDFLARE_API_TOKEN), 'ARTIFACT_INHERITANCE_TOKEN_REQUIRED');
+  const response = await fetchImpl(url, { method: 'GET', redirect: 'error', signal: AbortSignal.timeout(30_000),
+    headers: { Authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}`, Accept: 'application/json' } });
+  check(response.status === 200 && !response.redirected, 'ARTIFACT_INHERITANCE_HTTP_UNVERIFIED');
+  const contentType = response.headers.get('content-type');
+  check(contentType && /^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(contentType), 'ARTIFACT_INHERITANCE_ENCODING_INVALID');
+  const maximum = 2 * 1024 * 1024, declared = response.headers.get('content-length');
+  check(declared === null || (/^\d+$/.test(declared) && Number(declared) <= maximum), 'ARTIFACT_INHERITANCE_BODY_LIMIT');
+  check(response.body, 'ARTIFACT_INHERITANCE_JSON_INVALID');
+  const reader = response.body.getReader(), decoder = new TextDecoder('utf-8', { fatal: true });
+  let text = '', size = 0;
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      size += chunk.value.byteLength;
+      if (size > maximum) { await reader.cancel(); throw new Error('ARTIFACT_INHERITANCE_BODY_LIMIT'); }
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    text += decoder.decode();
+  } finally { reader.releaseLock(); }
+  let envelope;
+  try { envelope = JSON.parse(text); } catch { throw new Error('ARTIFACT_INHERITANCE_JSON_INVALID'); }
+  check(object(envelope) && envelope.success === true && Array.isArray(envelope.errors) && envelope.errors.length === 0 && object(envelope.result), 'ARTIFACT_INHERITANCE_RESPONSE_INVALID');
+  return envelope.result;
+}
+
+/** Check visible identity only; opaque service props are retained by Cloudflare's native inherit. */
+export async function verifyInheritedServiceBindings({ accountId, worker, fetchImpl = fetch }) {
+  const preserved = worker.preservedServiceBindings ?? [];
+  if (preserved.length === 0) return;
+  check(/^[a-f0-9]{32}$/.test(accountId) && typeof worker.name === 'string' && /^[a-zA-Z0-9_-]+$/.test(worker.name), 'ARTIFACT_INHERITANCE_TARGET_INVALID');
+  const base = `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${encodeURIComponent(worker.name)}`;
+  const settings = await inheritanceRead(`${base}/settings`, fetchImpl);
+  check(Array.isArray(settings.bindings), 'ARTIFACT_INHERITANCE_BINDINGS_INVALID');
+  for (const expected of preserved) {
+    const matches = settings.bindings.filter(binding => object(binding) && binding.name === expected.binding);
+    check(matches.length === 1 && matches[0].type === 'service' && matches[0].service === expected.service,
+      'ARTIFACT_INHERITANCE_IDENTITY_CHANGED');
+    for (const key of ['entrypoint', 'environment']) if (Object.hasOwn(expected, key)) {
+      check(typeof expected[key] === 'string' && matches[0][key] === expected[key], 'ARTIFACT_INHERITANCE_IDENTITY_CHANGED');
+    }
+  }
+  const deployments = await inheritanceRead(`${base}/deployments`, fetchImpl);
+  const active = Array.isArray(deployments.deployments) && deployments.deployments[0];
+  check(object(active) && Array.isArray(active.versions) && active.versions.length === 1
+    && object(active.versions[0]) && active.versions[0].percentage === 100 && uuid(active.versions[0].version_id), 'ARTIFACT_INHERITANCE_ACTIVE_VERSION_UNVERIFIED');
+  // Legacy inherit selects the latest uploaded version, which may be staged and inactive.
+  const versions = await inheritanceRead(`${base}/versions`, fetchImpl);
+  check(Array.isArray(versions.items) && object(versions.items[0]) && uuid(versions.items[0].id)
+    && versions.items[0].id === active.versions[0].version_id, 'ARTIFACT_INHERITANCE_LATEST_NOT_ACTIVE');
+}
+
+/** Keep the final target check adjacent to each upload, including uploads after the first worker. */
+export async function uploadVerifiedWorker({ accountId, worker, configPath, execute, fetchImpl }) {
+  await verifyInheritedServiceBindings({ accountId, worker, fetchImpl });
+  const versionId = await execute(configPath);
+  check(uuid(versionId), 'ARTIFACT_UPLOAD_VERSION_UNVERIFIED');
+  return versionId;
+}
 export function uploadedVersion(stdout) {
   const matches = [...stdout.replace(/\x1b\[[0-9;]*m/g, '').matchAll(/^Current Version ID:\s*([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\s*$/gm)];
   check(matches.length === 1, 'ARTIFACT_UPLOAD_VERSION_UNVERIFIED');
@@ -15,7 +79,7 @@ export function uploadedVersion(stdout) {
 const outside = (parent, child) => { const value = relative(parent, child); return value === '..' || value.startsWith(`..${sep}`) || isAbsolute(value); };
 
 /** Upload checked bytes only. execute is injectable for a local, non-network verification. */
-export async function uploadVerifiedArtifacts({ artifactDir, manifestDigest, configFile, attemptMarker, wranglerFile, workers, execute }) {
+export async function uploadVerifiedArtifacts({ artifactDir, manifestDigest, configFile, attemptMarker, wranglerFile, workers, execute, fetchImpl }) {
   artifactDir = resolve(artifactDir);
   const manifest = await verifyArtifactManifest({ artifactDir, manifestDigest });
   check(resolve(configFile) === manifest.inputs.deployment.path, 'ARTIFACT_DEPLOYMENT_CONFIG_CHANGED');
@@ -47,8 +111,7 @@ export async function uploadVerifiedArtifacts({ artifactDir, manifestDigest, con
   const workerVersions = {};
   for (const worker of targets) {
     await verifyArtifactManifest({ artifactDir, manifestDigest });
-    const versionId = await execute(join(artifactDir, worker.config));
-    check(typeof versionId === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(versionId), 'ARTIFACT_UPLOAD_VERSION_UNVERIFIED');
+    const versionId = await uploadVerifiedWorker({ accountId: configs[0].account_id, worker, configPath: join(artifactDir, worker.config), execute, fetchImpl });
     workerVersions[worker.key] = versionId;
   }
   return { ok: true, accepted: true, manifestDigest, workers: targets.length, workerVersions };

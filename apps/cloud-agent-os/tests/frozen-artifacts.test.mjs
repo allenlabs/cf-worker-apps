@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import {
   applyUploadOverlay, captureBuildInputs, clonePreparedCheckout, createArtifactDirectory, digest, exportWorkerArtifact,
-  finalizeArtifactManifest, markUploadAttempt, uploadConfigFor, validateModuleImports, verifyArtifactManifest,
+  finalizeArtifactManifest, markUploadAttempt, uploadConfigFor, validateModuleImports, validateServicePreservation, verifyArtifactManifest,
 } from '../scripts/frozen-artifacts.mjs';
 import { uploadedVersion, uploadVerifiedArtifacts } from '../scripts/upload-verified-artifacts.mjs';
 
@@ -56,7 +56,7 @@ async function manualExport(f) {
   const original = originalConfig(), bytes = await readFile(join(f.modulesDir, 'worker.js'));
   delete original.assets;
   const modules = [{ name: 'worker.js', type: 'ESModule', sha256: digest(bytes), size: bytes.length }];
-  const worker = { key: 'workshop', name: original.name, mainModule: 'worker.js', modules, original: 'workers/workshop/original.json', config: 'workers/workshop/upload.json', assets: null };
+  const worker = { key: 'workshop', name: original.name, preservedServiceBindings: [], mainModule: 'worker.js', modules, original: 'workers/workshop/original.json', config: 'workers/workshop/upload.json', assets: null };
   await writeFile(join(f.artifactDir, worker.original), JSON.stringify(original));
   await writeFile(join(f.artifactDir, worker.config), JSON.stringify(uploadConfigFor(original, { directory: f.modulesDir, mainModule: 'worker.js', modules })));
   const receipt = await finalizeArtifactManifest({ artifactDir: f.artifactDir, inputs: f.inputs, prepared: { upstream: 'c'.repeat(40), overlayHash: 'd'.repeat(64) }, workers: [worker] });
@@ -237,4 +237,79 @@ test('fresh clone Text symlinks survive actual capnweb asset copying and Wrangle
     assert((await lstat(copied)).isFile());
     assert.equal(await readFile(copied, 'utf8'), await readFile(join(cache, 'src', `${name}.d.ts`), 'utf8'));
   }
+});
+
+test('explicit preservation substitutes only exact existing service bindings', () => {
+  const original = originalConfig();
+  const overlay = { apiVersion: 1, workers: { workshop: { preserveServiceBindings: ['CONTEXT'] } } };
+  const result = applyUploadOverlay({ workshop: original }, overlay).workshop;
+  assert.deepEqual(result.services, []);
+  assert.deepEqual(result.unsafe, { bindings: [{ name: 'CONTEXT', type: 'inherit' }] });
+  assert.equal(original.services.length, 1);
+  for (const key of Object.keys(original).filter(key => key !== 'services')) assert.deepEqual(result[key], original[key]);
+  assert.doesNotThrow(() => validateServicePreservation(result, original.services));
+});
+
+test('preservation rejects malformed, unknown, duplicate, non-service and colliding names', () => {
+  const apply = (config, names) => applyUploadOverlay({ workshop: config }, { apiVersion: 1, workers: { workshop: { preserveServiceBindings: names } } });
+  for (const names of [['CONTEXT', 'CONTEXT'], ['CONTEXT;injection'], [{ name: 'CONTEXT' }], 'CONTEXT', [null]]) assert.throws(() => apply(originalConfig(), names), /ARTIFACT_PRESERVATION_INVALID/);
+  for (const name of ['UNKNOWN', 'CACHE', 'CONTENT', 'STORAGE', 'MODE']) assert.throws(() => apply(originalConfig(), [name]), /ARTIFACT_PRESERVATION_SERVICE_MISSING/);
+  for (const section of ['vars', 'kv_namespaces', 'durable_objects']) {
+    const config = originalConfig();
+    if (section === 'vars') config.vars.CONTEXT = 'collision';
+    if (section === 'kv_namespaces') config.kv_namespaces.push({ binding: 'CONTEXT', id: 'c'.repeat(32) });
+    if (section === 'durable_objects') config.durable_objects.bindings.push({ name: 'CONTEXT', class_name: 'Other' });
+    assert.throws(() => apply(config, ['CONTEXT']), /ARTIFACT_PRESERVATION_BINDING_COLLISION/);
+  }
+  const unsafe = { ...originalConfig(), unsafe: { bindings: [{ name: 'CONTEXT', type: 'plain_text', text: 'collision' }] } };
+  assert.throws(() => apply(unsafe, ['CONTEXT']), /ARTIFACT_PRESERVATION_UNSAFE_INVALID/);
+  const duplicate = originalConfig(); duplicate.services.push({ ...duplicate.services[0] });
+  assert.throws(() => apply(duplicate, ['CONTEXT']), /ARTIFACT_PRESERVATION_SERVICE_MISSING/);
+});
+
+test('sealed preservation rejects relabels, version overrides, extra metadata and explicit collisions', () => {
+  const original = originalConfig();
+  const inherited = applyUploadOverlay({ workshop: original }, { apiVersion: 1, workers: { workshop: { preserveServiceBindings: ['CONTEXT'] } } }).workshop;
+  assert.throws(() => validateServicePreservation(inherited, [{ ...original.services[0], binding: 'OTHER' }]), /ARTIFACT_PRESERVATION_UNSAFE_INVALID/);
+  for (const field of ['old_name', 'version_id']) {
+    const changed = structuredClone(inherited); changed.unsafe.bindings[0][field] = 'synthetic-override';
+    assert.throws(() => validateServicePreservation(changed, original.services), /ARTIFACT_PRESERVATION_UNSAFE_INVALID/);
+  }
+  const metadata = structuredClone(inherited); metadata.unsafe.metadata = { bindings: [] };
+  assert.throws(() => validateServicePreservation(metadata, original.services), /ARTIFACT_PRESERVATION_UNSAFE_INVALID/);
+  const explicit = structuredClone(inherited); explicit.services = original.services;
+  assert.throws(() => validateServicePreservation(explicit, original.services), /ARTIFACT_PRESERVATION_EXPLICIT_COLLISION/);
+  assert.throws(() => validateServicePreservation(inherited, []), /ARTIFACT_PRESERVATION_UNRECORDED/);
+});
+
+test('artifact records retain the exact original service while native inheritance is hash-bound', { skip: !esbuild }, async t => {
+  const f = await fixture(t), original = originalConfig();
+  const checked = applyUploadOverlay({ workshop: original }, { apiVersion: 1, workers: { workshop: { preserveServiceBindings: ['CONTEXT'] } } }).workshop;
+  const worker = await exportWorkerArtifact({ ...f, key: 'workshop', original: checked, esbuild, preservedServiceBindings: original.services });
+  const receipt = await finalizeArtifactManifest({ ...f, prepared: { upstream: 'c'.repeat(40), overlayHash: 'd'.repeat(64) }, workers: [worker] });
+  const manifest = await verifyArtifactManifest({ ...f, ...receipt });
+  assert.deepEqual(manifest.workers[0].preservedServiceBindings, original.services);
+  const upload = JSON.parse(await readFile(join(f.artifactDir, worker.config), 'utf8'));
+  assert.deepEqual(upload.unsafe, { bindings: [{ name: 'CONTEXT', type: 'inherit' }] });
+  assert.deepEqual(upload.services, []);
+  // Even a newly trusted manifest digest cannot authorize a mismatched preservation record.
+  manifest.workers[0].preservedServiceBindings[0].binding = 'OTHER';
+  const manifestBytes = JSON.stringify(manifest);
+  const file = join(f.artifactDir, 'manifest.json'); await chmod(file, 0o600); await writeFile(file, manifestBytes);
+  await assert.rejects(verifyArtifactManifest({ ...f, manifestDigest: digest(manifestBytes) }), /ARTIFACT_PRESERVATION_UNSAFE_INVALID/);
+});
+
+test('actual Wrangler dry-run accepts exactly the selected native inherit metadata', { skip: !process.env.CLOUD_AGENT_OS_WRANGLER_CLI }, async t => {
+  const f = await fixture(t), home = join(f.root, 'builder-home'); await mkdir(home);
+  await writeFile(join(f.packageDir, 'worker.js'), 'export default { fetch() { return new Response("synthetic"); } };');
+  const original = { name: 'synthetic-inherited-service', main: 'worker.js', compatibility_date: '2026-10-01', services: [{ binding: 'EXISTING_SERVICE', service: 'synthetic-context', entrypoint: 'Vendor', props: { sharingDomain: 'https://storage.example.invalid' } }] };
+  const config = applyUploadOverlay({ workshop: original }, { apiVersion: 1, workers: { workshop: { preserveServiceBindings: ['EXISTING_SERVICE'] } } }).workshop;
+  validateServicePreservation(config, original.services);
+  await writeFile(join(f.packageDir, 'wrangler.json'), JSON.stringify(config));
+  const env = { PATH: process.env.PATH ?? '', HOME: home, XDG_CONFIG_HOME: home, LANG: 'C.UTF-8', WRANGLER_SEND_METRICS: 'false', CI: 'true' };
+  const result = spawnSync(process.execPath, [process.env.CLOUD_AGENT_OS_WRANGLER_CLI, 'deploy', '--config', 'wrangler.json', '--dry-run', '--outdir', join(f.root, 'inherit-bundle')], { cwd: f.packageDir, env, encoding: 'utf8', timeout: 60_000 });
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  assert.deepEqual(config.unsafe.bindings, [{ name: 'EXISTING_SERVICE', type: 'inherit' }]);
+  assert.deepEqual(config.services, []);
+  assert((await readdir(join(f.root, 'inherit-bundle'))).some(name => name.endsWith('.js')));
 });

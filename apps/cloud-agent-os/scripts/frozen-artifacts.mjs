@@ -61,13 +61,56 @@ export async function clonePreparedCheckout({ checkout, parent }) {
   return { temporary, checkout: destination };
 }
 
-/** The only optional target tuning is explicit CPU/observability configuration. */
+const serviceBindingName = value => typeof value === 'string' && /^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/.test(value);
+function otherBindingNames(config) {
+  const names = new Set(Object.keys(config.vars ?? {}));
+  const visit = value => {
+    if (!value || typeof value !== 'object') return;
+    if (Array.isArray(value)) { for (const item of value) visit(item); return; }
+    for (const key of ['binding', 'name']) if (typeof value[key] === 'string') names.add(value[key]);
+    for (const item of Object.values(value)) visit(item);
+  };
+  for (const [key, value] of Object.entries(config)) if (!['services', 'vars'].includes(key)) visit(value);
+  return names;
+}
+
+/** Only explicitly selected existing services may use Cloudflare's opaque native inheritance. */
+export function validateServicePreservation(config, preserved) {
+  check(Array.isArray(preserved) && preserved.length <= 100, 'ARTIFACT_PRESERVATION_INVALID');
+  const inherited = config.unsafe?.bindings?.filter(value => value.type === 'inherit') ?? [];
+  if (preserved.length === 0) { check(inherited.length === 0, 'ARTIFACT_PRESERVATION_UNRECORDED'); return; }
+  check(config.unsafe && Object.keys(config.unsafe).length === 1 && Array.isArray(config.unsafe.bindings), 'ARTIFACT_PRESERVATION_UNSAFE_INVALID');
+  const names = preserved.map(value => value?.binding);
+  check(names.every(serviceBindingName) && new Set(names).size === names.length && preserved.every(value => typeof value.service === 'string' && value.service.length > 0), 'ARTIFACT_PRESERVATION_INVALID');
+  check(config.unsafe.bindings.length === preserved.length && config.unsafe.bindings.every(value => value && Object.keys(value).length === 2 && Object.hasOwn(value, 'name') && value.type === 'inherit' && names.includes(value.name)), 'ARTIFACT_PRESERVATION_UNSAFE_INVALID');
+  check(new Set(config.unsafe.bindings.map(value => value.name)).size === names.length, 'ARTIFACT_PRESERVATION_UNSAFE_INVALID');
+  check(!(config.services ?? []).some(value => names.includes(value.binding)), 'ARTIFACT_PRESERVATION_EXPLICIT_COLLISION');
+  const other = otherBindingNames({ ...config, unsafe: undefined });
+  check(names.every(name => !other.has(name)), 'ARTIFACT_PRESERVATION_BINDING_COLLISION');
+}
+
+/** The optional overlay can tune CPU/observability and preserve named existing service bindings. */
 export function applyUploadOverlay(configs, overlay) {
   if (overlay === undefined) return structuredClone(configs);
   check(overlay && overlay.apiVersion === 1 && Object.keys(overlay).length === 2 && overlay.workers && typeof overlay.workers === 'object' && !Array.isArray(overlay.workers), 'ARTIFACT_OVERLAY_INVALID');
   const result = structuredClone(configs);
   for (const [key, tuning] of Object.entries(overlay.workers)) {
-    check(Object.hasOwn(result, key) && tuning && typeof tuning === 'object' && !Array.isArray(tuning) && Object.keys(tuning).every(name => ['limits', 'observability'].includes(name)), 'ARTIFACT_OVERLAY_INVALID');
+    check(Object.hasOwn(result, key) && tuning && typeof tuning === 'object' && !Array.isArray(tuning) && Object.keys(tuning).every(name => ['limits', 'observability', 'preserveServiceBindings'].includes(name)), 'ARTIFACT_OVERLAY_INVALID');
+    if (Object.hasOwn(tuning, 'preserveServiceBindings')) {
+      const names = tuning.preserveServiceBindings;
+      check(Array.isArray(names) && names.length <= 100 && names.every(serviceBindingName) && new Set(names).size === names.length, 'ARTIFACT_PRESERVATION_INVALID');
+      if (names.length > 0) {
+        check(result[key].unsafe === undefined, 'ARTIFACT_PRESERVATION_UNSAFE_INVALID');
+        const services = result[key].services;
+        check(Array.isArray(services) && names.every(name => services.filter(service => service.binding === name).length === 1), 'ARTIFACT_PRESERVATION_SERVICE_MISSING');
+        const other = otherBindingNames(result[key]);
+        check(names.every(name => !other.has(name)), 'ARTIFACT_PRESERVATION_BINDING_COLLISION');
+        const preserved = services.filter(service => names.includes(service.binding));
+        result[key].services = services.filter(service => !names.includes(service.binding));
+        result[key].unsafe = { bindings: preserved.map(service => ({ name: service.binding, type: 'inherit' })) };
+        validateServicePreservation(result[key], preserved);
+      }
+    }
     if (Object.hasOwn(tuning, 'limits')) {
       check(tuning.limits && Object.keys(tuning.limits).length === 1 && Number.isSafeInteger(tuning.limits.cpu_ms) && tuning.limits.cpu_ms >= 1 && tuning.limits.cpu_ms <= 300_000, 'ARTIFACT_OVERLAY_INVALID');
       result[key].limits = { ...result[key].limits, cpu_ms: tuning.limits.cpu_ms };
@@ -121,7 +164,8 @@ export function uploadConfigFor(original, { directory, mainModule, modules, asse
 }
 
 /** Called only after this worker's Wrangler dry-run has succeeded. */
-export async function exportWorkerArtifact({ artifactDir, key, packageDir, original, esbuild }) {
+export async function exportWorkerArtifact({ artifactDir, key, packageDir, original, esbuild, preservedServiceBindings = [] }) {
+  validateServicePreservation(original, preservedServiceBindings);
   check(/^[a-z][a-z0-9-]*$/.test(key), 'ARTIFACT_WORKER_INVALID');
   const directory = join(artifactDir, 'workers', key), outDir = join(directory, 'modules');
   const modules = [];
@@ -149,7 +193,7 @@ export async function exportWorkerArtifact({ artifactDir, key, packageDir, origi
   const upload = uploadConfigFor(original, { directory: outDir, mainModule: esm[0].name, modules, assetsDirectory });
   await privateJson(join(directory, 'original.json'), original);
   await privateJson(join(directory, 'upload.json'), upload);
-  return { key, name: original.name, mainModule: esm[0].name, modules, original: `workers/${key}/original.json`, config: `workers/${key}/upload.json`, assets: assetsDirectory ? `workers/${key}/assets` : null };
+  return { key, name: original.name, preservedServiceBindings: structuredClone(preservedServiceBindings), mainModule: esm[0].name, modules, original: `workers/${key}/original.json`, config: `workers/${key}/upload.json`, assets: assetsDirectory ? `workers/${key}/assets` : null };
 }
 
 /** Capture immutable identity; the uploader revalidates these exact files before writing. */
@@ -208,6 +252,7 @@ export async function verifyArtifactManifest({ artifactDir, manifestDigest }) {
     check(/^[a-z][a-z0-9-]*$/.test(worker.key) && worker.original === `workers/${worker.key}/original.json` && worker.config === `workers/${worker.key}/upload.json`, 'ARTIFACT_WORKER_INVALID');
     const original = JSON.parse(await readFile(join(artifactDir, worker.original), 'utf8'));
     const upload = JSON.parse(await readFile(join(artifactDir, worker.config), 'utf8'));
+    validateServicePreservation(original, worker.preservedServiceBindings);
     const directory = join(artifactDir, 'workers', worker.key, 'modules');
     const assetsDirectory = worker.assets ? join(artifactDir, `workers/${worker.key}/assets`) : undefined;
     check(worker.assets === null || worker.assets === `workers/${worker.key}/assets`, 'ARTIFACT_ASSET_DIRECTORY_INVALID');

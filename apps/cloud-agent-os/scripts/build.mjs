@@ -67,7 +67,9 @@ try {
     }
     const overlayBytes = values['upload-config-overlay'] ? await readFile(resolve(values['upload-config-overlay'])) : undefined;
     if (overlayBytes) assert(digest(overlayBytes) === inputs.overlay.sha256, 'Upload tuning changed');
-    const generated = applyUploadOverlay(generateConfigs(config, bases), overlayBytes ? JSON.parse(overlayBytes.toString('utf8')) : undefined);
+    const baseGenerated = generateConfigs(config, bases);
+    const overlay = overlayBytes ? JSON.parse(overlayBytes.toString('utf8')) : undefined;
+    const generated = applyUploadOverlay(baseGenerated, overlay);
     const paths = order.map(key => join(checkout, packages[key], 'wrangler.cloud-agent-os.jsonc'));
     try {
       for (const [index, key] of order.entries()) {
@@ -141,7 +143,11 @@ try {
           cwd: join(checkout, packages[key]),
           env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: config.accountId },
         });
-        if (artifactDir) workers.push(await exportWorkerArtifact({ artifactDir, key, packageDir: join(checkout, packages[key]), original: generated[key], esbuild }));
+        if (artifactDir) {
+          const selected = overlay?.workers?.[key]?.preserveServiceBindings ?? [];
+          const preservedServiceBindings = (baseGenerated[key].services ?? []).filter(service => selected.includes(service.binding));
+          workers.push(await exportWorkerArtifact({ artifactDir, key, packageDir: join(checkout, packages[key]), original: generated[key], esbuild, preservedServiceBindings }));
+        }
       }
       if (artifactDir) {
         const prepared = JSON.parse(await readFile(join(dirname(checkout), 'prepared.json'), 'utf8'));

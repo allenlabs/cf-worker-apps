@@ -67,6 +67,8 @@ node scripts/build.mjs --check --config /private/deployment.json \
 
 The artifact directory must be new and outside the source tree. The build checks a unique disposable copy, preserves every generated Worker setting, and captures all modules and frontend assets. It seals the manifest only after tests and Worker dry runs pass. The separate `upload-verified-artifacts.mjs` requires that manifest's expected SHA-256, the same deployment configuration, an exclusive attempt-marker path, and the installed Wrangler CLI path. It uploads those exact bytes without rebuilding and returns accepted version IDs. The deployment broker must check those versions on the live target independently.
 
+When Cloudflare omits an existing service binding's properties from its read APIs, an operator can explicitly select that binding with `workers.<worker>.preserveServiceBindings` in the private `--upload-config-overlay` JSON file. The build replaces only the selected service binding with Cloudflare's native `inherit` binding before tests and dry runs, and seals the original service identity in the manifest. Immediately before each affected upload, the uploader checks the visible identity and requires the latest uploaded version to be the single active version at 100%. The broker must still verify all readable settings after deployment. Hidden properties remain unverified by read-back; native inheritance preserves them.
+
 The `ready` result means the artifact was published and the selected deployment command returned a matching receipt. A host plugin becomes active only when the running Worker contains its exact artifact digest. Runtime authorization remains authoritative if the desired snapshot changes while a deployment is in progress.
 
 ## Checks

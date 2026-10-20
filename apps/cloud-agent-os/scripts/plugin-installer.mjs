@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { lstat, mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -68,8 +68,9 @@ export async function runInstaller(input) {
     lock.listen(`\0agent-plugin-runner:${hash(config.stateDir)}`, () => resolve(true));
   });
   if (!acquired) return { busy: true, inspected: 0, built: 0, ready: 0, failed: 0, deferred: 0, deployed: false };
+  let cycle;
   try {
-    const cycle = await mkdtemp(join(config.stateDir, 'poll-'));
+    cycle = await mkdtemp(join(config.stateDir, 'poll-'));
     const transportHome = process.env.HOME ?? config.stateDir;
     const get = async (key, maximum) => {
       check(key.startsWith(PREFIX) && !key.includes('..') && /^[a-zA-Z0-9/._-]+$/.test(key), 'PLUGIN_OBJECT_KEY_INVALID');
@@ -206,7 +207,10 @@ export async function runInstaller(input) {
       for (const job of hostJobs) { await setStatus(job.id, 'ready', job.artifactDigest); summary.ready++; }
     }
     return summary;
-  } finally { await new Promise((resolve, reject) => lock.close(error => error ? reject(error) : resolve())); }
+  } finally {
+    try { if (cycle) await rm(cycle, { recursive: true, force: true }); }
+    finally { await new Promise((resolve, reject) => lock.close(error => error ? reject(error) : resolve())); }
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
