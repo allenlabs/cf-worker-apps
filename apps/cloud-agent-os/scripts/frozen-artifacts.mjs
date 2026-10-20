@@ -56,7 +56,7 @@ export async function clonePreparedCheckout({ checkout, parent }) {
   check(await realpath(checkout) === resolve(checkout) && await realpath(parent) === resolve(parent), 'ARTIFACT_BUILD_DIRECTORY_INVALID');
   const temporary = await mkdtemp(join(parent, 'checked-source-'));
   const destination = join(temporary, 'cloudflare-os');
-  await cp(checkout, destination, { recursive: true, filter: source => !relative(checkout, source).split(sep).includes('node_modules') });
+  await cp(checkout, destination, { recursive: true, verbatimSymlinks: true, filter: source => !relative(checkout, source).split(sep).includes('node_modules') });
   await copyFile(join(dirname(checkout), 'prepared.json'), join(temporary, 'prepared.json'));
   return { temporary, checkout: destination };
 }

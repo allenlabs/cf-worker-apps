@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -191,4 +191,50 @@ test('successful command without a version leaves its attempt blocked', async t 
   const args = { ...f, attemptMarker: join(f.root, 'missing-version-attempt'), execute: async () => undefined };
   await assert.rejects(uploadVerifiedArtifacts(args), /ARTIFACT_UPLOAD_VERSION_UNVERIFIED/);
   await assert.rejects(uploadVerifiedArtifacts(args), { code: 'EEXIST' });
+});
+
+test('isolated source copies preserve relative Text symlinks inside their own project', async t => {
+  const f = await fixture(t);
+  const cache = join(f.root, 'prepared', 'cloudflare-os');
+  await mkdir(join(cache, 'src'), { recursive: true });
+  await writeFile(join(cache, 'src', 'binding.d.ts'), 'export interface SyntheticBinding {}');
+  await symlink('binding.d.ts', join(cache, 'src', 'binding.txt'));
+  await writeFile(join(dirname(cache), 'prepared.json'), JSON.stringify({ upstream: 'c'.repeat(40), overlayHash: 'd'.repeat(64) }));
+  const isolated = await clonePreparedCheckout({ checkout: cache, parent: f.root });
+  assert.equal(await readlink(join(isolated.checkout, 'src', 'binding.txt')), 'binding.d.ts');
+  await writeFile(join(cache, 'src', 'binding.d.ts'), 'changed cache');
+  assert.equal(await readFile(join(isolated.checkout, 'src', 'binding.txt'), 'utf8'), 'export interface SyntheticBinding {}');
+});
+
+test('fresh clone Text symlinks survive actual capnweb asset copying and Wrangler dry-run', {
+  skip: !(process.env.CLOUD_AGENT_OS_CAPNWEB_VALIDATE_CLI && process.env.CLOUD_AGENT_OS_WRANGLER_CLI) && 'Set CLOUD_AGENT_OS_CAPNWEB_VALIDATE_CLI and CLOUD_AGENT_OS_WRANGLER_CLI to run the asset pipeline check.',
+}, async t => {
+  const f = await fixture(t);
+  const cache = join(f.root, 'prepared', 'cloudflare-os');
+  await mkdir(join(cache, 'src'), { recursive: true });
+  await writeFile(join(dirname(cache), 'prepared.json'), JSON.stringify({ upstream: 'c'.repeat(40), overlayHash: 'd'.repeat(64) }));
+  await writeFile(join(cache, 'tsconfig.json'), JSON.stringify({ compilerOptions: { target: 'ES2022', module: 'ESNext', moduleResolution: 'Bundler', lib: ['ES2022', 'DOM'], types: [] }, include: ['src'] }));
+  await writeFile(join(cache, 'package.json'), '{"type":"module"}');
+  await writeFile(join(cache, 'src', 'global.d.ts'), 'declare module "*.txt" { const value: string; export default value; }');
+  const names = ['agent-spawner-binding', 'ai-model-binding', 'worktree-binding'];
+  for (const [index, name] of names.entries()) {
+    await writeFile(join(cache, 'src', `${name}.d.ts`), `export interface SyntheticBinding${index} { value: string; }`);
+    await symlink(`${name}.d.ts`, join(cache, 'src', `${name}.txt`));
+  }
+  await writeFile(join(cache, 'src', 'worker.ts'), names.map((name, index) => `import text${index} from "./${name}.txt";`).join('\n') + '\nexport default { fetch() { return new Response([text0,text1,text2].join("\\n")); } };');
+  const isolated = await clonePreparedCheckout({ checkout: cache, parent: f.root });
+  const home = join(f.root, 'builder-home'); await mkdir(home);
+  const env = { PATH: process.env.PATH ?? '', HOME: home, XDG_CONFIG_HOME: home, LANG: 'C.UTF-8', WRANGLER_SEND_METRICS: 'false', CI: 'true' };
+  const validate = spawnSync(process.execPath, [process.env.CLOUD_AGENT_OS_CAPNWEB_VALIDATE_CLI, 'build', '--out', '.wrangler/validate'], { cwd: isolated.checkout, env, encoding: 'utf8', timeout: 60_000 });
+  assert.equal(validate.status, 0, validate.stderr + validate.stdout);
+  await writeFile(join(isolated.checkout, 'wrangler.json'), JSON.stringify({ name: 'synthetic-text-clone', main: '.wrangler/validate/src/worker.ts', compatibility_date: '2026-10-01', rules: [{ type: 'Text', globs: ['**/*.txt'], fallthrough: false }] }));
+  const bundle = join(f.root, 'dry-run');
+  const dryRun = spawnSync(process.execPath, [process.env.CLOUD_AGENT_OS_WRANGLER_CLI, 'deploy', '--config', 'wrangler.json', '--dry-run', '--outdir', bundle], { cwd: isolated.checkout, env, encoding: 'utf8', timeout: 60_000 });
+  assert.equal(dryRun.status, 0, dryRun.stderr + dryRun.stdout);
+  assert.equal((await readdir(bundle)).filter(name => name.endsWith('.txt')).length, 3);
+  for (const name of names) {
+    const copied = join(isolated.checkout, '.wrangler/validate/src', `${name}.txt`);
+    assert((await lstat(copied)).isFile());
+    assert.equal(await readFile(copied, 'utf8'), await readFile(join(cache, 'src', `${name}.d.ts`), 'utf8'));
+  }
 });
