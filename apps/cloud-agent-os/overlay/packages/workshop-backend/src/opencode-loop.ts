@@ -3,10 +3,12 @@ import { Agent, Model, Plugin, Provider } from '@opencode/plugin';
 import { Message as NativeMessage, Media } from '@opencode/ai';
 import type { ContentPart } from '@opencode/ai';
 import type { LanguageModelV3, LanguageModelV3StreamPart } from '@ai-sdk/provider';
-import { getSystemMessageText, validateToolArguments } from '@earendil-works/pi-ai';
+import { getCurrentTools, getSystemMessageText, getToolStateChanges, toToolDeclaration, validateToolArguments } from '@earendil-works/pi-ai';
 import type { AssistantMessage, Message, ToolResultMessage } from '@earendil-works/pi-ai';
 import type { AgentContext, AgentEvent, FinishTurn } from '@earendil-works/pi-agent-core';
 import type { ModelHandle } from './ai-models';
+import type { AgentResource } from '@gadgets/workshop-shared/api';
+import { scopedAgentResources } from './scoped-agent-resources';
 import { prefixTables } from './opencode-prefix-tables';
 import { zeroUsage } from './ai-invoke';
 
@@ -66,8 +68,39 @@ export async function runOpenCodeLoop(args: {
   storage: DurableObjectStorage; chatId: number; context: AgentContext; handle: ModelHandle;
   maxTokens: number | undefined; emit: (event: AgentEvent) => Promise<void>; finishTurn: FinishTurn;
   signal: AbortSignal;
+  resources?: AgentResource[];
+  loadResource?: (id: string) => Promise<AgentResource | undefined>;
 }): Promise<void> {
-  const { storage, chatId, context, handle, emit, finishTurn, signal } = args;
+  const { storage, chatId, handle, emit, finishTurn, signal } = args;
+  const transportMessages: Message[] = args.context.messages.filter((message): message is Message =>
+    message.role === 'system' || message.role === 'user' || message.role === 'assistant' || message.role === 'toolResult');
+  const scoped = scopedAgentResources({ resources: args.resources ?? [], tools: args.context.tools ?? [],
+    loadResource: args.loadResource,
+    setResourcePrompt(text) {
+      const index = transportMessages.findIndex(message => message.role === 'system');
+      const message = transportMessages[index];
+      if (message?.role === 'system') transportMessages[index] = { ...message,
+        sections: { ...message.sections, agentResources: text || null } };
+      else if (text) transportMessages.unshift({ role: 'system', content: '',
+        sections: { agentResources: text }, timestamp: Date.now() });
+    },
+  });
+  const context: AgentContext = { ...args.context, messages: transportMessages, tools: scoped.tools };
+  const tools = new Map(scoped.tools.map(tool => [tool.name, tool]));
+  for (let index = 0; index < transportMessages.length; index++) {
+    const message = transportMessages[index];
+    if (message.role !== 'system') continue;
+    const sections = { ...message.sections };
+    // A historical prompt delta must not restore a resource removed from current scope access.
+    delete sections.agentResources;
+    transportMessages[index] = { ...message, sections,
+      ...(message.toolsAdded ? { toolsAdded: message.toolsAdded.filter(tool => tools.has(tool.name)) } : {}),
+    };
+  }
+  const changes = getToolStateChanges(getCurrentTools(transportMessages), scoped.tools.map(toToolDeclaration));
+  if (changes.toolsAdded.length || changes.toolsRemoved.length) {
+    transportMessages.push({ role: 'system', content: '', ...changes, timestamp: Date.now() });
+  }
   const key = `os:opencode-loop:owned:${chatId}`;
   await cleanOwned(storage, key);
   signal.throwIfAborted();
@@ -87,9 +120,6 @@ export async function runOpenCodeLoop(args: {
   let tail = Promise.resolve();
   const slots = new Map<string, { previous: Promise<void>; done: ReturnType<typeof gate<void>> }>();
   const never = gate<void>();
-  const transportMessages: Message[] = context.messages.filter((message): message is Message =>
-      message.role === 'system' || message.role === 'user' || message.role === 'assistant' || message.role === 'toolResult');
-  const tools = new Map((context.tools ?? []).map(tool => [tool.name, tool]));
   const fail = (error: unknown) => { fatal ??= error; };
   const publish = async (event: AgentEvent) => { try { await emit(event); } catch (error) { fail(error); throw error; } };
 
@@ -283,7 +313,7 @@ export async function runOpenCodeLoop(args: {
   const abort = () => { if (phase === 'provider' && native && sessionID) void native.sessions.interrupt({ sessionID, resume: false }).catch(fail); };
   signal.addEventListener('abort', abort, { once: true });
   try {
-    native = await OpenCodeWorkerd.create({ storage: prefixTables(storage, prefix), models: { fetch: false }, plugins: [plugin], config: { compaction: { auto: false } },
+    native = await OpenCodeWorkerd.create({ storage: prefixTables(storage, prefix), models: { fetch: false }, plugins: [plugin, ...scoped.plugins], config: { compaction: { auto: false } },
       log: { level: 'error', emit() {} } });
     signal.throwIfAborted();
     const session = await native.sessions.create({ location: { directory: '/os' }, title: 'OS turn',

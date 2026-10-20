@@ -1,0 +1,638 @@
+diff --git a/packages/workshop-backend/__tests__/test-worker.ts b/packages/workshop-backend/__tests__/test-worker.ts
+--- a/packages/workshop-backend/__tests__/test-worker.ts
++++ b/packages/workshop-backend/__tests__/test-worker.ts
+@@ -40,6 +40,8 @@
+  * callbacks below: the overseer mints it through `ctx.exports.AgentSelfLoopback({props})`.
+  */
+ export { AgentSelfLoopback } from "../src/server.js";
++/** Model facets used by owner-created subscription and scoped bindings. */
++export { LanguageModelGatekeeper } from "../src/ai-models.js";
+ /** What a loaded gadget's `env.GADGET` and tail worker are minted from, likewise. */
+ export { GatekeeperLoopback, GadgetTailLoopback } from "../src/server.js";
+ /** What an executeCode run's tail worker is minted from, likewise. */
+diff --git a/packages/workshop-backend/src/admin-settings.ts b/packages/workshop-backend/src/admin-settings.ts
+--- a/packages/workshop-backend/src/admin-settings.ts
++++ b/packages/workshop-backend/src/admin-settings.ts
+@@ -1,3 +1,5 @@
++import { AgentSettingsStore, type AgentActor } from './agent-settings';
++import type { AgentSettingsView, AgentSettingsCommand } from '@gadgets/workshop-shared/api';
+ import { AdminApi, AdminFormat, AdminFormatPatch, AdminModel, AdminResourceVendor, AdminSettingsView, AiModelConfig, AiModelProvider, AmbientGatekeeperMode, BannerColor, BlueprintPublicInfo, GatewayModel, GatewayModelLevelTest, GatewayModelMode, GatewayModelSettings, GatewayModelTest, MAX_ANNOUNCEMENT_LENGTH, MAX_INSTANCE_INSTRUCTIONS_LENGTH, MAX_SITE_NAME_LENGTH, ReasoningLevel, SUGGESTED_MODELS, isAmbientGatekeeperMode, isBannerColor, isHexColor, validateDisplayName } from '@gadgets/workshop-shared/api';
+ import { GatekeeperVendor } from '@gadgets/workshop-shared/gatekeeper';
+ import { DurableObject } from 'cloudflare:workers';
+@@ -78,6 +80,7 @@
+  */
+ export class AdminSettings extends DurableObject<Cloudflare.Env> {
+   private storage: AdminSettingsStorage;
++  private agentSettings: AgentSettingsStore;
+   private users: DurableObjectNamespace<UserDurableObject>;
+   // Every bound gatekeeper, keyed by vendor id. Deployment-global (from env bindings), so admin
+   // resource listing needs no user context.
+@@ -93,8 +96,32 @@
+     super(ctx, env);
+ 
+     this.storage = makeAdminSettingsStorage(ctx.storage);
++    this.agentSettings = new AgentSettingsStore(ctx.storage);
+     this.users = this.ctx.exports.UserDurableObject;
+     this.vendors = buildGatekeeperVendorMap(env);
++  }
++
++  #agentActor(userId: string): AgentActor {
++    if (typeof userId !== 'string' || !userId || userId.length > 254) throw new Error('Verified user required.');
++    const configured = typeof this.env.ADMINS === 'string' ? JSON.parse(this.env.ADMINS) : this.env.ADMINS;
++    if (configured !== undefined && !Array.isArray(configured)) throw new Error('Invalid administrator configuration.');
++    return { userId, organizationAdmin: Array.isArray(configured) && configured.includes(userId) };
++  }
++
++  getAgentSettings(userId: string): Promise<AgentSettingsView> {
++    return this.agentSettings.view(this.#agentActor(userId));
++  }
++
++  updateAgentSettings(userId: string, command: AgentSettingsCommand): Promise<AgentSettingsView> {
++    return this.agentSettings.mutate(this.#agentActor(userId), command);
++  }
++
++  getEffectiveAgentResources(userId: string) {
++    return this.agentSettings.effective(this.#agentActor(userId));
++  }
++
++  resolveAgentProvider(userId: string, providerId: string) {
++    return this.agentSettings.resolveProvider(this.#agentActor(userId), providerId);
+   }
+ 
+   /**
+diff --git a/packages/workshop-backend/src/agent.ts b/packages/workshop-backend/src/agent.ts
+--- a/packages/workshop-backend/src/agent.ts
++++ b/packages/workshop-backend/src/agent.ts
+@@ -1,3 +1,5 @@
++import type { AgentResource } from '@gadgets/workshop-shared/api';
++import { scopedResourcePrompt } from './scoped-agent-resources';
+ import { AiChatMessage, AiChatAuthorInfo, AiToolCall, AiChatMessageBody, AiChatStreamEvent, BlueprintBinding, BlueprintMerge, BlueprintOutput, ChatGadgetPin, ChatGadgetPinRecord, MainlineMergeGadget, WorkpieceId, type AiModelConfig, isTextLikeAttachmentMimeType, validateBindingName } from '@gadgets/workshop-shared/api';
+ import { applyCodeChange, codeChangeSerializedSize, replaceSpanChange, type CodeContent,
+   type CodeChange, type FileChange } from '@gadgets/workshop-shared/code-change';
+@@ -303,6 +305,8 @@
+  *   overseer.ts?
+  */
+ export interface AgentHooks {
++  getAgentResources(initiator: AiChatAuthorInfo): Promise<AgentResource[]>;
++
+   /** Disposable native loop tables share this DO, separately from canonical OS storage. */
+   getAgentLoopStorage(): DurableObjectStorage;
+ 
+@@ -1472,6 +1476,7 @@
+     abortSignal: AbortSignal,
+     initiator: AiChatAuthorInfo,
+     modelConfig: AiModelConfig): Promise<AgentPassOutcome> {
++  const agentResources = await hooks.getAgentResources(initiator);
+ 
+   // The workspace's gadget registry, snapshotted at the start of the turn (gadgets provisional
+   // to other chats are excluded -- they belong to those chats' proposed changes). This is the
+@@ -2396,6 +2401,10 @@
+                     toolOutput = {text: toolCall.output};
+                   }
+                   break;
++                case "loadSkill":
++                  // Historical instructions may no longer be authorized. Load current skills explicitly.
++                  toolOutput = {text: "Historical skill instructions omitted. Use loadSkill for a currently available skill."};
++                  break;
+                 case "webFetch":
+                   if (toolCall.output === undefined) {
+                     throw new Error("webFetch tool call in log is missing output");
+@@ -3035,6 +3044,7 @@
+     sections: {
+       environment: `Prompt cache salt (ignore): ${hooks.getPromptCacheSalt()}\n\n` +
+           systemPromptSlots[1],
++      ...(agentResources.length ? { agentResources: scopedResourcePrompt(agentResources) } : {}),
+     },
+     timestamp: 0,
+   };
+@@ -4079,6 +4089,8 @@
+ 
+   await runOpenCodeLoop({
+     storage: hooks.getAgentLoopStorage(), chatId, context, handle,
++    resources: agentResources,
++    loadResource: async id => (await hooks.getAgentResources(initiator)).find(resource => resource.id === id && resource.enabled),
+     maxTokens: maxOutputTokens, emit, signal: abortSignal,
+     finishTurn: ({message, toolResults}) => {
+       if (message.stopReason === "error" || message.stopReason === "aborted") return;
+diff --git a/packages/workshop-backend/src/ai-models.ts b/packages/workshop-backend/src/ai-models.ts
+--- a/packages/workshop-backend/src/ai-models.ts
++++ b/packages/workshop-backend/src/ai-models.ts
+@@ -1,3 +1,5 @@
++import { accountIdForTrustedAgentAuthor } from './agent-principal';
++import { createScopedModelHandle, scopedModelId, scopedModelResolver, type ScopedModelResolution } from './scoped-models';
+ import { DurableObject, RpcStub, RpcTarget } from "cloudflare:workers";
+ import { cloudAgentModel } from "./cloud-agent-model";
+ import { isAdminManagedSubscription, SubscriptionModels } from "./subscription-models.js";
+@@ -64,6 +66,7 @@
+ };
+ 
+ type ModelRoutingOptions = {
++  resolveScopedModel?: (id: string) => Promise<ScopedModelResolution>;
+   sessionAffinity?: string;
+   userGateway?: UserGatewayRouting;
+   metadata?: GatewayMetadataContext;
+@@ -566,7 +569,19 @@
+ export function getModel(env: Cloudflare.Env, config: AiModelConfig,
+                          initiator: AiChatAuthorInfo,
+                          options: ModelRoutingOptions = {}): ModelHandle {
+-  const bound = cloudAgentModel(env, config, initiator);
++  if (config.transport === 'scoped') {
++    const resolveScopedModel = options.resolveScopedModel;
++    if (!config.scopedProviderId || !resolveScopedModel)
++      throw new Error('Scoped provider access is unavailable.');
++    const id = scopedModelId(config.scopedProviderId, config.model);
++    return createScopedModelHandle({ id, resolveScopedModel: () => resolveScopedModel(id),
++      makeHandle, sessionAffinity: options.sessionAffinity });
++  }
++  // Gadget authors are server-minted account wrappers; bridge authorization uses the account,
++  // while gateway attribution and display retain the original author below.
++  const bridgeAuthor: AiChatAuthorInfo = initiator.type === 'gadget' && accountIdForTrustedAgentAuthor(initiator)
++    ? { ...initiator, type: 'user' } : initiator;
++  const bound = cloudAgentModel(env, config, bridgeAuthor);
+   if (bound) return bound;
+   if (isAdminManagedSubscription(env)) return getModelDirect(config, options.sessionAffinity);
+   // BYOK: a connected user's own Cloudflare account pays for everything (all providers, including
+@@ -917,23 +932,27 @@
+     // so does a binding for any other model: one a user added, or one the admin added and removed.
+     let models = await getGatewayModels(this.env, this.ctx.props.initiator.id,
+         () => this.ctx.exports.AdminSettings.getByName("").getAdminConfig());
+-    if (models instanceof SubscriptionModels && config.transport !== "subscription" &&
++    if (models instanceof SubscriptionModels && config.transport !== "subscription" && config.transport !== "scoped" &&
+         models.get(config.model)?.provider === config.provider && !config.apiToken &&
+         config.apiUrl === undefined && !Object.keys(config.extraHeaders ?? {}).length) {
+       throw new Error("Please rebind this subscription model to establish its transport.");
+     }
+-    if (config.transport === "subscription") {
++    if (config.transport === "scoped") {
++      if (!accountIdForTrustedAgentAuthor(this.ctx.props.initiator)) throw new Error('Scoped provider requires a verified account.');
++    } else if (config.transport === "subscription") {
+       if (!(models instanceof SubscriptionModels)) throw new Error("inference_bridge_not_configured");
+-      const model = models.all.find(model => model.accountId === (config.subscriptionAccountId ?? "owner"));
+-      if (!model || model.provider !== config.provider)
+-        throw new Error("Unknown subscription connection.");
+-      models.refuseDisabled(model.id);
++      const model = models.resolveConfig(config);
++      if (!model) throw new Error("Unknown subscription connection.");
++      config = { ...config, ...model.config };
+     } else if (!(models instanceof SubscriptionModels) && models?.get(config.model)?.provider === config.provider) {
+       models.refuseDisabled(config.model);
+     } else {
+       models?.refuseUserModel(this.ctx.props.displayName);
+     }
++    const accountId = accountIdForTrustedAgentAuthor(this.ctx.props.initiator);
+     let model = getModel(this.env, config, this.ctx.props.initiator, {
++      resolveScopedModel: config.transport === 'scoped' && accountId
++        ? scopedModelResolver(this.ctx.exports.AdminSettings.getByName(""), accountId) : undefined,
+       metadata: this.ctx.props.metadata,
+     });
+     return new LanguageModelBindingImpl(model);
+@@ -951,6 +970,9 @@
+   }
+ 
+   async addObserver(_id: string, _user: Fetcher): Promise<void> {
++    if (this.ctx.props.config.transport === 'scoped') {
++      throw new Error('Scoped provider bindings cannot be shared with observers.');
++    }
+     // An AI model is not a restricted-access resource: nothing read through it identifies the
+     // observer or leaks private data, so any observer is permitted. No-op (never throws).
+   }
+diff --git a/packages/workshop-backend/src/overseer.ts b/packages/workshop-backend/src/overseer.ts
+--- a/packages/workshop-backend/src/overseer.ts
++++ b/packages/workshop-backend/src/overseer.ts
+@@ -1,3 +1,5 @@
++import { accountIdForTrustedAgentAuthor } from './agent-principal';
++import { scopedModelResolver } from './scoped-models';
+ import { RpcCompatible, RpcStub, RpcTarget } from "capnweb";
+ import { validateRpc } from "capnweb-validate";
+ import { Overseer, GadgetMetadata, UiBundle, WorkpieceId, WorkpieceSummary, WorkpiecesSubscriber, GadgetClient, GadgetBindingInfo, GatekeeperClient, ActionLogEntry, ActionsSubscriber, ActionHistoryFilter, ActionHistoryPage, ChatGadgetPinRecord, MainlineMergeGadget, ChatCodeBase, ChatGadgetPinState, CodeChangeSubmission, CommitInfo, FileAtCommit, MAX_READ_FILES_PER_CALL, TreeNode, MergeChangesResult, AiChatMetadata, AiChatMessage, AiChatHistoryPage, AiChatSubscriber, AiChatAuthorInfo, AiModelConfig, AiChatMessageBody, AgentSpawnerConfig, ConsoleLogSubscriber, ConsoleLogEvent, CapsuleSpecifier, CollaboratorInfo, CollaboratorRole, AffectedCollaborator, ShareLinkInfo, GatekeeperCreationSpec, ObserverConfigCallback, ObserverBindingNeed, ObserverBindingFailure, BlueprintBindingAnnotation, BlueprintBinding, BlueprintMetadata, BlueprintOutput, BlueprintMerge, ApplyBlueprintResult, GadgetUpstream, MessageFormatRef, isOutputIcon, SpawnerEnvTarget, BlueprintGadgetSummary, AiChatStreamEvent, BlueprintScreenshotUpload, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ChatAttachmentUpload, ChatAttachmentHandle, ChatAttachmentRef, BoundHookInfo, PreApprovableAction, PresenceParticipant, PresenceSubscriber, SlashCommandChoice, SlashCommandRequest, validateBindingName, createOpenGadgetError, OPEN_GADGET_ERROR_CODES, resolveSiteName } from '@gadgets/workshop-shared/api';
+@@ -654,6 +656,17 @@
+ type SessionKind = CollaboratorRole | "owner";
+ 
+ class OverseerImpl implements AgentHooks {
++  async getAgentResources(initiator: AiChatAuthorInfo) {
++    const accountId = accountIdForTrustedAgentAuthor(initiator);
++    if (!accountId) return [];
++    return this.ctx.exports.AdminSettings.getByName("").getEffectiveAgentResources(accountId);
++  }
++
++  scopedModelResolverFor(initiator: AiChatAuthorInfo) {
++    const accountId = accountIdForTrustedAgentAuthor(initiator);
++    return accountId ? scopedModelResolver(this.ctx.exports.AdminSettings.getByName(""), accountId) : undefined;
++  }
++
+   getAgentLoopStorage(): DurableObjectStorage { return this.ctx.storage; }
+ 
+   public storage: OverseerStorage;
+@@ -4971,6 +4984,7 @@
+   // agent callbacks, gadget code's own calls: accounted to `user`, displayed under the workspace
+   // title, and committing with `user`'s commit email (see AiChatAuthorInfo "gadget").
+   gadgetAuthorFor(user: AiChatAuthorInfo): AiChatAuthorInfo {
++    if (!accountIdForTrustedAgentAuthor(user)) throw new Error('A verified account author is required.');
+     return {
+       type: "gadget",
+       id: user.id,
+@@ -6592,6 +6606,7 @@
+         let chosenModel = getModel(
+             this.env, aiModel.config, initiator, {
+               sessionAffinity,
++              resolveScopedModel: aiModel.config.transport === 'scoped' ? this.scopedModelResolverFor(initiator) : undefined,
+               userGateway: byokRouting,
+               metadata: { source: "chat", gadgetId: this.ctx.id.toString(), chatId },
+             });
+@@ -7063,7 +7078,9 @@
+       subject: string, takenNames: Set<string>,
+       quick: {config: AiModelConfig, initiator: AiChatAuthorInfo}): Promise<string | undefined> {
+     try {
+-      let model = getModel(this.env, quick.config, quick.initiator);
++      let model = getModel(this.env, quick.config, quick.initiator, {
++        resolveScopedModel: quick.config.transport === 'scoped' ? this.scopedModelResolverFor(quick.initiator) : undefined,
++      });
+       let result = await completeText(model, {
+         signal: AbortSignal.timeout(10_000),
+         prompt:
+@@ -7874,6 +7891,7 @@
+                             initiator: AiChatAuthorInfo): Promise<void> {
+     try {
+       let model = getModel(this.env, modelConfig, initiator, {
++        resolveScopedModel: modelConfig.transport === 'scoped' ? this.scopedModelResolverFor(initiator) : undefined,
+         metadata: { source: "thread-title", gadgetId: this.ctx.id.toString(), chatId },
+       });
+ 
+@@ -7931,6 +7949,7 @@
+       }
+ 
+       let model = getModel(this.env, modelConfig, initiator, {
++        resolveScopedModel: modelConfig.transport === 'scoped' ? this.scopedModelResolverFor(initiator) : undefined,
+         metadata: { source: "gadget-title", gadgetId: this.ctx.id.toString(), chatId },
+       });
+ 
+diff --git a/packages/workshop-backend/src/server.ts b/packages/workshop-backend/src/server.ts
+--- a/packages/workshop-backend/src/server.ts
++++ b/packages/workshop-backend/src/server.ts
+@@ -1,5 +1,6 @@
+ import { RpcStub, RpcTarget, newHttpBatchRpcResponse, newWebSocketRpcSession, RpcSessionOptions } from "capnweb";
+ import { validateRpc } from "capnweb-validate";
++import type { AgentSettingsView, AgentSettingsCommand, AgentProviderCatalog } from '@gadgets/workshop-shared/api';
+ import type { JWTPayload } from "jose";
+ import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, RedactedAiModelConfig, AiGatewayInfo, AiModelProvider, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, UserDirectoryRecord, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES, AUTH_ERROR_CODES, createAuthError, ConnectFlowStart, GatekeeperLoginStart } from '@gadgets/workshop-shared/api';
+ import type { UiFeatureFlags } from "@gadgets/workshop-shared/feature-flags";
+@@ -168,6 +169,15 @@
+   }
+   hasPasswordLogin(): Promise<boolean> {
+     return retryOnDoReset(() => this.#user.hasPasswordLogin());
++  }
++  getAgentSettings(): Promise<AgentSettingsView> {
++    return retryOnDoReset(() => this.#user.getAgentSettings());
++  }
++  updateAgentSettings(command: AgentSettingsCommand): Promise<AgentSettingsView> {
++    return this.#user.updateAgentSettings(command);
++  }
++  getAgentProviderCatalog(refresh?: boolean): Promise<AgentProviderCatalog> {
++    return this.#user.getAgentProviderCatalog(refresh);
+   }
+   listModels(): Promise<AiChatAuthorInfo[]> {
+     return retryOnDoReset(() => this.#user.listModels());
+diff --git a/packages/workshop-backend/src/user.ts b/packages/workshop-backend/src/user.ts
+--- a/packages/workshop-backend/src/user.ts
++++ b/packages/workshop-backend/src/user.ts
+@@ -1,4 +1,7 @@
++import { createScopedModelCatalog, parseScopedModelId } from './scoped-models';
++import type { AgentProviderCatalog } from '@gadgets/workshop-shared/api';
+ import { RpcStub } from "capnweb";
++import type { AgentSettingsView, AgentSettingsCommand } from '@gadgets/workshop-shared/api';
+ import { GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, RedactedAiModelConfig, CollaboratorRole, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, GadgetMetadata, BlueprintMetadata, BlueprintLibrarySummary, BlueprintSource, BlueprintUserSummary, BLUEPRINT_SCREENSHOT_R2_PREFIX, GatekeeperVendorInfo, OutputSummary, ListOutputsResult, AUTH_ERROR_CODES, createAuthError, ConnectFlowStart, validateCommitEmail, validateDisplayName } from '@gadgets/workshop-shared/api';
+ import { Gatekeeper, GatekeeperUser, GatekeeperUserVerifier, GatekeeperVendor, AccountDescription, VendorDescription, GatekeeperConnectCallback, ConnectHandoff, SupportedResource, ResourceConfiguratorFrame, AppUiContext, GatekeeperUiFrame } from "@gadgets/workshop-shared/gatekeeper";
+ import { shouldAutoProvisionAccount, ambientGatekeeperMode } from "./provisioning-policy.js";
+@@ -66,7 +69,7 @@
+ 
+ /** Project every personal-model read from its owner's config, never a supplied author label. */
+ function personalModelRecord(record: UserAiModelRecord): UserAiModelRecord {
+-  const { transport, subscriptionAccountId, ...config } = record.config;
++  const { transport, subscriptionAccountId, subscriptionProvider, scopedProviderId, ...config } = record.config;
+   const { providerDisplayName, ...profile } = record.profile;
+   return { config, profile: { ...profile,
+     ...(config.providerDisplayName !== undefined && { providerDisplayName: config.providerDisplayName }) } };
+@@ -76,7 +79,7 @@
+ 
+ /** Withholds the non-empty secrets of `config`, for returning it to a client. */
+ function redactModelConfig(config: AiModelConfig): RedactedAiModelConfig {
+-  let {apiToken, extraHeaders, transport, subscriptionAccountId, ...rest} = config;
++  let {apiToken, extraHeaders, transport, subscriptionAccountId, subscriptionProvider, scopedProviderId, ...rest} = config;
+   return {
+     ...rest,
+     apiToken: withholdSecret(apiToken),
+@@ -92,7 +95,7 @@
+  */
+ function resolveWithheldSecrets(
+     config: RedactedAiModelConfig, source?: AiModelConfig): AiModelConfig {
+-  if (Object.hasOwn(config, "transport") || Object.hasOwn(config, "subscriptionAccountId"))
++  if (Object.hasOwn(config, "transport") || Object.hasOwn(config, "subscriptionAccountId") || Object.hasOwn(config, "scopedProviderId") || Object.hasOwn(config, "subscriptionProvider"))
+     throw new Error("Personal model transport is server-owned.");
+   let resolve = (secret: string | null, stored: string | undefined, what: string) => {
+     if (secret !== null) return secret;
+@@ -200,6 +203,10 @@
+   private storage: UserStorage;
+   private vendors: Map<string, Service<GatekeeperVendor>>;
+   private adminSettings: DurableObjectNamespace<AdminSettings>;
++  private scopedModels = createScopedModelCatalog({
++    providerList: () => this.adminSettings.getByName("").getEffectiveAgentResources(this.#agentUserId()),
++    resolveProvider: id => this.adminSettings.getByName("").resolveAgentProvider(this.#agentUserId(), id),
++  });
+ 
+   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
+     super(ctx, env);
+@@ -532,9 +539,36 @@
+     return this.storage.created.get() ? this.storage.profile.get().id : undefined;
+   }
+ 
++  #agentUserId(): string {
++    const userId = this.#modelUserId();
++    if (!userId) throw new Error('Verified user required.');
++    return userId;
++  }
++
++  getAgentSettings(): Promise<AgentSettingsView> {
++    return this.adminSettings.getByName("").getAgentSettings(this.#agentUserId());
++  }
++
++  updateAgentSettings(command: AgentSettingsCommand): Promise<AgentSettingsView> {
++    return this.adminSettings.getByName("").updateAgentSettings(this.#agentUserId(), command);
++  }
++
++  async getAgentProviderCatalog(refresh = false): Promise<AgentProviderCatalog> {
++    const [scoped, deployment] = await Promise.all([
++      this.scopedModels.catalog(refresh),
++      getGatewayModels(this.env, this.#agentUserId(), () => this.adminSettings.getByName("").getAdminConfig()),
++    ]);
++    return { providers: [...(deployment instanceof SubscriptionModels ? deployment.providerCatalog().providers : []), ...scoped.providers] };
++  }
++
+   async listModels(): Promise<AiChatAuthorInfo[]> {
+-    return this.#listModels(await getGatewayModels(this.env, this.#modelUserId(),
++    const deployment = this.#listModels(await getGatewayModels(this.env, this.#modelUserId(),
+         () => this.adminSettings.getByName("").getAdminConfig()));
++    if (!this.#modelUserId()) return deployment;
++    const catalog = await this.scopedModels.catalog();
++    return [...deployment, ...catalog.providers.flatMap(provider => provider.models.map(model => ({
++      type: 'agent' as const, id: model.id, name: model.name, providerDisplayName: model.providerName,
++    })))];
+   }
+ 
+   #listModels(models: DeploymentModels | null): AiChatAuthorInfo[] {
+@@ -565,6 +599,7 @@
+     if (copySecretsFrom !== undefined) {
+       source = this.#getHandAddedModel(copySecretsFrom, models).config;
+     }
++    if ((profile.id.startsWith('scoped-provider/') || profile.id.startsWith('subscription-model:'))) throw new Error('Reserved model identifier.');
+     // A gateway model, whatever its mode, would shadow the new model and leave it unreachable.
+     if (this.storage.aiModels.get(profile.id) || models?.get(profile.id)) {
+       throw new Error(`A model with ID "${profile.id}" already exists.`);
+@@ -612,7 +647,7 @@
+ 
+     // capnweb-validate lets through properties that RedactedAiModelConfig omits, and these are a
+     // deployment's to set on its own models.
+-    let {reasoning, compactionInputBudget, behavesLike, capabilities, transport, subscriptionAccountId, ...own} = config;
++    let {reasoning, compactionInputBudget, behavesLike, capabilities, transport, subscriptionAccountId, subscriptionProvider, scopedProviderId, ...own} = config;
+ 
+     const { providerDisplayName, ...author } = profile;
+     const { providerDisplayName: label, ...connection } = own;
+@@ -813,7 +848,7 @@
+         () => this.adminSettings.getByName("").getAdminConfig());
+     let selectedModelId = existingChatModelId;
+     if (selectedModelId === null || !this.#resolveModel(selectedModelId, models)) {
+-      let offered = this.#listModels(models);
++      let offered = await this.listModels();
+       let preferredModel = this.storage.preferredModel.get();
+       selectedModelId = (offered.find(model => model.id === preferredModel) ?? offered[0])?.id ?? null;
+     }
+@@ -827,6 +862,11 @@
+    * stored model resolves on a gateway deployment whose users may not add their own.
+    */
+   #resolveModel(id: string, models: DeploymentModels | null): UserAiModelRecord | undefined {
++    const scoped = parseScopedModelId(id);
++    if (scoped) return {
++      profile: { type: 'agent', id, name: scoped.modelId },
++      config: { provider: 'openai', model: scoped.modelId, apiToken: '', transport: 'scoped', scopedProviderId: scoped.providerId },
++    };
+     if (models?.get(id)) return models.resolve(id);
+     let record = models && !models.userModels ? undefined : this.storage.aiModels.get(id);
+     if (!record) return undefined;
+diff --git a/packages/workshop-backend/vitest.config.ts b/packages/workshop-backend/vitest.config.ts
+--- a/packages/workshop-backend/vitest.config.ts
++++ b/packages/workshop-backend/vitest.config.ts
+@@ -97,6 +97,7 @@
+           // Never addressed by name: a binding is what puts the class in `ctx.exports`, from
+           // which the overseer instantiates it (with props) as one of its own facets.
+           TEST_AGENT_SPAWNER: { className: 'AgentSpawnerGatekeeper', useSQLite: true },
++          TEST_LANGUAGE_MODEL: { className: 'LanguageModelGatekeeper', useSQLite: true },
+           TEST_USER_DIRECTORY: { className: 'UserDirectoryDurableObject', useSQLite: true },
+           // Likewise only reached through `ctx.exports`, by the overseer deleting a blueprint.
+           TEST_ADMIN_SETTINGS: { className: 'AdminSettings', useSQLite: true },
+diff --git a/packages/workshop-frontend/src/ChatInterface.tsx b/packages/workshop-frontend/src/ChatInterface.tsx
+--- a/packages/workshop-frontend/src/ChatInterface.tsx
++++ b/packages/workshop-frontend/src/ChatInterface.tsx
+@@ -584,6 +584,7 @@
+   outputOf?: ToolOutputResolver,
+ ): { verb: string; target?: string } {
+   switch (tc.toolName) {
++    case "loadSkill": return { verb: "Loaded skill", target: tc.input.id };
+     case "readFile":
+       return { verb: "Read", target: tc.input.filename };
+     case "writeFile":
+@@ -721,6 +722,7 @@
+ 
+ function describeToolCallCount(toolName: AiToolCall["toolName"], count: number): string {
+   switch (toolName) {
++    case "loadSkill": return `Loaded ${pluralize(count, "skill")}`;
+     case "readFile":
+       return `Read ${pluralize(count, "file")}`;
+     case "writeFile":
+@@ -767,6 +769,7 @@
+ ): PhosphorIcon {
+   if (output) return FORMAT_ICONS[output.icon];
+   switch (toolName) {
++    case "loadSkill": return FileIcon;
+     case "readFile":
+     case "writeFile":
+       return FileIcon;
+@@ -800,6 +803,7 @@
+ 
+ function getProvisionalToolLabel(toolName: AiToolCall["toolName"] | null | undefined) {
+   switch (toolName) {
++    case "loadSkill": return "Loading skill";
+     case "readFile":
+       return "Reading file";
+     case "writeFile":
+@@ -840,6 +844,7 @@
+ // Present-tense verb for an in-progress tool call.
+ function getProvisionalToolVerb(toolName: AiToolCall["toolName"]): string {
+   switch (toolName) {
++    case "loadSkill": return "Loading skill";
+     case "readFile": return "Reading";
+     case "writeFile": return "Writing";
+     case "editFile": return "Editing";
+@@ -866,6 +871,7 @@
+ function describeProvisionalToolCount(toolName: AiToolCall["toolName"], count: number): string {
+   if (count <= 1) return getProvisionalToolLabel(toolName);
+   switch (toolName) {
++    case "loadSkill": return `Loading ${pluralize(count, "skill")}`;
+     case "readFile": return `Reading ${pluralize(count, "file")}`;
+     case "writeFile": return `Writing ${pluralize(count, "file")}`;
+     case "editFile": return `Making ${count} edits`;
+diff --git a/packages/workshop-frontend/src/routes/-providers.test.tsx b/packages/workshop-frontend/src/routes/-providers.test.tsx
+--- a/packages/workshop-frontend/src/routes/-providers.test.tsx
++++ b/packages/workshop-frontend/src/routes/-providers.test.tsx
+@@ -18,12 +18,28 @@
+     <div data-testid="model-editor" data-open={String(visible)} data-mode={mode?.type ?? 'add'} />,
+ }))
+ vi.mock('../useDocumentTitle', () => ({ useDocumentTitle: () => {} }))
++vi.mock('../features/agent-settings/AgentSettingsPanel', () => ({ AgentSettingsPanel: () => <div>Agent settings form</div> }))
+ 
+ import { Route } from './providers'
+ 
+ (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+ 
+ describe('Models selection on the providers route', () => {
++  it('reloads available models after returning from agent settings', async () => {
++    await render(subscription)
++    const listModels = vi.spyOn(state.authenticatedApi!, 'listModels').mockResolvedValue(Object.assign([
++      { type: 'agent' as const, id: 'scoped-provider/team-backend/new-model', name: 'New team model', providerDisplayName: 'Team backend' },
++    ], { [Symbol.dispose]() {} }))
++    const settings = Array.from(document.body.querySelectorAll('button')).find(button => button.textContent === 'Agent settings and teams')!
++    await act(async () => settings.click())
++    expect(document.body.textContent).toContain('Agent settings form')
++    const back = Array.from(document.body.querySelectorAll('button')).find(button => button.textContent === 'Back to models')!
++    await act(async () => back.click())
++    expect(listModels).toHaveBeenCalledOnce()
++    expect(document.body.textContent).toContain('New team model')
++    expect(document.body.textContent).not.toContain('Codex subscription')
++  })
++
+ 
+   it('keeps catalog failures closed and offers a reload action', async () => {
+     vi.spyOn(console, 'error').mockImplementation(() => {})
+diff --git a/packages/workshop-frontend/src/routes/providers.tsx b/packages/workshop-frontend/src/routes/providers.tsx
+--- a/packages/workshop-frontend/src/routes/providers.tsx
++++ b/packages/workshop-frontend/src/routes/providers.tsx
+@@ -1,3 +1,4 @@
++import { AgentSettingsPanel } from '../features/agent-settings/AgentSettingsPanel';
+ import { createFileRoute } from '@tanstack/react-router'
+ import { useState, useEffect, useRef } from 'react'
+ import { DropdownMenu, Select, useKumoToastManager } from '@cloudflare/kumo'
+@@ -80,7 +81,7 @@
+             {model.name}
+           </span>
+           <span className="shrink-0 rounded-full bg-kumo-tint px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.4px] text-kumo-subtle">
+-            {isBuiltIn ? 'shared' : 'personal'}
++            {model.id.startsWith('scoped-provider/') ? 'managed' : isBuiltIn ? 'shared' : 'personal'}
+           </span>
+           {isQuick && (
+             <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[rgba(255,72,1,0.10)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.4px] text-kumo-brand">
+@@ -150,6 +151,7 @@
+ // ─── main page ────────────────────────────────────────────────────────────────
+ 
+ function ProvidersPage() {
++  const [agentSettingsOpen, setAgentSettingsOpen] = useState(() => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('agent-settings') === '1');
+   useDocumentTitle('AI Providers')
+ 
+   const { authenticatedApi } = useAuthenticatedApi()
+@@ -206,7 +208,7 @@
+   const canAddModels = canAddPersonalModels(aiConfig)
+ 
+   const isBuiltIn = (modelId: string): boolean =>
+-    aiConfig?.enabled === true && aiConfig.builtInModelIds.includes(modelId)
++    modelId.startsWith('scoped-provider/') || modelId.startsWith('subscription-model:') || (aiConfig?.enabled === true && aiConfig.builtInModelIds.includes(modelId))
+ 
+   // Bumped whenever the user opens a dialog, so a configuration that finishes loading after a later
+   // click doesn't open its editor over the dialog the user chose.
+@@ -286,6 +288,13 @@
+     return m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q)
+   })
+ 
++  if (agentSettingsOpen) return (
++    <div className="h-full overflow-auto px-6 py-6">
++      <button type="button" className="mb-4 text-sm text-kumo-brand underline" onClick={() => { setAgentSettingsOpen(false); void fetchAll() }}>Back to models</button>
++      <AgentSettingsPanel api={authenticatedApi} />
++    </div>
++  );
++
+   return (
+     <div className="mx-auto flex h-full w-full max-w-4xl flex-col px-3 sm:px-10">
+       <header className="flex flex-col items-stretch gap-4 px-3 pb-3 pt-6 sm:flex-row sm:items-end sm:justify-between sm:pt-10">
+@@ -299,6 +308,7 @@
+                 : 'Configure the AI models available to your workspaces.'}
+           </p>
+         </div>
++        <button type="button" className="h-9 rounded-lg border border-kumo-line px-3 text-sm" onClick={() => setAgentSettingsOpen(true)}>Agent settings and teams</button>
+         {canAddModels && (
+           <button
+             type="button"
+diff --git a/packages/workshop-shared/package.json b/packages/workshop-shared/package.json
+--- a/packages/workshop-shared/package.json
++++ b/packages/workshop-shared/package.json
+@@ -34,6 +34,10 @@
+     "./theme": {
+       "types": "./src/theme.ts",
+       "import": "./src/theme.ts"
++    },
++    "./agent-settings": {
++      "types": "./src/agent-settings.ts",
++      "import": "./src/agent-settings.ts"
+     }
+   },
+   "scripts": {
+diff --git a/packages/workshop-shared/src/api.ts b/packages/workshop-shared/src/api.ts
+--- a/packages/workshop-shared/src/api.ts
++++ b/packages/workshop-shared/src/api.ts
+@@ -1,3 +1,6 @@
++import type { AgentSettingsView, AgentSettingsCommand, AgentProviderCatalog } from './agent-settings';
++export * from './agent-settings';
++
+ // This file defines the API spoken between the Gadgets Workshop service and the front-end UI.
+ //
+ // The UI is a good old "fat client" SPA. Why not use SSR? Because:
+@@ -510,6 +513,10 @@
+    * which case the change-password UI should be hidden.
+    */
+   hasPasswordLogin(): Promise<boolean>;
++
++  getAgentSettings(): Promise<AgentSettingsView>;
++  updateAgentSettings(command: AgentSettingsCommand): Promise<AgentSettingsView>;
++  getAgentProviderCatalog(refresh?: boolean): Promise<AgentProviderCatalog>;
+ 
+   /**
+    * List the user's configured AI models.
+@@ -1786,9 +1793,11 @@
+   providerDisplayName?: string;
+   /** Server-owned object selector, accepted only through the shared subscription catalog. */
+   subscriptionAccountId?: string;
+-
+-  /** Server-owned subscription routing provenance; never accepted from personal provider forms. */
+-  transport?: "subscription";
++  subscriptionProvider?: "siwc" | "codex";
++
++  /** Server-owned routing provenance; never accepted from personal provider forms. */
++  transport?: "subscription" | "scoped";
++  scopedProviderId?: string;
+ 
+   /** Which AI provider hosts the model? */
+   provider: AiModelProvider;
+@@ -1871,7 +1880,7 @@
+  */
+ export type RedactedAiModelConfig = Omit<AiModelConfig,
+     "apiToken" | "extraHeaders" | "reasoning" | "compactionInputBudget" | "behavesLike" |
+-    "capabilities" | "transport" | "subscriptionAccountId"> & {
++    "capabilities" | "transport" | "subscriptionAccountId" | "subscriptionProvider" | "scopedProviderId"> & {
+   /** `AiModelConfig.apiToken`, or null if withheld. */
+   apiToken: string | null;
+ 
+@@ -3980,6 +3989,9 @@
+   /** If the tool failed, the error. */
+   error?: string;
+ } & ({
++  toolName: "loadSkill";
++  input: { id: string };
++} | {
+   /**
+    * Any workpiece can potentially export files. Gadgets, in particular, export their source code
+    * as files, but other workpieces may export other filesystems. Hence, a file is identified by

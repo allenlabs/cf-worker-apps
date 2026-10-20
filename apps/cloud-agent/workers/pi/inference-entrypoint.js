@@ -26,6 +26,7 @@ const message = z.discriminatedUnion("role", [
 const requestSchema = z.object({
   version: z.literal(1), requestId: z.uuid(), userId: z.email().max(254),
   subscriptionAccountId: z.string().regex(/^(?:owner|account-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/).optional(),
+  modelId: z.string().regex(/^[a-zA-Z0-9._-]{1,128}$/).optional(),
   context: z.object({ systemPrompt: text.optional(), messages: z.array(message).min(1).max(256), tools: z.array(tool).max(64).optional() }).strict(),
   options: z.object({ reasoning: z.enum(["minimal", "low", "medium", "high", "xhigh"]).optional(), maxTokens: z.number().int().min(1).max(8192).optional() }).strict()
 }).strict();
@@ -158,6 +159,11 @@ export class CloudAgentInference extends WorkerEntrypoint {
     return this.env.Credentials.getByName("owner").subscriptionConnections();
   }
 
+  async subscriptionModels() {
+    policy(this.env);
+    return this.env.Credentials.getByName("owner").subscriptionModels();
+  }
+
   async infer(value) {
     const configured = policy(this.env);
     let size;
@@ -201,7 +207,7 @@ export class CloudAgentInference extends WorkerEntrypoint {
         ...htmlDiagnostic(diagnostic.htmlMarkers), htmlTruncated: diagnostic.htmlTruncated
       };
     });
-    const model = models.getModel(configured.provider === "codex" ? "openai-codex" : "openai", configured.modelId);
+    const model = models.getModel(configured.provider === "codex" ? "openai-codex" : "openai", input.modelId ?? configured.modelId);
     if (!model) fail("inference_bridge_model_unavailable");
     // Credentials status is local; an in-flight credential refresh retains its existing HTTP timeout.
     const abort = new AbortController(), deadline = setTimeout(() => abort.abort(), configured.timeoutMs);

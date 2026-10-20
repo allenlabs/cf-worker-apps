@@ -183,6 +183,46 @@ page to add a named connection and connect its SIWC or native Codex provider. Ea
 its own login flow and grant. Inference uses the selected protocol without paid API fallback.
 Omitting `setup` preserves the existing generated configuration.
 
+## Scoped agent settings
+
+Open **Providers → Agent settings and teams** to manage organization, team, or personal resources.
+Select a scope, then add a named OpenAI-compatible backend, skill, MCP server, or bundled plugin.
+A backend uses a public HTTPS API base on port 443, including `/v1` when its API requires it.
+Supply a write-only API key or explicitly choose **Use no API key**. Changing an existing address
+requires a new key or that explicit keyless choice. Model discovery reads `/models` and supported
+pagination without running inference, following the [OpenAI model-list contract](https://developers.openai.com/api/reference/resources/models/methods/list). Model IDs retain their provider identity, so identical model
+names in different backends remain separate choices.
+
+Teams have one parent and users can join multiple teams. Members receive resources from their own
+teams and their ancestors. Parent membership does not grant access to child or sibling resources.
+Team administrators manage their descendants. Organization administrators manage organization and
+team settings. A personal owner administers their own scope, including explicit delegated access.
+Organization administrators do not automatically administer another user's personal settings.
+
+Easy mode exposes resources, team membership, and team administrators. Turn it off to configure
+custom roles, user or role delegations, and provider audiences. Both modes use the same server
+permissions. Delegated authority cannot exceed the editor's current authority. Provider management
+and inference access are separate; sharing requires authority over the provider and its target
+audience. Revision checks reject stale writes. Current membership, grants, and provider readiness
+are checked again before inference, including previously created gadget bindings.
+
+Skills contain bounded Markdown instructions and load through the native `loadSkill` tool after a
+current access check. The bundled **Additional instructions** and **Tool policy** plugins run in
+OpenCode's Workerd adapter. This runtime cannot install arbitrary npm or Bun plugins, local files,
+subprocesses, or stdio MCP servers. MCP resources share HTTPS endpoint configuration. Each user
+connects and authorizes OAuth separately through the existing connector flow, consistent with
+[OpenCode remote MCP configuration](https://docs.opencode.ai/docs/mcp-servers/). Existing observation,
+write-approval, and tool restrictions still apply.
+
+Subscription choices include the active protocol's complete bundled SDK model catalog for each
+connection. This is a supported-model catalog, not proof of the account's entitlement to every
+model. The provider can still reject a model. OpenAI-compatible discovery reports only returned
+model IDs; prices, context limits, and capabilities remain unknown unless independently supplied.
+Catalog failures retain eligible previous results with an error and observation time. Discovery
+rejects oversized or incomplete results instead of silently reporting a partial catalog as complete.
+The current limits are 5,000 models per backend, a 1 MiB catalog response, and 4 MiB of serialized
+cached data. Larger installations need a paginated catalog API.
+
 ## Native OpenCode agent loop
 
 The Workshop runs its actual agent loop through `@opencode/sdk/workerd` 2.0.24. The existing

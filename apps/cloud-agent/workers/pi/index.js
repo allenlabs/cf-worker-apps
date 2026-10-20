@@ -191,6 +191,20 @@ export class Credentials extends ManagementCredentials {
     }));
   }
 
+  async subscriptionModels() {
+    const models = createModels();
+    installSubscriptionModels(models, () => this, undefined, undefined, this.env.SUBSCRIPTION_INFERENCE_PROVIDER);
+    const connections = await this.subscriptionConnections();
+    return {
+      source: "bundled-provider-catalog", entitlementVerified: false,
+      connections: connections.map(connection => ({
+        ...connection,
+        models: models.getModels(connection.provider === "codex" ? "openai-codex" : "openai")
+          .map(({ id, name }) => ({ id, name }))
+      }))
+    };
+  }
+
   async createSubscriptionConnection(input) {
     await this.#subscriptionInventory();
     requireCondition(input && typeof input === "object" && !Array.isArray(input) && Object.keys(input).length === 1 && typeof input.label === "string" && input.label.trim() && encoder.encode(input.label.trim()).length <= 128 && !/[\x00-\x1f\x7f-\x9f]/.test(input.label), "subscription_label_invalid");

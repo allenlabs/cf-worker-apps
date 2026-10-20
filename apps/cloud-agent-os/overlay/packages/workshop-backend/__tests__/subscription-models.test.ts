@@ -1,3 +1,5 @@
+import { OPENAI_MODELS } from "@earendil-works/pi-ai/providers/openai.models";
+import { OPENAI_CODEX_MODELS } from "@earendil-works/pi-ai/providers/openai-codex.models";
 import {
   createExecutionContext,
   runInDurableObject,
@@ -721,7 +723,8 @@ describe("admin-managed subscription models", () => {
     expect(requests[0].headers.get("authorization")).toBe("Bearer fixture-personal-key");
     expect(requests[0].headers.get("cf-aig-authorization")).toBeNull();
     expect(() => getModel(deployment, CONFIG, actor)).toThrow("inference_bridge_user_denied");
-    expect(() => getModel(deployment, CONFIG, { type: "gadget", id: USER, name: "Fixture gadget" }))
+    expect(getModel(deployment, CONFIG, { type: "gadget", id: USER, name: "Fixture gadget" }).model.id).toBe(MODEL);
+    expect(() => getModel(deployment, CONFIG, { type: "agent", id: USER, name: "Fixture model" }))
       .toThrow("inference_bridge_user_denied");
     expect(() => getModel({ ...deployment, CODEX_BRIDGE: undefined }, CONFIG,
       { ...actor, id: USER })).toThrow("inference_bridge_not_configured");
@@ -817,4 +820,109 @@ describe("admin-managed subscription models", () => {
     });
   });
 
+});
+
+
+describe("complete subscription model catalogs", () => {
+  const physical = Object.values(OPENAI_CODEX_MODELS).find(model => model.id !== MODEL)!;
+  const siwcPhysical = Object.values(OPENAI_MODELS).find(model => model.id !== MODEL)!;
+  const extraId = `subscription-model:${ACCOUNT_A}:codex:${physical.id}`;
+  const ownerExtraId = `subscription-model:owner:siwc:${siwcPhysical.id}`;
+  const safeCatalog = () => ({ source: "bundled-provider-catalog", entitlementVerified: false,
+    connections: CONNECTIONS.map(connection => ({ ...connection,
+      models: Object.values(connection.provider === "codex" ? OPENAI_CODEX_MODELS : OPENAI_MODELS)
+        .map(({ id, name }) => ({ id, name })),
+    })),
+  });
+  function catalogEnvironment() {
+    const calls: unknown[] = [];
+    return { calls, deployment: { ...managed({}, CONNECTIONS), CODEX_BRIDGE: {
+      async subscriptionConnections() { return CONNECTIONS; },
+      async subscriptionModels() { return safeCatalog(); },
+      async infer(input: unknown) { calls.push(input); throw Error("Synthetic inference stopped"); },
+    } } };
+  }
+  it("retains the legacy connection descriptor and offers every bundled physical model with distinct IDs", async () => {
+    const { deployment } = catalogEnvironment();
+    const rows = await readSubscriptionConnections(deployment);
+    expect(rows?.[0].catalog).toMatchObject({ source: "bundled-provider-catalog", entitlementVerified: false });
+    const models = new SubscriptionModels(deployment, DEFAULT_ADMIN_CONFIG, USER, rows);
+    expect(models.all.map(row => row.id)).toEqual([MODEL, A, B]);
+    expect(models.list().length).toBeGreaterThan(models.all.length + 3);
+    expect(new Set(models.list().map(row => row.id)).size).toBe(models.list().length);
+    expect(models.resolve(extraId)).toMatchObject({ profile: { id: extraId, name: `Research · ${physical.name}` },
+      config: { model: physical.id, subscriptionAccountId: ACCOUNT_A, subscriptionProvider: "codex" } });
+    expect(models.resolve(ownerExtraId)).toMatchObject({ config: { model: siwcPhysical.id, subscriptionProvider: "siwc" } });
+    expect(models.resolve(MODEL)?.config).toEqual({ ...CONFIG, subscriptionProvider: "siwc" });
+    expect(models.resolve(A)?.config).toEqual({ ...CONFIG, subscriptionAccountId: ACCOUNT_A, subscriptionProvider: "codex" });
+    expect(models.resolveConfig(CONFIG)?.config).toEqual({ ...CONFIG, subscriptionProvider: "siwc" });
+    expect(models.resolve(`subscription-model:${ACCOUNT_A}:siwc:${physical.id}`)).toBeUndefined();
+    expect(models.resolve(physical.id)).toBeUndefined();
+  });
+  it("inherits connection availability and refuses a disabled parent even if a child is enabled", async () => {
+    const { deployment } = catalogEnvironment(), rows = await readSubscriptionConnections(deployment);
+    const hidden = new SubscriptionModels(deployment, { ...DEFAULT_ADMIN_CONFIG, modelModes: { [A]: "hidden" } }, USER, rows);
+    expect(hidden.list().some(row => row.id === extraId)).toBe(false);
+    expect(hidden.resolve(extraId)?.config.model).toBe(physical.id);
+    const disabled = new SubscriptionModels(deployment, { ...DEFAULT_ADMIN_CONFIG,
+      modelModes: { [A]: "disabled", [extraId]: "enabled" } }, USER, rows);
+    expect(disabled.get(extraId)?.mode).toBe("disabled");
+    expect(disabled.resolve(extraId)).toBeUndefined();
+    expect(() => disabled.resolveConfig(hidden.resolve(extraId)!.config)).toThrow("disabled");
+    expect(() => disabled.refuseDisabled(extraId)).toThrow("disabled");
+    const denied = new SubscriptionModels(deployment, DEFAULT_ADMIN_CONFIG, "denied@example.invalid", rows);
+    expect(denied.list()).toEqual([]);
+    expect(denied.resolve(extraId)).toBeUndefined();
+  });
+  it("exposes grouped subscription models without leaking denied or disabled choices", async () => {
+    const { deployment } = catalogEnvironment(), rows = await readSubscriptionConnections(deployment);
+    const models = new SubscriptionModels(deployment, DEFAULT_ADMIN_CONFIG, USER, rows);
+    const catalog = models.providerCatalog();
+    expect(catalog.providers.flatMap(provider => provider.models).map(model => model.id).sort())
+      .toEqual(models.list().map(model => model.id).sort());
+    expect(catalog.providers.every(provider => provider.models.every(model => model.source === "subscription" && model.providerId === provider.id))).toBe(true);
+    expect(catalog.providers.flatMap(provider => provider.models).some(model => model.id === extraId)).toBe(true);
+    expect(new SubscriptionModels(deployment, DEFAULT_ADMIN_CONFIG, "denied@example.invalid", rows).providerCatalog().providers).toEqual([]);
+    const disabled = new SubscriptionModels(deployment, { ...DEFAULT_ADMIN_CONFIG, modelModes: { [extraId]: "disabled" } }, USER, rows);
+    expect(disabled.providerCatalog().providers.flatMap(provider => provider.models).some(model => model.id === extraId)).toBe(false);
+  });
+  it("revalidates physical selections and emits the selected model only for a server catalog choice", async () => {
+    const { deployment, calls } = catalogEnvironment(), rows = await readSubscriptionConnections(deployment);
+    const models = new SubscriptionModels(deployment, DEFAULT_ADMIN_CONFIG, USER, rows);
+    for (const id of [extraId, ownerExtraId]) {
+      const record = models.resolve(id)!;
+      expect(models.resolveConfig(record.config)).toEqual(record);
+      const handle = getModel(deployment, record.config, { type: "user", id: USER, name: "One" });
+      expect(handle.model.provider).toBe(id === extraId ? "openai-codex" : "openai");
+      expect(handle.model.id).toBe(record.config.model);
+      await handle.stream(handle.model, { messages: [] }).result();
+    }
+    expect(calls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ subscriptionAccountId: ACCOUNT_A, modelId: physical.id }),
+      expect.objectContaining({ subscriptionAccountId: "owner", modelId: siwcPhysical.id }),
+    ]));
+    const record = models.resolve(extraId)!;
+    for (const config of [{ ...record.config, model: "unknown-synthetic-model" },
+      { ...record.config, subscriptionAccountId: "owner" }, { ...record.config, subscriptionProvider: undefined }])
+      expect(models.resolveConfig(config)).toBeUndefined();
+    expect(() => getModel(deployment, { ...CONFIG, model: physical.id }, { type: "user", id: USER, name: "One" }))
+      .toThrow("model_denied");
+    expect(() => getModel(deployment, { ...record.config, model: "unknown-synthetic-model" }, { type: "user", id: USER, name: "One" }))
+      .toThrow("model_unavailable");
+  });
+  it("fails closed when catalogs changed between reads, contain duplicates or expose unrecognized metadata", async () => {
+    for (const change of [
+      (catalog: ReturnType<typeof safeCatalog>) => { catalog.connections[0].ready = false; },
+      (catalog: ReturnType<typeof safeCatalog>) => { catalog.connections[0].models.push(catalog.connections[0].models[0]); },
+      (catalog: ReturnType<typeof safeCatalog>) => { catalog.connections.pop(); },
+      (catalog: ReturnType<typeof safeCatalog>) => { catalog.connections[0].models[0].id = "https://synthetic.invalid/model"; },
+    ]) {
+      const { deployment } = catalogEnvironment();
+      deployment.CODEX_BRIDGE.subscriptionModels = async () => { const value = safeCatalog(); change(value); return value; };
+      await expect(readSubscriptionConnections(deployment)).rejects.toThrow();
+    }
+    const { deployment } = catalogEnvironment();
+    deployment.CODEX_BRIDGE.subscriptionModels = async () => ({ ...safeCatalog(), token: "synthetic-metadata-must-be-rejected" });
+    await expect(readSubscriptionConnections(deployment)).rejects.toThrow();
+  });
 });

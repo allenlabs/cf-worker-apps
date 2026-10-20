@@ -1,4 +1,5 @@
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
+import { OPENAI_MODELS } from "@earendil-works/pi-ai/providers/openai.models";
 import { OPENAI_CODEX_MODELS } from "@earendil-works/pi-ai/providers/openai-codex.models";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model, Api } from "@earendil-works/pi-ai";
 import type { AiChatAuthorInfo, AiModelConfig } from "@gadgets/workshop-shared/api";
@@ -57,8 +58,13 @@ export function cloudAgentModel(env: Cloudflare.Env & BridgeEnvironment, config:
   const allowed = z.array(z.email().refine(value => value === value.toLowerCase())).min(1).max(20).safeParse(users);
   if (!allowed.success || !env.CODEX_BRIDGE_MODEL) throw Error("inference_bridge_not_configured");
   if (initiator.type !== "user" || !allowed.data.includes(initiator.id)) throw Error("inference_bridge_user_denied");
-  if (config.provider !== "openai" || config.model !== env.CODEX_BRIDGE_MODEL || config.apiToken || config.apiUrl !== undefined || config.extraHeaders && Object.keys(config.extraHeaders).length) throw Error("inference_bridge_model_denied");
-  const catalog = Object.values(OPENAI_CODEX_MODELS).find(model => model.id === env.CODEX_BRIDGE_MODEL);
+  const selected = config.subscriptionProvider;
+  if (selected !== undefined && (config.transport !== "subscription" ||
+      env.CODEX_BRIDGE_MANAGEMENT !== "admin" || subscriptionAccountId === undefined ||
+      !["siwc", "codex"].includes(selected))) throw Error("inference_bridge_model_denied");
+  if (config.provider !== "openai" || selected === undefined && config.model !== env.CODEX_BRIDGE_MODEL || config.apiToken || config.apiUrl !== undefined || config.extraHeaders && Object.keys(config.extraHeaders).length) throw Error("inference_bridge_model_denied");
+  const catalog = Object.values(selected === "siwc" ? OPENAI_MODELS : OPENAI_CODEX_MODELS)
+    .find(model => model.id === config.model);
   if (!catalog) throw Error("inference_bridge_model_unavailable");
   const model = { ...catalog, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
   return {
@@ -92,6 +98,7 @@ export function cloudAgentModel(env: Cloudflare.Env & BridgeEnvironment, config:
           if (!["minimal", "low", "medium", "high", "xhigh"].includes(reasoning)) throw Error("inference_bridge_reasoning_denied");
           const input = { version: 1, requestId: crypto.randomUUID(), userId: initiator.id, context,
             ...(subscriptionAccountId === undefined ? {} : { subscriptionAccountId }),
+            ...(selected === undefined ? {} : { modelId: model.id }),
             options: { reasoning, maxTokens: Math.min(options.maxTokens ?? config.outputLimit ?? 4096, 8192) } };
           if (encoder.encode(JSON.stringify(input)).length > limit) throw Error("inference_bridge_input_too_large");
           const call = await bridge.infer(input);

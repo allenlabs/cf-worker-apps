@@ -32,6 +32,7 @@ let accountReads = 0, usageReads = 0, duringAccountRead = null, duringDeviceStar
 let devicePolls = 0, deviceExchanges = 0, deviceSubject = "device-owner", deviceAccount = "device-account", deviceHtmlDenied = false, deviceStartDenied = false, deviceDeniedType = "text/html", deviceResponses = [], deviceJsonDenied = false;
 const deviceClient = "app_EMoamEEZ73f0CkXaXp7hrann";
 const deviceVerifier = "fixture-device-verifier-abcdefghijklmnopqrstuvwxyz";
+let expectedModel = model;
 let nonce, tokenCalls = 0, inferenceCalls = 0, refreshCalls = 0, claimsOverride = {}, refreshClaims = null, duringToken = null, outboundUrls = [];
 const logs = [];
 class CaptureLog extends Log { log(message) { logs.push(message); } }
@@ -105,6 +106,7 @@ export class Probe extends WorkerEntrypoint {
 await writeFile(join(work, "client.js"), `export default { async fetch(request, env) {
   const path=new URL(request.url).pathname;
   if(path==='/connections')return Response.json(await env.BRIDGE.subscriptionConnections());
+  if(path==='/models')return Response.json(await env.BRIDGE.subscriptionModels());
   if(path==='/events')return Response.json(await env.PROBE.events());
   if(path==='/session-calls')return Response.json(await env.SESSION.count());
   if(path==='/fail'){await env.PROBE.fail((await request.json()).value);return Response.json({ok:true});}
@@ -211,7 +213,7 @@ const outboundService = async request => {
   else assert.equal(request.headers.get("chatgpt-account-id"), deviceAccount);
   const bytes = Buffer.from(await request.arrayBuffer());
   const input = JSON.parse(request.headers.get("content-encoding") === "zstd" ? zstdDecompressSync(bytes).toString() : bytes.toString());
-  assert.equal(input.model, model);
+  assert.equal(input.model, expectedModel);
   const item = { id: "msg_fixture", type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "SIWC_READY", annotations: [] }] };
   return sse([
     { type: "response.created", response: { id: "resp_fixture", status: "in_progress", model } },
@@ -757,6 +759,19 @@ try {
   for (const row of namedCatalog) assert.deepEqual(Object.keys(row).sort(),['id','label','provider','ready']);
   assert.deepEqual({account:accountReads,usage:usageReads},readsBeforeNamed,'catalog reads local readiness without usage requests');
   assert.deepEqual(await (await privateClient.fetch('https://fixture.invalid/connections')).json(),namedCatalog,'trusted catalog needs no user ID');
+  const modelCatalog = await (await privateClient.fetch('https://fixture.invalid/models')).json();
+  assert.equal(modelCatalog.source, 'bundled-provider-catalog');
+  assert.equal(modelCatalog.entitlementVerified, false);
+  assert.deepEqual(modelCatalog.connections.map(({models,...connection})=>connection),namedCatalog,'legacy connection response remains unchanged');
+  const selectedModels = [];
+  for (const row of modelCatalog.connections) {
+    assert.ok(row.models.length > 2, 'each active protocol contributes its full bundled chat catalog');
+    assert.equal(new Set(row.models.map(model=>model.id)).size,row.models.length);
+    for(const item of row.models)assert.deepEqual(Object.keys(item).sort(),['id','name'],'catalog exposes safe model metadata only');
+    const selected = row.models.find(item=>item.id!==model);
+    selectedModels.push({accountId:row.id,provider:row.provider,modelId:selected.id});
+  }
+  assert.deepEqual({account:accountReads,usage:usageReads},readsBeforeNamed,'complete model catalog does not probe account entitlement or quota');
   const beforeNamedOverview={account:accountReads,usage:usageReads};
   let namedOverview=await overview();
   assert.deepEqual(namedOverview.map(row=>row.id),['owner',connectionA,connectionB]);
@@ -793,6 +808,18 @@ try {
     const response=await privateClient.fetch('https://fixture.invalid/infer',{method:'POST',body:JSON.stringify(wire(accountId?{subscriptionAccountId:accountId}:{}))});
     assert.equal(response.status,200);assert.ok((await response.text()).includes('"type":"done"'));
   }
+  for (const selected of selectedModels) {
+    expectedModel=selected.modelId;
+    if(selected.provider==='codex')deviceAccount=selected.accountId===connectionB?'synthetic-account-B':deviceAccountBeforeNamed;
+    const response=await privateClient.fetch('https://fixture.invalid/infer',{method:'POST',body:JSON.stringify(wire({subscriptionAccountId:selected.accountId,modelId:selected.modelId}))});
+    assert.equal(response.status,200);assert.ok((await response.text()).includes('"type":"done"'),'selected physical model reaches the actual SDK transport');
+  }
+  expectedModel=model;
+  const callsBeforeInvalidSelector=inferenceCalls;
+  for(const modelId of ['not-in-bundled-fixture-catalog','https://synthetic.invalid/model','', 'x'.repeat(129)]) {
+    assert.equal((await privateClient.fetch('https://fixture.invalid/infer',{method:'POST',body:JSON.stringify(wire({subscriptionAccountId:connectionA,modelId}))})).status,403);
+  }
+  assert.equal(inferenceCalls,callsBeforeInvalidSelector,'unknown and invalid physical models are denied before provider HTTP');
   const outboundBeforeDenied=outboundUrls.length, eventsBeforeDenied=(await events()).length;
   assert.equal((await privateClient.fetch('https://fixture.invalid/infer',{method:'POST',body:JSON.stringify(wire({userId:other,subscriptionAccountId:connectionA}))})).status,403);
   assert.equal(outboundUrls.length,outboundBeforeDenied);assert.equal((await events()).length,eventsBeforeDenied,'allowlist is checked before catalog, object and credential access');
@@ -1182,5 +1209,5 @@ try {
   assert.equal(oidcConfig.vars.CF_ACCESS_AUD, undefined);
   assert.deepEqual(oidcConfig.durable_objects, config.durable_objects);
   assert.deepEqual(oidcConfig.migrations, config.migrations);
-  console.log(JSON.stringify({ result: "PASS", nativeRuntime: "Miniflare/workerd", checks: ["Access signature/issuer/audience/expiry/admin", "OIDC private session and exact issuer/subject/email pins before Credentials", "OIDC no-form bootstrap, authenticated document GET and matching CSP nonce, same-tab 401 recovery and 403 denial", "same-origin JSON bounded requests before DO", "automatic verified SIWC identity, legacy pins and concurrent registration conflicts", "independent encrypted SIWC and Codex completion in either order", "device empty/arbitrary pending objects, interval, expiry and terminal denial or invalid response", "explicit active transport and unavailable selection fails closed", "account cache privacy and in-flight selection change", "both login choices and bounded device polling with navigation guard", "automatic metadata and manual callback UI with no browser persistence", "owner plus two named isolated connections, bounded catalog and explicit private inference selectors", "confirmed named deletion removes connected/pending credentials and quota, blocks busy/routing references, preserves owner/siblings, rejects removed IDs and late login starts", "rendered add/list/switch/delete ignores late status, login, metadata and device-poll responses"], tokenCalls, inferenceCalls, temporaryBuild: work }));
+  console.log(JSON.stringify({ result: "PASS", nativeRuntime: "Miniflare/workerd", checks: ["Access signature/issuer/audience/expiry/admin", "OIDC private session and exact issuer/subject/email pins before Credentials", "OIDC no-form bootstrap, authenticated document GET and matching CSP nonce, same-tab 401 recovery and 403 denial", "same-origin JSON bounded requests before DO", "automatic verified SIWC identity, legacy pins and concurrent registration conflicts", "independent encrypted SIWC and Codex completion in either order", "device empty/arbitrary pending objects, interval, expiry and terminal denial or invalid response", "explicit active transport and unavailable selection fails closed", "account cache privacy and in-flight selection change", "both login choices and bounded device polling with navigation guard", "automatic metadata and manual callback UI with no browser persistence", "owner plus two named isolated connections, complete safe SDK model catalogs and validated physical private inference selectors", "confirmed named deletion removes connected/pending credentials and quota, blocks busy/routing references, preserves owner/siblings, rejects removed IDs and late login starts", "rendered add/list/switch/delete ignores late status, login, metadata and device-poll responses"], tokenCalls, inferenceCalls, temporaryBuild: work }));
 } finally { await mf.dispose(); }
