@@ -1,0 +1,872 @@
+diff --git a/packages/workshop-backend/__tests__/subscription-models.test.ts b/packages/workshop-backend/__tests__/subscription-models.test.ts
+--- a/packages/workshop-backend/__tests__/subscription-models.test.ts
++++ b/packages/workshop-backend/__tests__/subscription-models.test.ts
+@@ -30,7 +30,7 @@
+ const MODEL = "gpt-6.1-sol",
+   USER = "one@example.invalid",
+   OTHER = "two@example.invalid";
+-const PROFILE = { type: "agent" as const, id: MODEL, name: "Codex subscription", providerDisplayName: "Codex subscription", provider: { id: "subscription:owner", name: "Codex subscription", source: "Subscription" } };
++const PROFILE = { type: "agent" as const, id: MODEL, name: OPENAI_CODEX_MODELS[MODEL].name, isDefault: true as const, providerDisplayName: "Codex subscription", provider: { id: "subscription:owner", name: "Codex subscription", source: "Subscription" } };
+ const CONFIG: AiModelConfig = { provider: "openai", model: MODEL, apiToken: "", transport: "subscription", subscriptionAccountId: "owner" };
+ const PERSONAL = { provider: "anthropic", model: "personal-model", apiToken: "fixture-api-token",
+   apiUrl: "https://personal.example.invalid", extraHeaders: { "X-Personal-Key": "fixture-header" } } satisfies AiModelConfig;
+@@ -148,11 +148,11 @@
+       });
+       await admin.setSubscriptionModelEnabled(true, ACCOUNT_A);
+       const active = new SubscriptionModels(fixture.deployment, admin.getAdminConfig(), USER, CONNECTIONS);
+-      expect(active.resolve(A)?.profile).toEqual({ type: "agent", id: A, name: "Research writer", providerDisplayName: "Research", provider: { id: `subscription:${ACCOUNT_A}`, name: "Research", source: "Subscription" } });
++      expect(active.resolve(A)?.profile).toEqual({ type: "agent", id: A, name: "Research writer", isDefault: true, providerDisplayName: "Research", provider: { id: `subscription:${ACCOUNT_A}`, name: "Research", source: "Subscription" } });
+       expect(active.resolve(A)?.config).toEqual({ ...CONFIG, subscriptionAccountId: ACCOUNT_A });
+       await expect(admin.setModelDisplayName("unknown-model", "Other")).rejects.toThrow("No such");
+       await admin.setModelDisplayName(A, null);
+-      expect(new SubscriptionModels(fixture.deployment, admin.getAdminConfig(), USER, CONNECTIONS).get(A)?.name).toBe("Research");
++      expect(new SubscriptionModels(fixture.deployment, admin.getAdminConfig(), USER, CONNECTIONS).get(A)?.name).toBe(OPENAI_CODEX_MODELS[MODEL].name);
+     });
+   });
+ 
+@@ -198,8 +198,8 @@
+     const fixture = settings(CONNECTIONS);
+     await fixture.inDo(async admin => {
+       const descriptor = (await admin.getSettings("admin-outside-allowlist@example.invalid")).subscriptionModel!;
+-      expect(descriptor.connections.map(row => [row.name, row.ready])).toEqual([
+-        ["Codex subscription", true], ["Research", true], ["Writing", false],
++      expect(descriptor.connections.map(row => [row.name, row.providerDisplayName, row.ready])).toEqual([
++        [PROFILE.name, "Codex subscription", true], [PROFILE.name, "Research", true], [PROFILE.name, "Writing", false],
+       ]);
+       expect(descriptor.connections.every(row => !Object.hasOwn(row, "token"))).toBe(true);
+     });
+@@ -208,8 +208,8 @@
+   it("keeps logical profiles separate while resolving their shared physical model and own object selector", async () => {
+     const models = await getGatewayModels(managed({}, CONNECTIONS), USER);
+     expect(models).toBeInstanceOf(SubscriptionModels);
+-    expect(models?.list().map(profile => [profile.id, profile.name])).toEqual([
+-      [MODEL, "Codex subscription"], [A, "Research"], [B, "Writing"],
++    expect(models?.list().map(profile => [profile.id, profile.name, profile.provider?.name])).toEqual([
++      [MODEL, PROFILE.name, "Codex subscription"], [A, PROFILE.name, "Research"], [B, PROFILE.name, "Writing"],
+     ]);
+     expect(models?.resolve(A)?.config).toEqual({ ...CONFIG, subscriptionAccountId: ACCOUNT_A });
+     expect(models?.resolve(B)?.config).toEqual({ ...CONFIG, subscriptionAccountId: ACCOUNT_B });
+@@ -852,6 +852,19 @@
+       async infer(input: unknown) { calls.push(input); throw Error("Synthetic inference stopped"); },
+     } } };
+   }
++  it("starts both inventory reads before either resolves and still checks their snapshots", async () => {
++    let resolveConnections!: (connections: SubscriptionConnections) => void;
++    let resolveCatalog!: (catalog: ReturnType<typeof safeCatalog>) => void;
++    const started: string[] = [];
++    const deployment = { ...managed({}, CONNECTIONS), CODEX_BRIDGE: {
++      subscriptionConnections() { started.push("connections"); return new Promise<SubscriptionConnections>(resolve => { resolveConnections = resolve; }); },
++      subscriptionModels() { started.push("models"); return new Promise<ReturnType<typeof safeCatalog>>(resolve => { resolveCatalog = resolve; }); },
++    } };
++    const pending = readSubscriptionConnections(deployment);
++    expect(started).toEqual(["connections", "models"]);
++    resolveConnections(CONNECTIONS); resolveCatalog(safeCatalog());
++    expect(await pending).toHaveLength(CONNECTIONS.length);
++  });
+   it("retains the legacy connection descriptor and offers every bundled physical model with distinct IDs", async () => {
+     const { deployment } = catalogEnvironment();
+     const rows = await readSubscriptionConnections(deployment);
+@@ -860,7 +873,7 @@
+     expect(models.all.map(row => row.id)).toEqual([MODEL, A, B]);
+     expect(models.list().length).toBeGreaterThan(models.all.length + 3);
+     expect(new Set(models.list().map(row => row.id)).size).toBe(models.list().length);
+-    expect(models.resolve(extraId)).toMatchObject({ profile: { id: extraId, name: `Research · ${physical.name}` },
++    expect(models.resolve(extraId)).toMatchObject({ profile: { id: extraId, name: physical.name },
+       config: { model: physical.id, subscriptionAccountId: ACCOUNT_A, subscriptionProvider: "codex" } });
+     expect(models.resolve(ownerExtraId)).toMatchObject({ config: { model: siwcPhysical.id, subscriptionProvider: "siwc" } });
+     expect(models.resolve(MODEL)?.config).toEqual({ ...CONFIG, subscriptionProvider: "siwc" });
+@@ -868,6 +881,30 @@
+     expect(models.resolveConfig(CONFIG)?.config).toEqual({ ...CONFIG, subscriptionProvider: "siwc" });
+     expect(models.resolve(`subscription-model:${ACCOUNT_A}:siwc:${physical.id}`)).toBeUndefined();
+     expect(models.resolve(physical.id)).toBeUndefined();
++  });
++  it("labels and marks each physical default exactly once without changing its logical ID or routing", async () => {
++    const { deployment } = catalogEnvironment(), rows = await readSubscriptionConnections(deployment);
++    const sameNames = rows!.map(row => ({ ...row, label: "Research", catalog: row.catalog && { ...row.catalog,
++      models: [{ id: MODEL, name: "Actual default model" }, ...row.catalog.models.filter(model => model.id !== MODEL)] } }));
++    const models = new SubscriptionModels(deployment, DEFAULT_ADMIN_CONFIG, USER, sameNames);
++    expect(models.all.map(row => ({ id: row.id, name: row.name, isDefault: row.isDefault })))
++      .toEqual([MODEL, A, B].map(id => ({ id, name: "Actual default model", isDefault: true })));
++    for (const connection of models.all) {
++      const choices = models.providerCatalog().providers.find(provider => provider.id === `subscription:${connection.accountId}`)!.models;
++      expect(choices.filter(model => model.isDefault).map(model => model.id)).toEqual([connection.id]);
++      expect(choices.filter(model => model.modelId === MODEL).map(model => model.id)).toEqual([connection.id]);
++      expect(models.list().filter(model => model.provider?.id === `subscription:${connection.accountId}` && model.isDefault).map(model => model.id)).toEqual([connection.id]);
++      expect(models.resolve(connection.id)).toMatchObject({ profile: { id: connection.id, name: "Actual default model", isDefault: true },
++        config: { model: MODEL, subscriptionAccountId: connection.accountId } });
++      expect(models.resolveConfig(models.resolve(connection.id)!.config)?.profile).toEqual(models.resolve(connection.id)!.profile);
++    }
++    expect(models.resolve(extraId)?.profile).not.toHaveProperty("isDefault");
++    expect(models.resolve(extraId)?.profile.name).toBe(physical.name);
++    const custom = new SubscriptionModels(deployment, { ...DEFAULT_ADMIN_CONFIG, modelDisplayNames: { [A]: "Custom default", [extraId]: "Custom extra" } }, USER, sameNames);
++    expect(custom.resolve(A)?.profile).toMatchObject({ name: "Custom default", isDefault: true });
++    expect(custom.resolve(extraId)?.profile.name).toBe("Custom extra");
++    const fallback = new SubscriptionModels(deployment, DEFAULT_ADMIN_CONFIG, USER, CONNECTIONS);
++    expect(fallback.resolve(A)?.profile.name).toBe(OPENAI_CODEX_MODELS[MODEL].name);
+   });
+   it("inherits connection availability and refuses a disabled parent even if a child is enabled", async () => {
+     const { deployment } = catalogEnvironment(), rows = await readSubscriptionConnections(deployment);
+diff --git a/packages/workshop-backend/__tests__/user-models.test.ts b/packages/workshop-backend/__tests__/user-models.test.ts
+--- a/packages/workshop-backend/__tests__/user-models.test.ts
++++ b/packages/workshop-backend/__tests__/user-models.test.ts
+@@ -30,7 +30,7 @@
+   const stub = env.TEST_USER.getByName(`user-models-${++userCounter}`);
+   // Calls go through runInDurableObject rather than the stub's RPC, whose rejections workerd
+   // reports as uncaught exceptions even once the test has handled them.
+-  const inDo = <T>(f: (user: UserDurableObject) => Promise<T>) => runInDurableObject(stub, f);
++  const inDo = <T>(f: (user: UserDurableObject, state: DurableObjectState) => Promise<T>) => runInDurableObject(stub, f);
+   const user: ModelMethods = {
+     addModel: (...args) => inDo(u => u.addModel(...args)),
+     getModelConfig: (...args) => inDo(u => u.getModelConfig(...args)),
+@@ -61,6 +61,19 @@
+     expect((await inDo(u => u.listModels()))[0]).not.toHaveProperty("providerDisplayName");
+   });
+ 
++  it("strips forged default markers from personal writes and historical reads", async () => {
++    const { user, stored, inDo } = await userWithModel();
++    await user.updateModel({ ...PROFILE, isDefault: true }, CONFIG);
++    expect(await stored(PROFILE.id)).not.toHaveProperty("profile.isDefault");
++    await inDo(async (user, state) => {
++      makeUserStorage(state.storage).aiModels.put({ profile: { ...PROFILE, isDefault: true }, config: CONFIG });
++    });
++    expect((await user.getModelConfig(PROFILE.id)).profile).not.toHaveProperty("isDefault");
++    expect((await inDo(user => user.listModels()))[0]).not.toHaveProperty("isDefault");
++    expect((await inDo(user => user.getChatContext(PROFILE.id))).aiModel?.profile).not.toHaveProperty("isDefault");
++    await user.addModel({ ...PROFILE, id: "forged-default", isDefault: true }, CONFIG);
++    expect(await stored("forged-default")).not.toHaveProperty("profile.isDefault");
++  });
+   it("keeps personal profiles with the same provider label separate", async () => {
+     const { user, inDo } = await userWithModel();
+     await user.addModel({ ...PROFILE, id: "second-profile" }, CONFIG);
+@@ -86,6 +99,55 @@
+     });
+   });
+ 
++  it("distinguishes failed scoped discovery from an empty catalog without discarding deployment choices", async () => {
++    const stub = env.TEST_USER.getByName(`failed-discovery-${++userCounter}`);
++    await runInDurableObject(stub, async (user, state) => {
++      const storage = makeUserStorage(state.storage);
++      storage.created.put(true);
++      storage.profile.put({ type: "user", id: "inventory@example.invalid", name: "Inventory" });
++      const originalEnv = user.env;
++      const originalScoped = Reflect.get(user, "scopedModels");
++      const originalAdmin = Reflect.get(user, "adminSettings");
++      const failed = { id: "synthetic-provider", name: "Research", scope: { kind: "organization" },
++        models: [], refreshedAt: null, error: "Synthetic discovery failure" };
++      try {
++        Reflect.set(user, "scopedModels", { catalog: async () => ({ providers: [] }) });
++        expect(await user.listModels()).toEqual([]);
++        Reflect.set(user, "scopedModels", { catalog: async () => ({ providers: [failed] }) });
++        await expect(user.listModels()).rejects.toThrow("Model discovery is unavailable. Please retry.");
++        Reflect.set(user, "env", { ...originalEnv, CODEX_BRIDGE_MANAGEMENT: "admin", CODEX_BRIDGE_SETUP: undefined,
++          CODEX_BRIDGE: {}, CODEX_BRIDGE_MODEL: "gpt-6.1-sol", CODEX_BRIDGE_ALLOWED_USER_IDS: '["inventory@example.invalid"]' });
++        Reflect.set(user, "adminSettings", { getByName: () => ({ getAdminConfig: async () => DEFAULT_ADMIN_CONFIG }) });
++        expect((await user.listModels()).map(model => model.id)).toEqual(["gpt-6.1-sol"]);
++      } finally {
++        Reflect.set(user, "env", originalEnv);
++        Reflect.set(user, "scopedModels", originalScoped);
++        Reflect.set(user, "adminSettings", originalAdmin);
++      }
++    });
++  });
++  it("starts verified scoped discovery without waiting for deployment lookup and keeps uncreated users out", async () => {
++    const stub = env.TEST_USER.getByName(`parallel-models-${++userCounter}`);
++    await runInDurableObject(stub, async (user, state) => {
++      const storage = makeUserStorage(state.storage);
++      let started = 0;
++      let resolveCatalog!: (catalog: { providers: [] }) => void;
++      const scoped = Reflect.get(user, "scopedModels");
++      Reflect.set(user, "scopedModels", { catalog: () => { ++started; return new Promise(resolve => { resolveCatalog = resolve; }); } });
++      try {
++        expect(await user.listModels()).toEqual([]);
++        expect(started).toBe(0);
++        storage.created.put(true);
++        storage.profile.put({ type: "user", id: "inventory@example.invalid", name: "Inventory" });
++        const pending = user.listModels();
++        expect(started).toBe(1);
++        resolveCatalog({ providers: [] });
++        expect(await pending).toEqual([]);
++        Reflect.set(user, "scopedModels", { catalog: async () => { throw Error("Synthetic scoped catalog denied"); } });
++        await expect(user.listModels()).rejects.toThrow("Synthetic scoped catalog denied");
++      } finally { Reflect.set(user, "scopedModels", scoped); }
++    });
++  });
+   it("rejects invalid display names before writing", async () => {
+     const { user, stored } = await userWithModel();
+     for (const name of [" ", "a\nb", "a\u0085b", "é".repeat(65)]) {
+diff --git a/packages/workshop-backend/src/subscription-models.ts b/packages/workshop-backend/src/subscription-models.ts
+--- a/packages/workshop-backend/src/subscription-models.ts
++++ b/packages/workshop-backend/src/subscription-models.ts
+@@ -54,9 +54,13 @@
+ export async function readSubscriptionConnections(env: Cloudflare.Env & SubscriptionEnvironment): Promise<SubscriptionConnections | undefined> {
+   if (env.CODEX_BRIDGE_SETUP !== "siwc") return undefined;
+   if (!env.CODEX_BRIDGE) throw new Error("inference_bridge_not_configured");
+-  const connections = subscriptionConnectionsSchema.parse(await env.CODEX_BRIDGE.subscriptionConnections());
++  const [connectionData, catalogData] = await Promise.all([
++    env.CODEX_BRIDGE.subscriptionConnections(),
++    typeof env.CODEX_BRIDGE.subscriptionModels === "function" ? env.CODEX_BRIDGE.subscriptionModels() : undefined,
++  ]);
++  const connections = subscriptionConnectionsSchema.parse(connectionData);
+   if (typeof env.CODEX_BRIDGE.subscriptionModels !== "function") return connections;
+-  const catalog = subscriptionCatalogSchema.parse(await env.CODEX_BRIDGE.subscriptionModels());
++  const catalog = subscriptionCatalogSchema.parse(catalogData);
+   if (catalog.connections.length !== connections.length || catalog.connections.some(row => {
+     const connection = connections.find(connection => connection.id === row.id);
+     return !connection || connection.label !== row.label || connection.provider !== row.provider || connection.ready !== row.ready;
+@@ -74,7 +78,7 @@
+   readonly userModels: boolean;
+   readonly setupUrl?: string;
+   readonly all: readonly { id: string; name: string; providerDisplayName: string; provider: "openai"; mode: GatewayModelMode;
+-    accountId: string; subscriptionProvider: SubscriptionConnections[number]["provider"] | null; ready: boolean | null }[];
++    isDefault?: true; accountId: string; subscriptionProvider: SubscriptionConnections[number]["provider"] | null; ready: boolean | null }[];
+   readonly catalog: readonly (SubscriptionModels["all"][number] & {
+     modelId: string; catalogSource?: "bundled-provider-catalog"; entitlementVerified?: false;
+   })[];
+@@ -112,9 +116,10 @@
+     this.all = (connections ?? [{ id: "owner", label: "Codex subscription", provider: null, ready: null }]).map(connection => {
+       const id = connection.id === "owner" ? catalog.id : `subscription-${connection.id}`;
+       const mode = Object.hasOwn(config.modelModes, id) ? config.modelModes[id] : "enabled";
++      const modelName = connections?.find(row => row.id === connection.id)?.catalog?.models.find(model => model.id === catalog.id)?.name ?? catalog.name;
+       return { id, name: config.modelDisplayNames && Object.hasOwn(config.modelDisplayNames, id)
+-          ? config.modelDisplayNames[id] : connection.label,
+-        providerDisplayName: connection.label, provider: "openai", mode, accountId: connection.id,
++          ? config.modelDisplayNames[id] : modelName,
++        isDefault: true as const, providerDisplayName: connection.label, provider: "openai", mode, accountId: connection.id,
+         subscriptionProvider: connection.provider, ready: connection.ready };
+     });
+     this.catalog = this.all.flatMap(connection => {
+@@ -127,9 +132,10 @@
+         const id = `subscription-model:${connection.accountId}:${connection.subscriptionProvider}:${physical.id}`;
+         const mode = connection.mode === "disabled" ? "disabled" : Object.hasOwn(config.modelModes, id)
+           ? config.modelModes[id] : connection.mode;
+-        choices.push({ ...connection, id, modelId: physical.id, mode,
++        const { isDefault, ...profile } = connection;
++        choices.push({ ...profile, id, modelId: physical.id, mode,
+           name: config.modelDisplayNames && Object.hasOwn(config.modelDisplayNames, id)
+-            ? config.modelDisplayNames[id] : `${connection.name} · ${physical.name}`,
++            ? config.modelDisplayNames[id] : physical.name,
+           catalogSource: metadata.source, entitlementVerified: metadata.entitlementVerified });
+       }
+       return choices;
+@@ -144,7 +150,8 @@
+     if (!this.#authorized) return [];
+     return this.catalog
+       .filter((model) => model.mode === "enabled")
+-      .map(({ id, name, providerDisplayName, accountId }) => ({ type: "agent", id, name, providerDisplayName,
++      .map(({ id, name, providerDisplayName, accountId, isDefault }) => ({ type: "agent", id, name, providerDisplayName,
++        ...(isDefault && { isDefault }),
+         provider: { id: `subscription:${accountId}`, name: providerDisplayName, source: "Subscription" } }));
+   }
+ 
+@@ -158,7 +165,7 @@
+         refreshedAt: null, error: connection.ready === false ? "This subscription is not connected." : null,
+         models: models.map(model => ({ id: model.id, providerId: `subscription:${connection.accountId}`,
+           modelId: model.modelId, name: model.name, providerName: model.providerDisplayName, scope,
+-          source: "subscription" as const })) }];
++          source: "subscription" as const, ...(model.isDefault && { isDefault: model.isDefault }) })) }];
+     }) };
+   }
+ 
+@@ -167,6 +174,7 @@
+     if (!this.#authorized || !model || model.mode === "disabled") return undefined;
+     return {
+       profile: { type: "agent", id: model.id, name: model.name, providerDisplayName: model.providerDisplayName,
++        ...(model.isDefault && { isDefault: model.isDefault }),
+         provider: { id: `subscription:${model.accountId}`, name: model.providerDisplayName, source: "Subscription" } },
+       config: { provider: "openai", model: model.modelId, apiToken: "", transport: "subscription",
+         ...(model.catalogSource && model.subscriptionProvider
+diff --git a/packages/workshop-backend/src/user.ts b/packages/workshop-backend/src/user.ts
+--- a/packages/workshop-backend/src/user.ts
++++ b/packages/workshop-backend/src/user.ts
+@@ -70,7 +70,7 @@
+ /** Project every personal-model read from its owner's config, never a supplied author label. */
+ function personalModelRecord(record: UserAiModelRecord): UserAiModelRecord {
+   const { transport, subscriptionAccountId, subscriptionProvider, scopedProviderId, ...config } = record.config;
+-  const { providerDisplayName, provider, ...profile } = record.profile;
++  const { providerDisplayName, provider, isDefault, ...profile } = record.profile;
+   return { config, profile: { ...profile,
+     provider: { id: `personal:${profile.id}`, name: config.providerDisplayName ?? AI_MODEL_PROVIDER_LABELS[config.provider],
+       source: `Personal · ${profile.name}` },
+@@ -564,16 +564,22 @@
+   }
+ 
+   async listModels(): Promise<AiChatAuthorInfo[]> {
+-    const deployment = this.#listModels(await getGatewayModels(this.env, this.#modelUserId(),
+-        () => this.adminSettings.getByName("").getAdminConfig()));
+-    if (!this.#modelUserId()) return deployment;
+-    const catalog = await this.scopedModels.catalog();
+-    return [...deployment, ...catalog.providers.flatMap(provider => provider.models.map(model => ({
++    const userId = this.#modelUserId();
++    const [models, catalog] = await Promise.all([
++      getGatewayModels(this.env, userId, () => this.adminSettings.getByName("").getAdminConfig()),
++      userId ? this.scopedModels.catalog() : undefined,
++    ]);
++    const deployment = this.#listModels(models);
++    if (!catalog) return deployment;
++    const result = [...deployment, ...catalog.providers.flatMap(provider => provider.models.map(model => ({
+       type: 'agent' as const, id: model.id, name: model.name, providerDisplayName: model.providerName,
+       provider: { id: `scoped:${provider.id}`, name: provider.name,
+         source: provider.scope.kind === 'organization' ? 'Organization backend'
+           : provider.scope.kind === 'team' ? 'Team backend' : 'Personal backend' },
+     })))];
++    if (result.length === 0 && catalog.providers.some(provider => provider.error !== null))
++      throw new Error('Model discovery is unavailable. Please retry.');
++    return result;
+   }
+ 
+   #listModels(models: DeploymentModels | null): AiChatAuthorInfo[] {
+@@ -654,7 +660,7 @@
+     // deployment's to set on its own models.
+     let {reasoning, compactionInputBudget, behavesLike, capabilities, transport, subscriptionAccountId, subscriptionProvider, scopedProviderId, ...own} = config;
+ 
+-    const { providerDisplayName, provider, ...author } = profile;
++    const { providerDisplayName, provider, isDefault, ...author } = profile;
+     const { providerDisplayName: label, ...connection } = own;
+     this.storage.aiModels.put({
+       profile: { ...author, type: "agent", name: validateDisplayName(author.name) },
+diff --git a/packages/workshop-frontend/src/ChatInterface.actions.test.tsx b/packages/workshop-frontend/src/ChatInterface.actions.test.tsx
+--- a/packages/workshop-frontend/src/ChatInterface.actions.test.tsx
++++ b/packages/workshop-frontend/src/ChatInterface.actions.test.tsx
+@@ -5,7 +5,7 @@
+ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+ import type { RpcStub } from 'capnweb'
+ import type {
+-  ActionLogEntry, AiChatMessage, AiChatMetadata, AiChatSubscriber, Overseer,
++  ActionLogEntry, AiChatAuthorInfo, AiChatMessage, AiChatMetadata, AiChatSubscriber, Overseer,
+ } from '@gadgets/workshop-shared/api'
+ 
+ vi.stubGlobal('ResizeObserver', class {
+@@ -130,6 +130,62 @@
+   firstChat.emitMessage(actionMessage)
+ }
+ 
++describe('workspace model discovery', () => {
++  const model: AiChatAuthorInfo = { type: 'agent', id: 'synthetic-model', name: 'Actual model',
++    provider: { id: 'subscription:synthetic', name: 'Research', source: 'Subscription' } };
++  it('offers models while chat history is pending and retains them when it fails', async () => {
++    const server = makeOverseer(); withChatApi(server);
++    let resolveModels!: (models: AiChatAuthorInfo[]) => void;
++    let rejectChats!: (error: Error) => void;
++    Object.assign(server.overseer, {
++      listModels: () => new Promise<AiChatAuthorInfo[]>(resolve => { resolveModels = resolve; }),
++      listChats: () => new Promise<AiChatMetadata[]>((_, reject) => { rejectChats = reject; }),
++    });
++    vi.spyOn(console, 'error').mockImplementation(() => {});
++    await renderChat(server.overseer);
++    expect(document.body.textContent).toContain('Loading providers');
++    await act(async () => resolveModels([model]));
++    const provider = document.querySelector<HTMLButtonElement>('[aria-label="Select provider"]')!;
++    await act(async () => provider.click());
++    expect(document.body.textContent).toContain('Research');
++    expect(document.body.textContent).not.toContain('No providers available');
++    await act(async () => rejectChats(Error('Synthetic chat inventory unavailable')));
++    expect(document.body.textContent).toContain('Research');
++  });
++  it('retries failed model discovery without reloading conversations or claiming an empty catalog', async () => {
++    const server = makeOverseer(); withChatApi(server);
++    const listModels = vi.fn<() => Promise<AiChatAuthorInfo[]>>()
++      .mockRejectedValueOnce(Error('Synthetic catalog unavailable')).mockResolvedValueOnce([]);
++    const listChats = vi.fn(async () => []);
++    Object.assign(server.overseer, { listModels, listChats });
++    vi.spyOn(console, 'error').mockImplementation(() => {});
++    await renderChat(server.overseer);
++    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Select provider"]')!.click());
++    expect(document.body.textContent).toContain("Couldn't load providers");
++    expect(document.body.textContent).not.toContain('No providers available');
++    const retry = Array.from(document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(item => item.textContent === 'Retry');
++    expect(retry).toBeDefined();
++    await act(async () => retry!.click());
++    expect(listModels).toHaveBeenCalledTimes(2);
++    expect(listChats).toHaveBeenCalledTimes(1);
++    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Select provider"]')!.click());
++    expect(document.body.textContent).toContain('No providers available');
++  });
++  it('does not publish stale models after an overseer reconnect', async () => {
++    const first = makeOverseer(); withChatApi(first);
++    let resolveOld!: (models: AiChatAuthorInfo[]) => void;
++    Object.assign(first.overseer, { listModels: () => new Promise<AiChatAuthorInfo[]>(resolve => { resolveOld = resolve; }) });
++    await renderChat(first.overseer);
++    const second = makeOverseer(); withChatApi(second);
++    Object.assign(second.overseer, { listModels: async () => [{ ...model, provider: { ...model.provider!, name: 'New provider' } }] });
++    await renderChat(second.overseer);
++    await act(async () => resolveOld([model]));
++    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Select provider"]')!.click());
++    expect(document.body.textContent).toContain('New provider');
++    expect(document.body.textContent).not.toContain('Research');
++  });
++});
++
+ describe('ChatInterface action refresh', () => {
+   it('refetches cached mutable cards when an unlinked stub swaps', async () => {
+     await cachePendingCard()
+diff --git a/packages/workshop-frontend/src/ChatInterface.tsx b/packages/workshop-frontend/src/ChatInterface.tsx
+--- a/packages/workshop-frontend/src/ChatInterface.tsx
++++ b/packages/workshop-frontend/src/ChatInterface.tsx
+@@ -116,6 +116,7 @@
+ import { copyToClipboard } from "./clipboard";
+ import { isImeComposing } from "./keyboardEvent";
+ import { formatAttachmentSize } from "./features/chat/attachmentFormatting";
++import type { ModelCatalogState } from "./features/chat/composer/ComposerModelSelector";
+ import { ChatComposer } from "./features/chat/composer/ChatComposer";
+ import { composerDraftStorageKey } from "./features/chat/composer/draft/composerDraft";
+ import {
+@@ -2823,6 +2824,10 @@
+   const [processingConnections, setProcessingConnections] = useState<Set<string>>(
+     new Set(),
+   );
++  const [modelCatalogStatus, setModelCatalogStatus] = useState<"loading" | "ready" | "error">("loading");
++  const [modelCatalogRetry, setModelCatalogRetry] = useState(0);
++  const modelCatalog: ModelCatalogState | undefined = modelCatalogStatus === "ready" ? undefined : modelCatalogStatus === "loading"
++    ? { kind: "loading" } : { kind: "error", onRetry: () => setModelCatalogRetry(value => value + 1) };
+   const [availableModels, setAvailableModels] = useState<AiChatAuthorInfo[]>(
+     [],
+   );
+@@ -3805,6 +3810,24 @@
+   // Keep stable subscriber instance across re-renders
+   const subscriberRef = useRef(new ChatSubscriberImpl());
+ 
++  useEffect(() => {
++    let cancelled = false;
++    setModelCatalogStatus("loading");
++    overseer.listModels().then(models => {
++      if (cancelled) return;
++      setAvailableModels(models);
++      setModelCatalogStatus("ready");
++      setSelectedModel(getStoredSelectedModel(models));
++    }).catch(err => {
++      if (cancelled) return;
++      setModelCatalogStatus("error");
++      if (!logRpcFailure("Failed to fetch models:", err)) {
++        toasts.add({ title: "Couldn't load AI models", variant: "error" });
++      }
++    });
++    return () => { cancelled = true; };
++  }, [overseer, modelCatalogRetry]);
++
+   // Subscribe to chat updates
+   useEffect(() => {
+     let isMounted = true;
+@@ -3827,12 +3850,9 @@
+         if (isMounted) {
+           setIsSubscribed(true);
+ 
+-          // After subscribing, load the list of chats and models
+-          // This is safe because subscription will catch any new activity
+-          const [chats, models] = await Promise.all([
+-            overseer.listChats(),
+-            overseer.listModels(),
+-          ]);
++          // The subscription catches activity while the chat inventory is loading.
++          const chats = await overseer.listChats();
++          if (!isMounted) return;
+ 
+           chats.forEach((chat) => {
+             cacheRef.current.chats.set(chat.id, chat);
+@@ -3840,13 +3860,10 @@
+           bumpChatListVersion();
+           setChatListReady(true);
+ 
+-          setAvailableModels(models);
+-
+-          setSelectedModel(getStoredSelectedModel(models));
+-
+           forceUpdate();
+         }
+       } catch (err) {
++        if (!isMounted) return;
+         if (!logRpcFailure("Failed to subscribe to chats:", err)) {
+           reportIssue('chat.subscription-load', err)
+           toasts.add({ title: "Unable to load conversations", variant: "error" });
+@@ -3858,6 +3875,7 @@
+ 
+     // Set up reconnection handling
+     overseer.onRpcBroken?.((error) => {
++      if (!isMounted) return;
+       console.warn("RPC connection broken:", error);
+       setIsSubscribed(false);
+       // Cache persists, component will get new overseer prop and resubscribe
+@@ -4066,7 +4084,7 @@
+     const message = typeof messageText === "string" ? messageText.trim() : messageText ?? "";
+     if (!message && (!attachments || attachments.length === 0)) return;
+     const model = modelId !== undefined ? modelId : newChatModel;
+-    if (model === undefined || newChatModel === undefined || (model !== null && !availableModels.some(choice => choice.id === model))) {
++    if (model === undefined || newChatModel === undefined || (model !== null && (modelCatalogStatus !== "ready" || !availableModels.some(choice => choice.id === model)))) {
+       throw new Error("Choose a provider and model before starting a chat.");
+     }
+     try {
+@@ -5499,6 +5517,7 @@
+             onSend={handleNewChatSend}
+             isAgentActive={false}
+             models={availableModels}
++            modelCatalog={modelCatalog}
+             selectedModel={newChatModel == null ? newChatModel : { id: newChatModel }}
+             onModelChange={modelId => {
+               setNewChatModel(modelId);
+@@ -6508,6 +6527,7 @@
+                     onSend={handleSend}
+                     isAgentActive={isAgentActive}
+                     models={availableModels}
++                    modelCatalog={modelCatalog}
+                     selectedModel={selectedModel == null ? selectedModel : {
+                       id: selectedModel,
+                       name: chatAgent?.id === selectedModel ? chatAgent.name : undefined,
+diff --git a/packages/workshop-frontend/src/features/chat/composer/ChatComposer.test.tsx b/packages/workshop-frontend/src/features/chat/composer/ChatComposer.test.tsx
+--- a/packages/workshop-frontend/src/features/chat/composer/ChatComposer.test.tsx
++++ b/packages/workshop-frontend/src/features/chat/composer/ChatComposer.test.tsx
+@@ -65,10 +65,10 @@
+     container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+     const model = { type: "agent" as const, id: "model-a", name: "Model A",
+       provider: { id: "provider-a", name: "Provider A", source: "Organization" } };
+-    const render = async (selectedModel: Parameters<typeof ChatComposer>[0]["selectedModel"], models = [model]) => {
++    const render = async (selectedModel: Parameters<typeof ChatComposer>[0]["selectedModel"], models = [model], modelCatalog?: Parameters<typeof ChatComposer>[0]["modelCatalog"]) => {
+       await act(async () => root!.render(<ChatComposer createCapsuleGatekeeper={async () => null}
+         getOverseer={() => overseer} onSend={onSend} isAgentActive={false} models={models}
+-        selectedModel={selectedModel} onModelChange={() => {}} newChat />));
++        selectedModel={selectedModel} modelCatalog={modelCatalog} onModelChange={() => {}} newChat />));
+     };
+     await render(undefined);
+     const textarea = container.querySelector<HTMLTextAreaElement>('[role="combobox"]')!;
+@@ -83,6 +83,12 @@
+     await render({ id: model.id }, []);
+     await act(async () => textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+     expect(onSend).not.toHaveBeenCalled(); expect(textarea.value).toBe("Keep this draft");
++    for (const modelCatalog of [{ kind: "loading" } as const, { kind: "error", onRetry: () => {} } as const]) {
++      await render({ id: model.id }, [model], modelCatalog);
++      expect(send.disabled).toBe(true);
++      await act(async () => textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
++      expect(onSend).not.toHaveBeenCalled(); expect(textarea.value).toBe("Keep this draft");
++    }
+     await render({ id: model.id }); expect(send.disabled).toBe(false);
+     await act(async () => textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+     expect(onSend).toHaveBeenCalledWith("Keep this draft", model.id, undefined, undefined, undefined);
+@@ -93,7 +99,7 @@
+     container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+     await act(async () => root!.render(<ChatComposer createCapsuleGatekeeper={async () => null}
+       getOverseer={() => ({} as RpcStub<Overseer>)} onSend={onSend} isAgentActive={false} models={[]}
+-      selectedModel={null} onModelChange={() => {}} seedText="Human message" seedNonce={1} newChat />));
++      selectedModel={null} modelCatalog={{ kind: "loading" }} onModelChange={() => {}} seedText="Human message" seedNonce={1} newChat />));
+     const textarea = container.querySelector<HTMLTextAreaElement>('[role="combobox"]')!;
+     await act(async () => textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+     expect(onSend).toHaveBeenCalledWith("Human message", null, undefined, undefined, undefined);
+diff --git a/packages/workshop-frontend/src/features/chat/composer/ChatComposer.tsx b/packages/workshop-frontend/src/features/chat/composer/ChatComposer.tsx
+--- a/packages/workshop-frontend/src/features/chat/composer/ChatComposer.tsx
++++ b/packages/workshop-frontend/src/features/chat/composer/ChatComposer.tsx
+@@ -49,7 +49,7 @@
+ } from "./attachments/useComposerAttachments";
+ import { CapturedConsoleLogsPrompt } from "./CapturedConsoleLogsPrompt";
+ import ComposerAddMenu from "./ComposerAddMenu";
+-import { ComposerModelSelector, type SelectedModel } from "./ComposerModelSelector";
++import { ComposerModelSelector, type SelectedModel, type ModelCatalogState } from "./ComposerModelSelector";
+ import { useComposerDraft } from "./draft/useComposerDraft";
+ import { buildComposerSubmission } from "./composerSubmission";
+ import {
+@@ -83,6 +83,7 @@
+   onSend,
+   isAgentActive,
+   models,
++  modelCatalog,
+   selectedModel,
+   onModelChange,
+   pendingConsoleLogCount = 0,
+@@ -122,6 +123,7 @@
+   ) => Promise<void> | void;
+   isAgentActive: boolean;
+   models: AiChatAuthorInfo[];
++  modelCatalog?: ModelCatalogState;
+   selectedModel: SelectedModel;
+   onModelChange: (modelId: string | null | undefined) => void;
+   pendingConsoleLogCount?: number;
+@@ -450,7 +452,7 @@
+   };
+ 
+   const modelChoiceReady = selectedModel !== undefined &&
+-    (!newChat || selectedModel === null || models.some(model => model.id === selectedModel.id && model.provider));
++    (!newChat || selectedModel === null || (!modelCatalog && models.some(model => model.id === selectedModel.id && model.provider)));
+   const handleSend = async () => {
+     if (sendInFlightRef.current || isSending || isBlocked || isAgentActive || !modelChoiceReady) return;
+     setSendHiccup(null);
+@@ -956,6 +958,7 @@
+           <div className="contents sm:ml-auto sm:flex sm:min-w-0 sm:flex-shrink sm:items-center sm:gap-1.5">
+               <ComposerModelSelector
+                 models={models}
++                modelCatalog={modelCatalog}
+                 newChat={newChat}
+                 selectedModel={selectedModel}
+                 onModelChange={onModelChange}
+diff --git a/packages/workshop-frontend/src/features/chat/composer/ComposerModelSelector.test.tsx b/packages/workshop-frontend/src/features/chat/composer/ComposerModelSelector.test.tsx
+--- a/packages/workshop-frontend/src/features/chat/composer/ComposerModelSelector.test.tsx
++++ b/packages/workshop-frontend/src/features/chat/composer/ComposerModelSelector.test.tsx
+@@ -65,6 +65,16 @@
+     await act(async () => root!.render(<Harness catalog={[]} />));
+     expect(trigger("provider").textContent).toContain("Choose provider"); expect(trigger("model").disabled).toBe(true);
+   });
++  it("stars only the server-marked default and preserves explicit model choice", async () => {
++    await render(models.map(model => model.id === "account-a-model" ? { ...model, isDefault: true } : model));
++    await open("provider"); await choose("ResearchSubscription 1");
++    expect(changes).toEqual([undefined]);
++    await open("model");
++    const defaults = document.body.querySelectorAll('[aria-label="Default model"]');
++    expect(defaults).toHaveLength(1);
++    expect(defaults[0].closest('[role="menuitem"]')?.textContent).toContain("Shared physical model");
++    await choose("Other model"); expect(changes.at(-1)).toBe("account-a-other");
++  });
+   it("keeps No agent explicit and usable without providers", async () => {
+     await render([]); await open("provider"); await choose("No agent");
+     expect(changes).toEqual([null]); expect(trigger("provider").textContent).toContain("No agent");
+diff --git a/packages/workshop-frontend/src/features/chat/composer/ComposerModelSelector.tsx b/packages/workshop-frontend/src/features/chat/composer/ComposerModelSelector.tsx
+--- a/packages/workshop-frontend/src/features/chat/composer/ComposerModelSelector.tsx
++++ b/packages/workshop-frontend/src/features/chat/composer/ComposerModelSelector.tsx
+@@ -1,12 +1,15 @@
+ import { useEffect, useState } from "react";
+ import { DropdownMenu } from "@cloudflare/kumo";
+-import { CaretDown, Check } from "@phosphor-icons/react";
++import { CaretDown, Check, Star } from "@phosphor-icons/react";
+ import type { AiChatAuthorInfo } from "@gadgets/workshop-shared/api";
+ 
+ /** Undefined awaits a choice; null explicitly selects No agent. */
+ export type SelectedModel = { id: string; name?: string } | null | undefined;
+ 
++export type ModelCatalogState = { kind: "loading" } | { kind: "error"; onRetry: () => void };
++
+ type ComposerModelSelectorProps = {
++  modelCatalog?: ModelCatalogState;
+   models: readonly AiChatAuthorInfo[];
+   selectedModel: SelectedModel;
+   onModelChange: (modelId: string | null | undefined) => void;
+@@ -17,7 +20,7 @@
+ const itemClass = "!h-auto rounded-xl !px-2 !py-1.5 text-[12px] leading-4 font-normal text-kumo-subtle data-highlighted:bg-kumo-tint/70 data-highlighted:text-kumo-default";
+ const contentClass = "themed-floating-shadow-lg !z-[1100] !min-w-[190px] max-w-[min(400px,90vw)] rounded-2xl border border-kumo-line/70 bg-kumo-base p-1";
+ 
+-export const ComposerModelSelector = ({ models, selectedModel, onModelChange, newChat = false }: ComposerModelSelectorProps) => {
++export const ComposerModelSelector = ({ models, modelCatalog, selectedModel, onModelChange, newChat = false }: ComposerModelSelectorProps) => {
+   const [pendingProviderId, setPendingProviderId] = useState<string>();
+   const providers = Array.from(new Map(models.flatMap(model => model.provider ? [[model.provider.id, model.provider] as const] : [])).values());
+   const offeredModel = models.find(model => model.id === selectedModel?.id);
+@@ -27,13 +30,15 @@
+ 
+   // Catalog refreshes retain IDs and labels, but never silently replace a removed choice.
+   useEffect(() => {
++    if (modelCatalog) return;
+     if (pendingProviderId && !providers.some(provider => provider.id === pendingProviderId)) setPendingProviderId(undefined);
+     if (newChat && selectedModel && (!offeredModel || !offeredModel.provider)) onModelChange(undefined);
+-  }, [models, selectedModel, newChat, onModelChange, pendingProviderId]);
++  }, [models, modelCatalog, selectedModel, newChat, onModelChange, pendingProviderId]);
+ 
+   const modelLabel = selectedModel === null ? "No agent" : selectedModel === undefined ? "Choose model"
+     : offeredModel?.name ?? selectedModel.name ?? selectedModel.id;
+-  const providerLabel = selectedProvider?.name ?? (selectedModel === null ? "No agent" : selectedModel ? "Current provider" : "Choose provider");
++  const providerLabel = selectedProvider?.name ?? (selectedModel === null ? "No agent" : selectedModel ? "Current provider"
++    : modelCatalog?.kind === "loading" ? "Loading providers…" : modelCatalog?.kind === "error" ? "Couldn't load providers" : "Choose provider");
+   const providerDetail = (provider: NonNullable<AiChatAuthorInfo["provider"]>) => {
+     const duplicates = providers.filter(candidate => candidate.name === provider.name && candidate.source === provider.source)
+       .toSorted((a, b) => a.id.localeCompare(b.id));
+@@ -47,7 +52,7 @@
+         <span className="col-start-1 row-start-2 min-w-0 truncate">{providerLabel}</span><CaretDown size={12} className="col-start-2 row-span-2 row-start-1" />
+       </button>} />
+       <DropdownMenu.Content className={contentClass}>
+-        {providers.map(provider => <DropdownMenu.Item key={provider.id} className={itemClass} onClick={() => {
++        {!modelCatalog && providers.map(provider => <DropdownMenu.Item key={provider.id} className={itemClass} onClick={() => {
+           if (provider.id === selectedProviderId && selectedModel !== null) return;
+           setPendingProviderId(provider.id);
+           onModelChange(undefined);
+@@ -56,7 +61,12 @@
+             <span className="block text-kumo-inactive">{providerDetail(provider)}</span></span>
+           {selectedProviderId === provider.id && <Check size={12} />}
+         </DropdownMenu.Item>)}
+-        {providers.length === 0 && <div className="px-2 py-1.5 text-xs text-kumo-inactive">No providers available</div>}
++        {modelCatalog?.kind === "loading" && <div role="status" className="px-2 py-1.5 text-xs text-kumo-inactive">Loading providers…</div>}
++        {modelCatalog?.kind === "error" && <>
++          <div role="status" className="px-2 py-1.5 text-xs text-kumo-inactive">Couldn't load providers</div>
++          <DropdownMenu.Item className={itemClass} onClick={modelCatalog.onRetry}>Retry</DropdownMenu.Item>
++        </>}
++        {!modelCatalog && providers.length === 0 && <div className="px-2 py-1.5 text-xs text-kumo-inactive">No providers available</div>}
+         <div className="my-1 border-t border-kumo-line/70" />
+         <DropdownMenu.Item className={itemClass} onClick={() => { setPendingProviderId(undefined); onModelChange(null); }}>
+           <span className="flex-1">No agent</span>{selectedModel === null && <Check size={12} />}
+@@ -64,7 +74,7 @@
+       </DropdownMenu.Content>
+     </DropdownMenu>
+     <DropdownMenu>
+-      <DropdownMenu.Trigger disabled={!selectedProvider} render={<button type="button" className={triggerClass} aria-label="Select model" disabled={!selectedProvider}>
++      <DropdownMenu.Trigger disabled={!selectedProvider || !!modelCatalog} render={<button type="button" className={triggerClass} aria-label="Select model" disabled={!selectedProvider || !!modelCatalog}>
+         <span className="col-start-1 text-[11px] text-kumo-inactive">Model</span>
+         <span className="col-start-1 row-start-2 min-w-0 truncate">{modelLabel}</span><CaretDown size={12} className="col-start-2 row-span-2 row-start-1" />
+       </button>} />
+@@ -74,6 +84,7 @@
+           onModelChange(model.id);
+         }}>
+           <span className="min-w-0 flex-1 truncate">{model.name}</span>
++          {model.isDefault && <span role="img" aria-label="Default model"><Star size={12} weight="fill" /></span>}
+           {selectedModel?.id === model.id && <Check size={12} />}
+         </DropdownMenu.Item>)}
+       </DropdownMenu.Content>
+diff --git a/packages/workshop-frontend/src/homePromptFlow.test.tsx b/packages/workshop-frontend/src/homePromptFlow.test.tsx
+--- a/packages/workshop-frontend/src/homePromptFlow.test.tsx
++++ b/packages/workshop-frontend/src/homePromptFlow.test.tsx
+@@ -4,6 +4,7 @@
+ import { act } from "react";
+ import { createRoot, type Root } from "react-dom/client";
+ import { afterEach, describe, expect, it, vi } from "vitest";
++import { ComposerModelSelector } from "./features/chat/composer/ComposerModelSelector";
+ import type { AiChatAuthorInfo } from '@gadgets/workshop-shared/api';
+ 
+ const testState = vi.hoisted(() => {
+@@ -29,7 +30,8 @@
+   useNavigate: () => testState.navigate,
+ }));
+ 
+-vi.mock("@cloudflare/kumo", () => ({
++vi.mock("@cloudflare/kumo", async (importOriginal) => ({
++  ...(await importOriginal<typeof import("@cloudflare/kumo")>()),
+   useKumoToastManager: () => ({ add: testState.addToast }),
+ }));
+ 
+@@ -41,7 +43,10 @@
+ }));
+ 
+ vi.mock("./features/chat/composer/ChatComposer", () => ({
+-  ChatComposer: ({ seedText, seedNonce, draftStorageKey, selectedModel }: {
++  ChatComposer: ({ seedText, seedNonce, draftStorageKey, selectedModel, models, modelCatalog, onModelChange }: {
++    models: AiChatAuthorInfo[];
++    modelCatalog?: { kind: "loading" } | { kind: "error"; onRetry: () => void };
++    onModelChange: (id: string | null | undefined) => void;
+     seedText?: string;
+     seedNonce?: number;
+     draftStorageKey?: string;
+@@ -50,7 +55,8 @@
+     testState.seeds.push({ text: seedText, nonce: seedNonce });
+     testState.draftStorageKeys.push(draftStorageKey);
+     testState.selectedModels.push(selectedModel == null ? selectedModel : selectedModel.id);
+-    return <textarea aria-label="Prompt" readOnly value={seedText ?? ""} />;
++    return <><textarea aria-label="Prompt" readOnly value={seedText ?? ""} />
++      <ComposerModelSelector models={models} modelCatalog={modelCatalog} selectedModel={selectedModel} onModelChange={onModelChange} newChat /></>;
+   },
+ }));
+ 
+@@ -73,10 +79,37 @@
+     testState.seeds.length = 0;
+     testState.draftStorageKeys.length = 0;
+     testState.selectedModels.length = 0;
++    vi.restoreAllMocks();
+     vi.clearAllMocks();
+     testState.listModels.mockResolvedValue([]);
+     testState.getPreferredModel.mockResolvedValue(null);
+     vi.unstubAllEnvs();
++  });
++
++  it("distinguishes pending, failed, retrying, and truly empty model discovery", async () => {
++    let rejectModels!: (error: Error) => void;
++    testState.listModels.mockImplementationOnce(() => new Promise((_, reject) => { rejectModels = reject; }));
++    vi.spyOn(console, "error").mockImplementation(() => {});
++    container = document.createElement("div"); document.body.append(container); root = createRoot(container);
++    await act(async () => root!.render(<HomePageContent />));
++    expect(container.textContent).toContain("Loading providers");
++    await act(async () => container!.querySelector<HTMLButtonElement>('[aria-label="Select provider"]')!.click());
++    expect(document.body.textContent).not.toContain("No providers available");
++    await act(async () => rejectModels(Error("Synthetic catalog unavailable")));
++    expect(document.body.textContent).toContain("Couldn't load providers");
++    expect(document.body.textContent).not.toContain("No providers available");
++    let resolveModels!: (models: AiChatAuthorInfo[]) => void;
++    testState.listModels.mockImplementationOnce(() => new Promise(resolve => { resolveModels = resolve; }));
++    const retry = Array.from(document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(item => item.textContent === "Retry");
++    expect(retry).toBeDefined();
++    await act(async () => retry!.click());
++    expect(testState.listModels).toHaveBeenCalledTimes(2);
++    expect(container.textContent).toContain("Loading providers");
++    await act(async () => resolveModels([]));
++    await act(async () => container!.querySelector<HTMLButtonElement>('[aria-label="Select provider"]')!.click());
++    expect(document.body.textContent).toContain("No providers available");
++    expect(document.body.textContent).not.toContain("Couldn't load providers");
++    expect(testState.newGadget).not.toHaveBeenCalled();
+   });
+ 
+   it("seeds the composer once, clears route state, and does not create a workspace", async () => {
+diff --git a/packages/workshop-frontend/src/routes/index.tsx b/packages/workshop-frontend/src/routes/index.tsx
+--- a/packages/workshop-frontend/src/routes/index.tsx
++++ b/packages/workshop-frontend/src/routes/index.tsx
+@@ -45,6 +45,8 @@
+   const navigate = useNavigate();
+   const toasts = useKumoToastManager();
+ 
++  const [modelCatalogStatus, setModelCatalogStatus] = useState<"loading" | "ready" | "error">("loading");
++  const [modelCatalogRetry, setModelCatalogRetry] = useState(0);
+   const [models, setModels] = useState<AiChatAuthorInfo[]>([]);
+   const [selectedModel, setSelectedModel] = useState<string | null | undefined>(undefined);
+   // Bumped each time a task suggestion is picked; the composer re-seeds its text off the nonce.
+@@ -58,12 +60,16 @@
+ 
+   useEffect(() => {
+     let cancelled = false;
++    setModelCatalogStatus("loading");
+     authenticatedApi.listModels()
+       .then((list) => {
+         if (cancelled) return;
+         setModels(list);
++        setModelCatalogStatus("ready");
+       })
+       .catch((err) => {
++        if (cancelled) return;
++        setModelCatalogStatus("error");
+         logRpcFailure("Failed to fetch models:", err);
+         // Toast unless it's a connection error (reconnect refetches); a do-reset here already
+         // survived the Worker's same-colo retry, so the user should hear about it.
+@@ -74,7 +80,7 @@
+     return () => {
+       cancelled = true;
+     };
+-  }, [authenticatedApi]);
++  }, [authenticatedApi, modelCatalogRetry]);
+ 
+   const handleModelChange = useCallback((value: string | null | undefined) => {
+     setSelectedModel(value);
+@@ -107,7 +113,7 @@
+       attachments?: ChatAttachmentHandle[],
+       formats?: MessageFormatRef[],
+     ) => {
+-      if (selectedModel === undefined || (modelId !== null && !models.some(model => model.id === modelId))) {
++      if (selectedModel === undefined || (modelId !== null && (modelCatalogStatus !== "ready" || !models.some(model => model.id === modelId)))) {
+         throw new Error("Choose a provider and model before starting a chat.");
+       }
+       try {
+@@ -140,7 +146,7 @@
+         throw err;
+       }
+     },
+-    [ensureProvisionalGadget, navigate, toasts, selectedModel, models],
++    [ensureProvisionalGadget, navigate, toasts, selectedModel, models, modelCatalogStatus],
+   );
+ 
+   const getOverseer = useCallback((): RpcStub<Overseer> => {
+@@ -192,6 +198,8 @@
+           onSend={handleSend}
+           isAgentActive={false}
+           models={models}
++          modelCatalog={modelCatalogStatus === "ready" ? undefined : modelCatalogStatus === "loading"
++            ? { kind: "loading" } : { kind: "error", onRetry: () => setModelCatalogRetry(value => value + 1) }}
+           selectedModel={selectedModel == null ? selectedModel : { id: selectedModel }}
+           onModelChange={handleModelChange}
+           newChat
+diff --git a/packages/workshop-shared/src/agent-settings.ts b/packages/workshop-shared/src/agent-settings.ts
+--- a/packages/workshop-shared/src/agent-settings.ts
++++ b/packages/workshop-shared/src/agent-settings.ts
+@@ -65,6 +65,8 @@
+   providerName: string;
+   scope: AgentScope;
+   source: 'subscription' | 'openai-compatible';
++  /** Server-derived marker for the subscription connection's configured physical default. */
++  isDefault?: true;
+ };
+ export type AgentProviderCatalog = {
+   providers: { id: string; name: string; scope: AgentScope; models: AgentProviderModel[]; refreshedAt: string | null; error: string | null }[];
+diff --git a/packages/workshop-shared/src/api.ts b/packages/workshop-shared/src/api.ts
+--- a/packages/workshop-shared/src/api.ts
++++ b/packages/workshop-shared/src/api.ts
+@@ -3523,5 +3523,8 @@
+   /** Server-derived connection identity and labels; never inference routing authority. */
+   provider?: { id: string; name: string; source: string };
+ 
++  /** Server-derived marker for the connection's configured physical default model. */
++  isDefault?: true;
++
+   /** Server-derived connection label, captured with new model authors. */
+   providerDisplayName?: string;
