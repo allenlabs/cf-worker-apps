@@ -9,7 +9,7 @@ import {
   applyUploadOverlay, captureBuildInputs, clonePreparedCheckout, createArtifactDirectory, digest, exportWorkerArtifact,
   finalizeArtifactManifest, markUploadAttempt, uploadConfigFor, validateModuleImports, validateServicePreservation, verifyArtifactManifest,
 } from '../scripts/frozen-artifacts.mjs';
-import { uploadedVersion, uploadVerifiedArtifacts } from '../scripts/upload-verified-artifacts.mjs';
+import { runFrozenWrangler, uploadedVersion, uploadVerifiedArtifacts } from '../scripts/upload-verified-artifacts.mjs';
 
 const require = createRequire(import.meta.url);
 let esbuild;
@@ -312,4 +312,27 @@ test('actual Wrangler dry-run accepts exactly the selected native inherit metada
   assert.deepEqual(config.unsafe.bindings, [{ name: 'EXISTING_SERVICE', type: 'inherit' }]);
   assert.deepEqual(config.services, []);
   assert((await readdir(join(f.root, 'inherit-bundle'))).some(name => name.endsWith('.js')));
+});
+
+
+test('actual Wrangler reads sealed Text modules and frontend assets using separate writable scratch', {
+  skip: !esbuild || !process.env.CLOUD_AGENT_OS_WRANGLER_CLI,
+}, async t => {
+  const f = await fixture(t), home = join(f.root, 'builder-home'); await mkdir(home);
+  await writeFile(join(f.modulesDir, 'worker.js'), 'import text from "./prompt.txt"; export default { fetch() { return new Response(text); } };');
+  await writeFile(join(f.modulesDir, 'prompt.txt'), 'synthetic sealed Text module');
+  const original = { name: 'synthetic-sealed-worker', main: 'dist/server.js', compatibility_date: '2026-10-01',
+    assets: { directory: 'dist/assets', binding: 'ASSETS' } };
+  const worker = await exportWorkerArtifact({ ...f, key: 'workshop', original, esbuild });
+  const receipt = await finalizeArtifactManifest({ ...f, prepared: { upstream: 'c'.repeat(40), overlayHash: 'd'.repeat(64) }, workers: [worker] });
+  const configPath = join(f.artifactDir, worker.config);
+  assert.equal((await lstat(dirname(configPath))).mode & 0o777, 0o500);
+  const env = { PATH: process.env.PATH ?? '', HOME: home, XDG_CONFIG_HOME: home, LANG: 'C.UTF-8', WRANGLER_SEND_METRICS: 'false', CI: 'true' };
+  const stdout = await runFrozenWrangler({ wranglerFile: process.env.CLOUD_AGENT_OS_WRANGLER_CLI, configPath, env,
+    dryRun: true, temporaryRoot: f.root });
+  assert.match(stdout, /dry.run/i);
+  assert.equal((await lstat(dirname(configPath))).mode & 0o777, 0o500);
+  assert.deepEqual((await readdir(f.root)).filter(name => name.startsWith('cloud-agent-os-upload-')), []);
+  // Exact hashes and file inventory prove no writable caches or other files entered the artifact.
+  await verifyArtifactManifest({ ...f, ...receipt });
 });

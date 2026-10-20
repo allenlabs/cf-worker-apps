@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { lstat, readFile, realpath } from 'node:fs/promises';
+import { lstat, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { markUploadAttempt, verifyArtifactManifest } from './frozen-artifacts.mjs';
@@ -80,6 +81,25 @@ export function uploadedVersion(stdout) {
 }
 const outside = (parent, child) => { const value = relative(parent, child); return value === '..' || value.startsWith(`..${sep}`) || isAbsolute(value); };
 
+/** Keep Wrangler's writable project scratch outside the sealed artifact tree. */
+export async function runFrozenWrangler({ wranglerFile, configPath, env, dryRun = false, temporaryRoot = tmpdir() }) {
+  const config = JSON.parse(await readFile(configPath, 'utf8'));
+  check(isAbsolute(config.main), 'ARTIFACT_MAIN_PATH_INVALID');
+  const scratch = await mkdtemp(join(temporaryRoot, 'cloud-agent-os-upload-'));
+  try {
+    // An explicit identical main makes Wrangler use cwd for its temporary project files.
+    const result = spawnSync(process.execPath, [wranglerFile, 'deploy', config.main, '--config', configPath,
+      '--cwd', scratch, '--outdir', join(scratch, 'out'), ...(dryRun ? ['--dry-run'] : [])], {
+      cwd: scratch, env, encoding: 'utf8', timeout: 10 * 60_000, maxBuffer: 1024 * 1024,
+    });
+    check(result.status === 0 && !result.error && !result.signal, 'ARTIFACT_UPLOAD_UNVERIFIED');
+    return result.stdout;
+  } finally {
+    // This exact directory was created above; frozen modules and configuration stay untouched.
+    await rm(scratch, { recursive: true, force: true });
+  }
+}
+
 /** Upload checked bytes only. execute is injectable for a local, non-network verification. */
 export async function uploadVerifiedArtifacts({ artifactDir, manifestDigest, configFile, attemptMarker, wranglerFile, workers, execute, fetchImpl }) {
   artifactDir = resolve(artifactDir);
@@ -101,12 +121,8 @@ export async function uploadVerifiedArtifacts({ artifactDir, manifestDigest, con
     const env = Object.fromEntries(['PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'NODE_EXTRA_CA_CERTS', 'CLOUDFLARE_API_TOKEN'].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]]));
     Object.assign(env, { CLOUDFLARE_ACCOUNT_ID: configs[0].account_id, WRANGLER_SEND_METRICS: 'false', CI: 'true' });
     const help = spawnSync(process.execPath, [wranglerFile, 'deploy', '--help'], { env, encoding: 'utf8', timeout: 30_000, maxBuffer: 256_000 });
-    check(help.status === 0 && !help.error && help.stdout.includes('--config'), 'ARTIFACT_WRANGLER_CAPABILITY_UNVERIFIED');
-    execute = async configPath => {
-      const result = spawnSync(process.execPath, [wranglerFile, 'deploy', '--config', configPath], { env, encoding: 'utf8', timeout: 10 * 60_000, maxBuffer: 1024 * 1024 });
-      check(result.status === 0 && !result.error && !result.signal, 'ARTIFACT_UPLOAD_UNVERIFIED');
-      return uploadedVersion(result.stdout);
-    };
+    check(help.status === 0 && !help.error && ['--config', '--cwd', '--outdir'].every(flag => help.stdout.includes(flag)), 'ARTIFACT_WRANGLER_CAPABILITY_UNVERIFIED');
+    execute = async configPath => uploadedVersion(await runFrozenWrangler({ wranglerFile, configPath, env }));
   }
   // No real upload happens before this exclusive, fsynced marker. Never remove it on failure.
   await markUploadAttempt(attemptMarker, { apiVersion: 1, manifestDigest, workers: targets.map(value => value.key), startedAt: new Date().toISOString() });
