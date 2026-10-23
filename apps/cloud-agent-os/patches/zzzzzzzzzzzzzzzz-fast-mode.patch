@@ -1,0 +1,831 @@
+diff --git a/packages/workshop-backend/src/ai-models.ts b/packages/workshop-backend/src/ai-models.ts
+--- a/packages/workshop-backend/src/ai-models.ts
++++ b/packages/workshop-backend/src/ai-models.ts
+@@ -66,6 +66,7 @@
+ };
+ 
+ type ModelRoutingOptions = {
++  fastMode?: boolean;
+   resolveScopedModel?: (id: string) => Promise<ScopedModelResolution>;
+   sessionAffinity?: string;
+   userGateway?: UserGatewayRouting;
+@@ -581,7 +582,7 @@
+   // while gateway attribution and display retain the original author below.
+   const bridgeAuthor: AiChatAuthorInfo = initiator.type === 'gadget' && accountIdForTrustedAgentAuthor(initiator)
+     ? { ...initiator, type: 'user' } : initiator;
+-  const bound = cloudAgentModel(env, config, bridgeAuthor);
++  const bound = cloudAgentModel(env, config, bridgeAuthor, { fastMode: options.fastMode });
+   if (bound) return bound;
+   if (isAdminManagedSubscription(env)) return getModelDirect(config, options.sessionAffinity);
+   // BYOK: a connected user's own Cloudflare account pays for everything (all providers, including
+diff --git a/packages/workshop-backend/src/overseer.ts b/packages/workshop-backend/src/overseer.ts
+--- a/packages/workshop-backend/src/overseer.ts
++++ b/packages/workshop-backend/src/overseer.ts
+@@ -69,7 +69,7 @@
+   listFeaturedBlueprintsFromKv, readBlueprintKvRecord, type BlueprintKvRecord,
+ } from "./storage-schema/blueprints-kv";
+ import { WebFetchEnv } from "./web-fetch";
+-import { UserDurableObject, type UserChatContext } from "./user";
++import { UserDurableObject, normalizeChatFastMode, type UserChatContext } from "./user";
+ import type { AgentSpawnerBinding, CallableAgent, SpawnCallableOptions } from "./agent-spawner-binding";
+ import { recordAnalytics } from "./analytics";
+ import { reportIssue } from "@gadgets/observability/error-reporting";
+@@ -1033,7 +1033,7 @@
+     let aiModel: UserAiModelRecord | undefined;
+     try {
+       let user = this.users.get(this.users.idFromString(record.initiatorUserId));
+-      let userMeta = await user.getChatContext(record.modelId);
++      let userMeta = await user.getChatContext(record.modelId, record.fastMode);
+       aiModel = userMeta.aiModel;
+     } catch (err) {
+       this.logger.error("error resolving model while resuming agent", {
+@@ -1047,8 +1047,9 @@
+       // `activeAgent` and tear down the registry/record atomically (matching `#runAgentTurn`'s
+       // finally).
+       this.postAgentErrorMessage(record.chatId, record.initiator,
+-          "Agent interrupted due to server restart and could not be resumed because its AI " +
+-          "model is no longer available.");
++          record.fastMode === true
++            ? "Agent interrupted due to server restart and could not be resumed because Fast is no longer available for its AI model. Turn Fast off or choose a supported model and retry."
++            : "Agent interrupted due to server restart and could not be resumed because its AI model is no longer available.");
+       let meta = this.storage.chatMeta.get(record.chatId);
+       if (meta) {
+         delete meta.activeAgent;
+@@ -6069,7 +6070,9 @@
+     responseTargetRegistration?: ExternalMessageResponseTargetRegistration,
+     externalChatKey?: string,
+     formats?: MessageFormatRef[],
++    fastMode?: boolean,
+   ): Promise<number> {
++    const normalizedFastMode = normalizeChatFastMode(userMeta.aiModel, fastMode);
+     if (responseTargetRegistration) {
+       let decision = this.#prepareExternalMessageResponseTargetRegistration(responseTargetRegistration);
+       if (decision.reuseExisting) return decision.record.chatId;
+@@ -6094,6 +6097,7 @@
+         title: "New Chat",   // filled in later by AI
+         started: timestamp,
+         lastActive: timestamp,
++        fastMode: normalizedFastMode,
+       };
+       if (prepared.message !== undefined && userMeta.aiModel) {
+         meta.activeAgent = userMeta.aiModel.profile;
+@@ -6121,7 +6125,7 @@
+     if (prepared.message !== undefined && userMeta.aiModel) {
+       let needsAgentTurnKeepAlive = responseTargetRegistration !== undefined;
+       this.startAgent(chatId, userMeta.aiModel, userMeta.profile,
+-                      clientUser.id.toString(), false, needsAgentTurnKeepAlive);
++                      clientUser.id.toString(), false, needsAgentTurnKeepAlive, normalizedFastMode);
+     }
+ 
+     if (userMeta.quickModel) {
+@@ -6150,7 +6154,9 @@
+     attachments?: ChatAttachmentHandle[],
+     responseTargetRegistration?: ExternalMessageResponseTargetRegistration,
+     formats?: MessageFormatRef[],
++    fastMode?: boolean,
+   ): Promise<void> {
++    const normalizedFastMode = normalizeChatFastMode(userMeta.aiModel, fastMode);
+     if (responseTargetRegistration) {
+       let decision = this.#prepareExternalMessageResponseTargetRegistration(responseTargetRegistration);
+       if (decision.reuseExisting) return;
+@@ -6169,6 +6175,7 @@
+     let result = this.materializeChatChanges(chatId, meta);
+     if (result) meta = result.meta;
+     meta.lastActive = this.getChatTimestamp();
++    meta.fastMode = normalizedFastMode;
+     // A built-in command runs a turn without a prompt: `/compact` compacts and ends.
+     let runsAgentTurn = prepared.message !== undefined ||
+         prepared.slashCommand?.id.builtin === true;
+@@ -6196,7 +6203,7 @@
+     if (runsAgentTurn && userMeta.aiModel) {
+       let needsAgentTurnKeepAlive = responseTargetRegistration !== undefined;
+       this.startAgent(chatId, userMeta.aiModel, userMeta.profile,
+-                      clientUser.id.toString(), false, needsAgentTurnKeepAlive);
++                      clientUser.id.toString(), false, needsAgentTurnKeepAlive, normalizedFastMode);
+     }
+     this.recordGadgetAnalytics({
+       event_name: "gadget_interaction",
+@@ -6513,7 +6520,9 @@
+   startAgent(chatId: number, aiModel: UserAiModelRecord,
+              initiator: AiChatAuthorInfo, initiatorUserId: string,
+              callbackInitiated: boolean = false,
+-             keepAlive: boolean = false): void {
++             keepAlive: boolean = false,
++             fastMode: boolean = false): void {
++    const normalizedFastMode = normalizeChatFastMode(aiModel, fastMode);
+     // Register before starting the turn so registration always precedes the turn's teardown
+     // (`#unregisterRunningAgent`, in `#runAgentTurn`'s finally).
+     this.#registerRunningAgent(chatId);
+@@ -6523,6 +6532,7 @@
+       modelId: aiModel.profile.id,
+       initiator,
+       callbackInitiated,
++      fastMode: normalizedFastMode,
+     });
+ 
+     let liveChat = this.#getLiveChat(chatId);
+@@ -6547,6 +6557,7 @@
+                                  initiator: AiChatAuthorInfo,
+                                  callbackInitiated: boolean,
+                                  liveChat: LiveChatContext): Promise<void> {
++    const fastMode = this.storage.activeAgents.get(chatId)?.fastMode === true;
+     // When this turn is billed to the user's own Cloudflare account, we refresh their cached credit
+     // balance once the turn completes (see the `finally` below) so the next billing decision
+     // reflects the spend this turn just incurred, rather than waiting for the cache TTL to lapse.
+@@ -6611,6 +6622,7 @@
+         let sessionAffinity = await computeSessionAffinity(this.ctx.id.toString(), chatId);
+         let chosenModel = getModel(
+             this.env, aiModel.config, initiator, {
++              fastMode,
+               sessionAffinity,
+               resolveScopedModel: aiModel.config.transport === 'scoped' ? this.scopedModelResolverFor(initiator) : undefined,
+               userGateway: byokRouting,
+@@ -11423,21 +11435,21 @@
+ 
+   async newChat(initialMessage: string | SlashCommandRequest, chosenModelId: string | null,
+                 capsules?: CapsuleSpecifier[], attachments?: ChatAttachmentHandle[],
+-                formats?: MessageFormatRef[]): Promise<number> {
++                formats?: MessageFormatRef[], fastMode?: boolean): Promise<number> {
+     let userMeta = await retryOnDoReset(
+-        () => this.#clientUser.getChatContext(chosenModelId), this.impl.logger);
++        () => this.#clientUser.getChatContext(chosenModelId, fastMode), this.impl.logger);
+     return this.impl.newChat(this.#clientUser, userMeta, initialMessage, capsules, attachments,
+-                             undefined, undefined, formats);
++                             undefined, undefined, formats, fastMode);
+   }
+ 
+   async sendChatMessage(
+       chatId: number, message: string | SlashCommandRequest, chosenModelId: string | null,
+       capsules?: CapsuleSpecifier[], attachments?: ChatAttachmentHandle[],
+-      formats?: MessageFormatRef[]): Promise<void> {
++      formats?: MessageFormatRef[], fastMode?: boolean): Promise<void> {
+     let userMeta = await retryOnDoReset(
+-        () => this.#clientUser.getChatContext(chosenModelId), this.impl.logger);
++        () => this.#clientUser.getChatContext(chosenModelId, fastMode), this.impl.logger);
+     return this.impl.sendChatMessage(
+-        this.#clientUser, userMeta, chatId, message, capsules, attachments, undefined, formats);
++        this.#clientUser, userMeta, chatId, message, capsules, attachments, undefined, formats, fastMode);
+   }
+ 
+   async setChatTitle(chatId: number, title: string): Promise<void> {
+@@ -11548,9 +11560,10 @@
+     this.impl.cancelAgent(chatId);
+   }
+ 
+-  async retryAgent(chatId: number, modelId: string): Promise<void> {
++  async retryAgent(chatId: number, modelId: string, fastMode?: boolean): Promise<void> {
+     let userMeta = await retryOnDoReset(
+-        () => this.#clientUser.getChatContext(modelId), this.impl.logger);
++        () => this.#clientUser.getChatContext(modelId, fastMode), this.impl.logger);
++    const normalizedFastMode = normalizeChatFastMode(userMeta.aiModel, fastMode);
+ 
+     let meta = this.impl.assertChatNotActive(chatId);
+     if (!userMeta.aiModel) {
+@@ -11561,11 +11574,12 @@
+     if (result) meta = result.meta;
+ 
+     meta.activeAgent = userMeta.aiModel.profile;
++    meta.fastMode = normalizedFastMode;
+     meta.lastActive = this.impl.getChatTimestamp();
+     this.impl.storage.chatMeta.put(meta);
+ 
+     this.impl.startAgent(chatId, userMeta.aiModel, userMeta.profile,
+-                         this.#clientUser.id.toString());
++                         this.#clientUser.id.toString(), false, false, normalizedFastMode);
+   }
+ 
+   async finalizeChatDraft(chatId: number): Promise<void> {
+@@ -12082,12 +12096,14 @@
+     this.#deny();
+   }
+   async newChat(_initialMessage: string | SlashCommandRequest, _modelId: string | null,
+-                 _capsules?: CapsuleSpecifier[], _attachments?: ChatAttachmentHandle[]): Promise<number> {
++                 _capsules?: CapsuleSpecifier[], _attachments?: ChatAttachmentHandle[],
++                 _formats?: MessageFormatRef[], _fastMode?: boolean): Promise<number> {
+     this.#deny();
+   }
+   async sendChatMessage(_chatId: number, _message: string | SlashCommandRequest,
+                         _modelId: string | null,
+-                        _capsules?: CapsuleSpecifier[], _attachments?: ChatAttachmentHandle[]): Promise<void> {
++                        _capsules?: CapsuleSpecifier[], _attachments?: ChatAttachmentHandle[],
++                        _formats?: MessageFormatRef[], _fastMode?: boolean): Promise<void> {
+     this.#deny();
+   }
+   async uploadChatAttachment(
+@@ -12105,7 +12121,7 @@
+   async discardChatDraftChanges(_chatId: number): Promise<void> { this.#deny(); }
+   async deleteChat(_chatId: number): Promise<void> { this.#deny(); }
+   async stopAgent(_chatId: number): Promise<void> { this.#deny(); }
+-  async retryAgent(_chatId: number, _modelId: string): Promise<void> { this.#deny(); }
++  async retryAgent(_chatId: number, _modelId: string, _fastMode?: boolean): Promise<void> { this.#deny(); }
+   async subscribeToConsoleLogs(_subscriber: RpcStub<ConsoleLogSubscriber>): Promise<RpcStub<{}>> {
+     // Inert: "use" sessions never receive console logs. The inbound subscriber stub is left
+     // undup'd, so the RPC system disposes it when this call returns.
+diff --git a/packages/workshop-backend/src/storage-schema/overseer-storage.ts b/packages/workshop-backend/src/storage-schema/overseer-storage.ts
+--- a/packages/workshop-backend/src/storage-schema/overseer-storage.ts
++++ b/packages/workshop-backend/src/storage-schema/overseer-storage.ts
+@@ -680,6 +680,8 @@
+   initiator: AiChatAuthorInfo;
+   /** Whether this turn was initiated by a gadget callback (vs. a chat message). */
+   callbackInitiated: boolean;
++  /** Immutable request preference for this turn, retained across restarts. */
++  fastMode?: boolean;
+ };
+ 
+ /**
+diff --git a/packages/workshop-backend/src/subscription-models.ts b/packages/workshop-backend/src/subscription-models.ts
+--- a/packages/workshop-backend/src/subscription-models.ts
++++ b/packages/workshop-backend/src/subscription-models.ts
+@@ -41,6 +41,7 @@
+ const subscriptionCatalogModelsSchema = z.array(z.object({
+   id: z.string().regex(/^[a-zA-Z0-9._-]{1,128}$/),
+   name: z.string().trim().min(1).max(256).refine(value => !/[\u0000-\u001f\u007f-\u009f]/.test(value)),
++  supportsFast: z.boolean().optional(),
+ }).strict()).max(2048).refine(models => new Set(models.map(model => model.id)).size === models.length);
+ const legacySubscriptionCatalogSchema = z.object({
+   source: z.literal("bundled-provider-catalog"),
+@@ -98,6 +99,7 @@
+     isDefault?: true; accountId: string; subscriptionProvider: SubscriptionConnections[number]["provider"] | null; ready: boolean | null }[];
+   readonly catalog: readonly (SubscriptionModels["all"][number] & {
+     modelId: string; catalogSource?: NonNullable<SubscriptionConnections[number]["catalog"]>["source"]; entitlementVerified?: boolean;
++    supportsFast?: boolean;
+   })[];
+   readonly #selectable: boolean;
+   readonly #authorized: boolean;
+@@ -146,6 +148,8 @@
+       const metadata = connections?.find(row => row.id === connection.accountId)?.catalog;
+       const accountCatalog = metadata?.source === "provider-account-catalog";
+       const defaultChoice = { ...connection, modelId: catalog.id,
++        ...(accountCatalog && connection.subscriptionProvider === "siwc" && metadata.models.find(model => model.id === catalog.id)?.supportsFast === true
++          ? { supportsFast: true } : {}),
+         ...(metadata ? { catalogSource: metadata.source, entitlementVerified: metadata.entitlementVerified } : {}) };
+       const choices: SubscriptionModels["catalog"][number][] = accountCatalog ? [] : [defaultChoice];
+       if (!metadata) return choices;
+@@ -161,6 +165,8 @@
+           ? config.modelModes[id] : connection.mode;
+         const { isDefault, ...profile } = connection;
+         choices.push({ ...profile, id, modelId: physical.id, mode,
++          ...(accountCatalog && connection.subscriptionProvider === "siwc" && physical.supportsFast === true
++            ? { supportsFast: true } : {}),
+           name: config.modelDisplayNames && Object.hasOwn(config.modelDisplayNames, id)
+             ? config.modelDisplayNames[id] : physical.name,
+           catalogSource: metadata.source, entitlementVerified: metadata.entitlementVerified });
+@@ -177,7 +183,8 @@
+     if (!this.#authorized) return [];
+     return this.catalog
+       .filter((model) => model.mode === "enabled")
+-      .map(({ id, name, providerDisplayName, accountId, isDefault }) => ({ type: "agent", id, name, providerDisplayName,
++      .map(({ id, name, providerDisplayName, accountId, isDefault, supportsFast }) => ({ type: "agent", id, name, providerDisplayName,
++        ...(supportsFast && { supportsFast }),
+         ...(isDefault && { isDefault }),
+         provider: { id: `subscription:${accountId}`, name: providerDisplayName, source: "Subscription" } }));
+   }
+@@ -192,6 +199,7 @@
+         refreshedAt: null, error: connection.ready === false ? "This subscription is not connected." : null,
+         models: models.map(model => ({ id: model.id, providerId: `subscription:${connection.accountId}`,
+           modelId: model.modelId, name: model.name, providerName: model.providerDisplayName, scope,
++          ...(model.supportsFast && { supportsFast: model.supportsFast }),
+           source: "subscription" as const, ...(model.isDefault && { isDefault: model.isDefault }) })) }];
+     }) };
+   }
+@@ -201,6 +209,7 @@
+     if (!this.#authorized || !model || model.mode === "disabled") return undefined;
+     return {
+       profile: { type: "agent", id: model.id, name: model.name, providerDisplayName: model.providerDisplayName,
++        ...(model.supportsFast && { supportsFast: model.supportsFast }),
+         ...(model.isDefault && { isDefault: model.isDefault }),
+         provider: { id: `subscription:${model.accountId}`, name: model.providerDisplayName, source: "Subscription" } },
+       config: { provider: "openai", model: model.modelId, apiToken: "", transport: "subscription",
+diff --git a/packages/workshop-backend/src/user.ts b/packages/workshop-backend/src/user.ts
+--- a/packages/workshop-backend/src/user.ts
++++ b/packages/workshop-backend/src/user.ts
+@@ -70,7 +70,7 @@
+ /** Project every personal-model read from its owner's config, never a supplied author label. */
+ function personalModelRecord(record: UserAiModelRecord): UserAiModelRecord {
+   const { transport, subscriptionAccountId, subscriptionProvider, scopedProviderId, ...config } = record.config;
+-  const { providerDisplayName, provider, isDefault, ...profile } = record.profile;
++  const { providerDisplayName, provider, isDefault, supportsFast, ...profile } = record.profile;
+   return { config, profile: { ...profile,
+     provider: { id: `personal:${profile.id}`, name: config.providerDisplayName ?? AI_MODEL_PROVIDER_LABELS[config.provider],
+       source: `Personal · ${profile.name}` },
+@@ -124,6 +124,16 @@
+         Object.entries(extraHeaders).map(([name, value]) =>
+             [name, resolve(value, storedHeader(name), `the value of header "${name}"`)]))}),
+   };
++}
++
++/** Validate a chat preference against the freshly resolved server-owned model profile. */
++export function normalizeChatFastMode(aiModel: UserAiModelRecord | undefined, fastMode?: boolean): boolean {
++  if (fastMode !== undefined && typeof fastMode !== "boolean") throw new Error("Invalid Fast preference.");
++  if (fastMode === true && (aiModel?.profile.supportsFast !== true ||
++      aiModel.config.transport !== "subscription" || aiModel.config.subscriptionProvider !== "siwc")) {
++    throw new Error("Fast is not available for the selected model. Choose a supported SIWC subscription model or turn Fast off.");
++  }
++  return fastMode === true;
+ }
+ 
+ export type UserChatContext = {
+@@ -660,7 +670,7 @@
+     // deployment's to set on its own models.
+     let {reasoning, compactionInputBudget, behavesLike, capabilities, transport, subscriptionAccountId, subscriptionProvider, scopedProviderId, ...own} = config;
+ 
+-    const { providerDisplayName, provider, isDefault, ...author } = profile;
++    const { providerDisplayName, provider, isDefault, supportsFast, ...author } = profile;
+     const { providerDisplayName: label, ...connection } = own;
+     this.storage.aiModels.put({
+       profile: { ...author, type: "agent", name: validateDisplayName(author.name) },
+@@ -811,9 +821,11 @@
+ 
+   /** DO NOT MAKE PUBLIC -- returns API keys. Pure read: call sites replay it across DO resets
+    * via retryOnDoReset, so it must stay free of writes and side effects. */
+-  async getChatContext(modelId: string | null): Promise<UserChatContext> {
+-    return this.#getChatContext(modelId, await getGatewayModels(this.env, this.#modelUserId(),
++  async getChatContext(modelId: string | null, fastMode?: boolean): Promise<UserChatContext> {
++    const result = this.#getChatContext(modelId, await getGatewayModels(this.env, this.#modelUserId(),
+         () => this.adminSettings.getByName("").getAdminConfig()));
++    normalizeChatFastMode(result.aiModel, fastMode);
++    return result;
+   }
+ 
+   #getChatContext(modelId: string | null, models: DeploymentModels | null): UserChatContext {
+diff --git a/packages/workshop-frontend/src/ChatInterface.actions.test.tsx b/packages/workshop-frontend/src/ChatInterface.actions.test.tsx
+--- a/packages/workshop-frontend/src/ChatInterface.actions.test.tsx
++++ b/packages/workshop-frontend/src/ChatInterface.actions.test.tsx
+@@ -80,16 +80,19 @@
+     emitMessage(message: AiChatMessage) {
+       act(() => subscriber!.message(message))
+     },
++    emitMetadata(metadata: AiChatMetadata) {
++      act(() => subscriber!.metadata(metadata))
++    },
+   }
+ }
+ 
+ function renderChat(
+   overseer: RpcStub<Overseer>,
+-  props: { restricted?: boolean, selectedChatId?: number } = {},
++  props: { restricted?: boolean, selectedChatId?: number, workspaceId?: string } = {},
+ ) {
+   return testRoot.render(
+     <ChatInterface
+-      workspaceId="workspace"
++      workspaceId={props.workspaceId ?? "workspace"}
+       overseer={overseer}
+       restricted={props.restricted}
+       selectedChatId={props.selectedChatId ?? null}
+@@ -352,6 +355,152 @@
+ 
+ const openChat = { id: 1, title: 'Chat', started: new Date(), lastActive: new Date() }
+ 
++describe('per-chat Fast requests', () => {
++  const fastModel: AiChatAuthorInfo = { type: 'agent', id: 'fast-model', name: 'Fast model', supportsFast: true,
++    provider: { id: 'subscription:owner', name: 'Subscription', source: 'Subscription' } };
++  const slowModel: AiChatAuthorInfo = { ...fastModel, id: 'standard-model', name: 'Standard model', supportsFast: false };
++  const fastChat = { ...openChat, activeAgent: undefined, fastMode: true };
++  function serverFor(chats = [fastChat]) {
++    const server = makeOverseer(), events = withChatApi(server, undefined, chats);
++    const sendChatMessage = vi.fn(async () => {}), retryAgent = vi.fn(async () => {}), newChat = vi.fn(async () => 9);
++    Object.assign(server.overseer, { listModels: async () => [fastModel, slowModel], sendChatMessage, retryAgent, newChat,
++      getChatHistory: async (chatId: number) => ({ messages: [{ chatId, sequence: 0, timestamp: new Date(),
++        author: fastModel, type: 'message', message: 'Synthetic previous turn' }] }) });
++    return { ...server, ...events, sendChatMessage, retryAgent, newChat };
++  }
++  const toggle = () => document.querySelector<HTMLButtonElement>('[aria-label="Fast"]')!;
++
++  it('restores saved Fast metadata and passes it on send and retry', async () => {
++    const server = serverFor();
++    await renderChat(server.overseer, { selectedChatId: 1 });
++    expect(toggle()?.getAttribute('aria-pressed')).toBe('true');
++    await sendFromComposer('Continue this chat');
++    expect(server.sendChatMessage).toHaveBeenCalledWith(1, 'Continue this chat', fastModel.id, undefined, undefined, undefined, true);
++    server.emitMessage({ chatId: 1, sequence: 1, timestamp: new Date(), author: fastModel,
++      type: 'error', message: 'Synthetic request error' });
++    await act(async () => [...document.querySelectorAll('button')].find(button => button.textContent === 'Retry')!.click());
++    expect(server.retryAgent).toHaveBeenCalledWith(1, fastModel.id, true);
++    server.emitMetadata({ ...fastChat, activeAgent: fastModel });
++    expect(toggle().disabled).toBe(true);
++  });
++
++  it('keeps local unsent preferences in their chat and workspace and restores metadata after remount', async () => {
++    const server = serverFor([fastChat, { ...fastChat, id: 2, fastMode: false }]);
++    await renderChat(server.overseer, { selectedChatId: 1 });
++    await act(async () => toggle().click());
++    expect(toggle().getAttribute('aria-pressed')).toBe('false');
++    await renderChat(server.overseer, { selectedChatId: 2 });
++    expect(toggle().getAttribute('aria-pressed')).toBe('false');
++    await act(async () => toggle().click());
++    await renderChat(server.overseer, { selectedChatId: 1 });
++    expect(toggle().getAttribute('aria-pressed')).toBe('false');
++    await renderChat(server.overseer, { selectedChatId: 1, workspaceId: 'other-workspace' });
++    expect(toggle().getAttribute('aria-pressed')).toBe('true');
++    testRoot.cleanup();
++    await renderChat(server.overseer, { selectedChatId: 1 });
++    expect(toggle().getAttribute('aria-pressed')).toBe('true');
++  });
++
++  it('defaults new chats off and clears Fast when selecting an unsupported model or no agent', async () => {
++    const server = serverFor();
++    await renderChat(server.overseer, { selectedChatId: 1 });
++    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Select model"]')!.click());
++    const standard = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent?.includes('Standard model'))!;
++    await act(async () => standard.click());
++    expect(toggle()).toBeNull();
++    await sendFromComposer('Use standard');
++    expect(server.sendChatMessage).toHaveBeenCalledWith(1, 'Use standard', slowModel.id, undefined, undefined, undefined, false);
++    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Select model"]')!.click());
++    await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent?.includes('Fast model'))!.click());
++    expect(toggle().getAttribute('aria-pressed')).toBe('false');
++    await act(async () => toggle().click());
++    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Select provider"]')!.click());
++    await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent === 'No agent')!.click());
++    expect(toggle()).toBeNull();
++    await sendFromComposer('Human note');
++    expect(server.sendChatMessage).toHaveBeenLastCalledWith(1, 'Human note', null, undefined, undefined, undefined, false);
++    await renderChat(server.overseer);
++    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Select provider"]')!.click());
++    await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent?.includes('Subscription'))!.click());
++    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Select model"]')!.click());
++    await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent?.includes('Fast model'))!.click());
++    expect(toggle().getAttribute('aria-pressed')).toBe('false');
++    await act(async () => toggle().click());
++    await sendFromComposer('New request');
++    expect(server.newChat).toHaveBeenCalledWith('New request', fastModel.id, undefined, undefined, undefined, true);
++    expect(toggle()).toBeNull();
++  });
++
++  it('clears Fast when a refreshed model loses capability and does not reactivate it on a later refresh', async () => {
++    const server = serverFor();
++    await renderChat(server.overseer, { selectedChatId: 1 });
++    expect(toggle().getAttribute('aria-pressed')).toBe('true');
++    const refreshed = { ...server.overseer, listModels: async () => [{ ...fastModel, supportsFast: false }, slowModel] } as unknown as RpcStub<Overseer>;
++    await renderChat(refreshed, { selectedChatId: 1 });
++    expect(toggle()).toBeNull();
++    await renderChat({ ...refreshed, listModels: async () => [fastModel, slowModel] } as unknown as RpcStub<Overseer>, { selectedChatId: 1 });
++    expect(toggle().getAttribute('aria-pressed')).toBe('false');
++    await act(async () => toggle().click());
++    const emptyCatalog = { ...refreshed, listModels: async () => [] } as unknown as RpcStub<Overseer>;
++    await renderChat(emptyCatalog, { selectedChatId: 1 });
++    expect(toggle()).toBeNull();
++    await renderChat({ ...emptyCatalog, listModels: async () => [fastModel, slowModel] } as unknown as RpcStub<Overseer>, { selectedChatId: 1 });
++    expect(toggle().getAttribute('aria-pressed')).toBe('false');
++  });
++
++  it('clears a new chat draft Fast preference when a ready catalog loses capability or removes the model', async () => {
++    const server = serverFor();
++    await renderChat(server.overseer);
++    const chooseFast = async () => {
++      await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Select provider"]')!.click());
++      await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent?.includes('Subscription'))!.click());
++      await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Select model"]')!.click());
++      await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent?.includes('Fast model'))!.click());
++    };
++    await chooseFast();
++    for (const models of [[{ ...fastModel, supportsFast: false }, slowModel], []]) {
++      await act(async () => toggle().click());
++      expect(toggle().getAttribute('aria-pressed')).toBe('true');
++      const changed = { ...server.overseer, listModels: async () => models } as unknown as RpcStub<Overseer>;
++      await renderChat(changed);
++      expect(toggle()).toBeNull();
++      await renderChat({ ...changed, listModels: async () => [fastModel, slowModel] } as unknown as RpcStub<Overseer>);
++      if (!toggle()) await chooseFast();
++      expect(toggle().getAttribute('aria-pressed')).toBe('false');
++    }
++  });
++
++  it('preserves a new chat draft Fast preference while its catalog is loading or unavailable', async () => {
++    const server = serverFor();
++    await renderChat(server.overseer);
++    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Select provider"]')!.click());
++    await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent?.includes('Subscription'))!.click());
++    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Select model"]')!.click());
++    await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent?.includes('Fast model'))!.click());
++    await act(async () => toggle().click());
++    let reject!: (error: Error) => void;
++    const pending = new Promise<AiChatAuthorInfo[]>((_resolve, rejectPromise) => { reject = rejectPromise; });
++    await renderChat({ ...server.overseer, listModels: () => pending } as unknown as RpcStub<Overseer>);
++    expect(toggle().getAttribute('aria-pressed')).toBe('true');
++    await act(async () => reject(new Error('Synthetic catalog unavailable')));
++    expect(toggle().getAttribute('aria-pressed')).toBe('true');
++    await renderChat({ ...server.overseer, listModels: async () => [fastModel, slowModel] } as unknown as RpcStub<Overseer>);
++    expect(toggle().getAttribute('aria-pressed')).toBe('true');
++  });
++
++  it('restores saved Fast after navigating from a chat with an unsupported model', async () => {
++    const server = serverFor([fastChat, { ...fastChat, id: 2, fastMode: false }]);
++    Object.assign(server.overseer, { getChatHistory: async (chatId: number) => ({ messages: [
++      { chatId, sequence: 0, timestamp: new Date(), author: chatId === 2 ? slowModel : fastModel,
++        type: 'message', message: 'Synthetic previous turn' },
++    ] }) });
++    await renderChat(server.overseer, { selectedChatId: 2 });
++    expect(toggle()).toBeNull();
++    await renderChat(server.overseer, { selectedChatId: 1 });
++    expect(toggle().getAttribute('aria-pressed')).toBe('true');
++  });
++});
++
+ // Types into the composer on screen and submits it with Enter.
+ async function sendFromComposer(text: string) {
+   const textarea = document.querySelector<HTMLTextAreaElement>('textarea[role="combobox"]')
+diff --git a/packages/workshop-frontend/src/ChatInterface.tsx b/packages/workshop-frontend/src/ChatInterface.tsx
+--- a/packages/workshop-frontend/src/ChatInterface.tsx
++++ b/packages/workshop-frontend/src/ChatInterface.tsx
+@@ -2833,6 +2833,12 @@
+   );
+   const [selectedModel, setSelectedModel] = useState<string | null | undefined>(null);
+   const [newChatModel, setNewChatModel] = useState<string | null | undefined>(undefined);
++  const [fastModes, setFastModes] = useState<Map<string, boolean>>(() => new Map());
++  const newChatFastKey = JSON.stringify([workspaceId, null]);
++  const selectedFastKey = JSON.stringify([workspaceId, selectedChatId]);
++  const setFastMode = (key: string, enabled: boolean) => {
++    setFastModes(current => new Map(current).set(key, enabled));
++  };
+   useEffect(() => { setNewChatModel(undefined); }, [workspaceId]);
+   const [sidebarActiveTab, setSidebarActiveTab] = useState<
+     "chat" | "connections"
+@@ -3166,6 +3172,15 @@
+   // Get metadata for selected chat
+   const currentChatMetadata =
+     selectedChatId !== null ? cacheRef.current.chats.get(selectedChatId) : null;
++  const selectedChatHistoryLoaded = selectedChatId !== null && cacheRef.current.messages.has(selectedChatId);
++  const selectedSupportsFast = availableModels.some(model => model.id === selectedModel && model.supportsFast === true);
++  const selectedFastMode = selectedSupportsFast && (fastModes.get(selectedFastKey) ?? currentChatMetadata?.fastMode === true);
++  const newChatSupportsFast = availableModels.some(model => model.id === newChatModel && model.supportsFast === true);
++  const newChatFastMode = newChatSupportsFast && fastModes.get(newChatFastKey) === true;
++  useEffect(() => {
++    if (modelCatalogStatus !== "ready" || newChatSupportsFast || fastModes.get(newChatFastKey) !== true) return;
++    setFastModes(current => new Map(current).set(newChatFastKey, false));
++  }, [modelCatalogStatus, newChatModel, newChatSupportsFast, newChatFastKey, fastModes]);
+ 
+   // Download a committed chat attachment. Image bytes are already inlined on the message; other
+   // attachments are fetched on demand over the authenticated RPC connection.
+@@ -3307,6 +3322,11 @@
+   const activeAgent = currentChatMetadata?.activeAgent;
+   // Names the chat's own model in the composer even when the picker no longer offers it.
+   const chatAgent = activeAgent ?? inferChatAgentFromMessages(currentMessages);
++  useEffect(() => {
++    if (modelCatalogStatus !== "ready" || !selectedChatHistoryLoaded || selectedSupportsFast ||
++        (chatAgent && selectedModel !== chatAgent.id) || fastModes.get(selectedFastKey) === false) return;
++    setFastModes(current => new Map(current).set(selectedFastKey, false));
++  }, [modelCatalogStatus, selectedChatHistoryLoaded, selectedModel, selectedSupportsFast, chatAgent?.id, selectedFastKey, fastModes]);
+ 
+   // Notify parent when agent active state changes
+   const onAgentActiveChangeRef = useRef(onAgentActiveChange);
+@@ -4035,6 +4055,7 @@
+     capsules?: CapsuleSpecifier[],
+     attachments?: ChatAttachmentHandle[],
+     formats?: MessageFormatRef[],
++    fastMode = selectedChatId === null ? newChatFastMode : selectedFastMode,
+   ) => {
+     const message = typeof messageText === "string" ? messageText.trim() : messageText ?? "";
+     if (!message && (!attachments || attachments.length === 0)) return;
+@@ -4048,7 +4069,9 @@
+         if (newChatModel === undefined) throw new Error("Choose a provider and model before starting a chat.");
+         // Create a new chat (with optional capsules).
+         const newChatId = await overseer.newChat(
+-            message, model, capsules, attachments, formats);
++            message, model, capsules, attachments, formats, fastMode);
++        setFastMode(newChatFastKey, false);
++        setNewChatModel(undefined);
+         onNavigateToChatRef.current(newChatId);
+       } else {
+         // Send message to existing chat.
+@@ -4059,6 +4082,7 @@
+           capsules || undefined,
+           attachments || undefined,
+           formats,
++          fastMode,
+         );
+       }
+     } catch (err) {
+@@ -4080,6 +4104,7 @@
+     capsules?: CapsuleSpecifier[],
+     attachments?: ChatAttachmentHandle[],
+     formats?: MessageFormatRef[],
++    fastMode = newChatFastMode,
+   ) => {
+     const message = typeof messageText === "string" ? messageText.trim() : messageText ?? "";
+     if (!message && (!attachments || attachments.length === 0)) return;
+@@ -4089,8 +4114,9 @@
+     }
+     try {
+       const newChatId = await overseer.newChat(
+-          message, model, capsules, attachments, formats);
++          message, model, capsules, attachments, formats, fastMode);
+       setNewChatModel(undefined);
++      setFastMode(newChatFastKey, false);
+       onNavigateToChatRef.current(newChatId);
+     } catch (err) {
+       if (!logRpcFailure("Failed to create new chat:", err, { reportSite: "chat.new" })) {
+@@ -4107,6 +4133,9 @@
+   // Handle model change
+   const handleModelChange = (modelId: string | null | undefined) => {
+     setSelectedModel(modelId);
++    if (!availableModels.some(model => model.id === modelId && model.supportsFast === true)) {
++      setFastMode(selectedFastKey, false);
++    }
+     if (modelId !== undefined) persistSelectedModel(modelId);
+   };
+ 
+@@ -4646,7 +4675,7 @@
+     }
+ 
+     try {
+-      await overseer.retryAgent(selectedChatId, selectedModel);
++      await overseer.retryAgent(selectedChatId, selectedModel, selectedFastMode);
+     } catch (err) {
+       console.error("Failed to retry agent:", err);
+       toasts.add({
+@@ -5519,8 +5548,13 @@
+             models={availableModels}
+             modelCatalog={modelCatalog}
+             selectedModel={newChatModel == null ? newChatModel : { id: newChatModel }}
++            fastMode={newChatFastMode}
++            onFastModeChange={enabled => setFastMode(newChatFastKey, enabled)}
+             onModelChange={modelId => {
+               setNewChatModel(modelId);
++              if (!availableModels.some(model => model.id === modelId && model.supportsFast === true)) {
++                setFastMode(newChatFastKey, false);
++              }
+               if (modelId !== undefined) persistSelectedModel(modelId);
+             }}
+             showThinkingTraces={showThinkingTraces}
+@@ -6533,6 +6567,8 @@
+                       name: chatAgent?.id === selectedModel ? chatAgent.name : undefined,
+                     }}
+                     onModelChange={handleModelChange}
++                    fastMode={selectedChatId === null ? newChatFastMode : selectedFastMode}
++                    onFastModeChange={enabled => setFastMode(selectedFastKey, enabled)}
+                     pendingConsoleLogCount={pendingConsoleLogCount}
+                     consoleLogPreview={consoleLogPreview}
+                     consoleLogSeverity={consoleLogSeverity}
+diff --git a/packages/workshop-frontend/src/features/chat/composer/ChatComposer.test.tsx b/packages/workshop-frontend/src/features/chat/composer/ChatComposer.test.tsx
+--- a/packages/workshop-frontend/src/features/chat/composer/ChatComposer.test.tsx
++++ b/packages/workshop-frontend/src/features/chat/composer/ChatComposer.test.tsx
+@@ -57,6 +57,34 @@
+     sessionStorage.clear();
+     testState.addToast.mockClear();
+     testState.gatekeeperModalProps = undefined;
++  });
++
++  it("offers Fast only for the current capable profile and sends the requested preference", async () => {
++    const model = { type: "agent" as const, id: "fast-model", name: "Fast model", supportsFast: true };
++    const onSend = vi.fn(), onFastModeChange = vi.fn();
++    container = document.createElement("div"); document.body.append(container); root = createRoot(container);
++    const render = async (fastMode = false, active = false, supported = true) => {
++      await act(async () => root!.render(<ChatComposer createCapsuleGatekeeper={async () => null}
++        getOverseer={() => ({} as RpcStub<Overseer>)} onSend={onSend} isAgentActive={active}
++        models={[{ ...model, supportsFast: supported }]} selectedModel={{ id: model.id }} onModelChange={() => {}}
++        fastMode={fastMode} onFastModeChange={onFastModeChange} seedText="Keep reasoning" seedNonce={1} />));
++    };
++    await render();
++    const toggle = container.querySelector<HTMLButtonElement>('[aria-label="Fast"]')!;
++    expect(toggle).not.toBeNull();
++    expect(toggle.getAttribute("aria-pressed")).toBe("false");
++    expect(toggle.getAttribute("title")).toBe("May use more credits. Availability and delivered speed depend on your provider.");
++    await act(async () => toggle.click());
++    expect(onFastModeChange).toHaveBeenCalledWith(true);
++    await render(true);
++    expect(toggle.getAttribute("aria-pressed")).toBe("true");
++    const textarea = container.querySelector<HTMLTextAreaElement>('[role="combobox"]')!;
++    await act(async () => textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
++    expect(onSend).toHaveBeenCalledWith("Keep reasoning", model.id, undefined, undefined, undefined, true);
++    await render(true, true);
++    expect(toggle.disabled).toBe(true);
++    await render(true, false, false);
++    expect(container.querySelector('[aria-label="Fast"]')).toBeNull();
+   });
+ 
+   it("blocks click and Enter until provider and model are chosen, preserving the draft", async () => {
+diff --git a/packages/workshop-frontend/src/features/chat/composer/ChatComposer.tsx b/packages/workshop-frontend/src/features/chat/composer/ChatComposer.tsx
+--- a/packages/workshop-frontend/src/features/chat/composer/ChatComposer.tsx
++++ b/packages/workshop-frontend/src/features/chat/composer/ChatComposer.tsx
+@@ -86,6 +86,8 @@
+   modelCatalog,
+   selectedModel,
+   onModelChange,
++  fastMode = false,
++  onFastModeChange,
+   pendingConsoleLogCount = 0,
+   consoleLogPreview = "",
+   consoleLogSeverity = "info",
+@@ -120,12 +122,15 @@
+     capsules?: CapsuleSpecifier[],
+     attachments?: ChatAttachmentHandle[],
+     formats?: MessageFormatRef[],
++    fastMode?: boolean,
+   ) => Promise<void> | void;
+   isAgentActive: boolean;
+   models: AiChatAuthorInfo[];
+   modelCatalog?: ModelCatalogState;
+   selectedModel: SelectedModel;
+   onModelChange: (modelId: string | null | undefined) => void;
++  fastMode?: boolean;
++  onFastModeChange?: (enabled: boolean) => void;
+   pendingConsoleLogCount?: number;
+   consoleLogPreview?: string;
+   consoleLogSeverity?: "error" | "warn" | "info";
+@@ -453,6 +458,7 @@
+ 
+   const modelChoiceReady = selectedModel !== undefined &&
+     (!newChat || selectedModel === null || (!modelCatalog && models.some(model => model.id === selectedModel.id && model.provider)));
++  const supportsFast = models.find(model => model.id === selectedModel?.id)?.supportsFast === true;
+   const handleSend = async () => {
+     if (sendInFlightRef.current || isSending || isBlocked || isAgentActive || !modelChoiceReady) return;
+     setSendHiccup(null);
+@@ -495,7 +501,8 @@
+       await onSend(message, selectedModel?.id ?? null,
+           capsuleSpecifiers,
+           readyAttachments.length ? readyAttachments : undefined,
+-          formatRefs);
++          formatRefs,
++          ...(onFastModeChange ? [supportsFast && fastMode] as const : []));
+       clearSentAttachments(attachmentsSnapshot);
+       if (!completeDraftSend(draftSend)) return;
+       replaceComposerDocument({ text: "", capsules: [], formats: [], command: null });
+@@ -963,6 +970,16 @@
+                 selectedModel={selectedModel}
+                 onModelChange={onModelChange}
+               />
++              <div className="col-start-2 row-start-2 flex items-center gap-1.5">
++              {supportsFast && onFastModeChange && <button
++                type="button"
++                aria-label="Fast"
++                aria-pressed={fastMode}
++                title="May use more credits. Availability and delivered speed depend on your provider."
++                disabled={isAgentActive || isSending}
++                onClick={() => onFastModeChange?.(!fastMode)}
++                className={`h-8 rounded-lg px-2 text-xs focus-visible:outline focus-visible:outline-2 disabled:cursor-default disabled:opacity-50 ${fastMode ? "bg-kumo-tint text-kumo-default" : "text-kumo-subtle hover:bg-kumo-tint"}`}
++              >Fast</button>}
+               {isAgentActive && onStop ? (
+                 <WorkshopIconButton
+                   onClick={onStop}
+@@ -1001,6 +1018,7 @@
+                   </svg>
+                 </WorkshopIconButton>
+               )}
++              </div>
+           </div>
+         </div>
+       </div>
+diff --git a/packages/workshop-shared/src/agent-settings.ts b/packages/workshop-shared/src/agent-settings.ts
+--- a/packages/workshop-shared/src/agent-settings.ts
++++ b/packages/workshop-shared/src/agent-settings.ts
+@@ -67,6 +67,7 @@
+   source: 'subscription' | 'openai-compatible';
+   /** Server-derived marker for the subscription connection's configured physical default. */
+   isDefault?: true;
++  supportsFast?: boolean;
+ };
+ export type AgentProviderCatalog = {
+   providers: { id: string; name: string; scope: AgentScope; models: AgentProviderModel[]; refreshedAt: string | null; error: string | null }[];
+diff --git a/packages/workshop-shared/src/api.ts b/packages/workshop-shared/src/api.ts
+--- a/packages/workshop-shared/src/api.ts
++++ b/packages/workshop-shared/src/api.ts
+@@ -2834,7 +2834,7 @@
+    */
+   newChat(initialMessage: string | SlashCommandRequest, modelId: string | null,
+           capsules?: CapsuleSpecifier[], attachments?: ChatAttachmentHandle[],
+-          formats?: MessageFormatRef[]): Promise<number>;
++          formats?: MessageFormatRef[], fastMode?: boolean): Promise<number>;
+ 
+   /**
+    * Send a message to the chat from this client. Sending a message causes the LLM to start
+@@ -2849,7 +2849,7 @@
+    */
+   sendChatMessage(chatId: number, message: string | SlashCommandRequest, modelId: string | null,
+                   capsules?: CapsuleSpecifier[], attachments?: ChatAttachmentHandle[],
+-                  formats?: MessageFormatRef[]): Promise<void>;
++                  formats?: MessageFormatRef[], fastMode?: boolean): Promise<void>;
+ 
+   /**
+    * Upload an attachment for use in a future chat message. This way by the time the user wants to
+@@ -3000,7 +3000,7 @@
+    *
+    * Throws if an agent is already running on the chat.
+    */
+-  retryAgent(chatId: number, modelId: string): Promise<void>;
++  retryAgent(chatId: number, modelId: string, fastMode?: boolean): Promise<void>;
+ 
+   /**
+    * Subscribe to the gadget worker's console logs. This allows the user to observe console logs
+@@ -3156,6 +3156,9 @@
+    * chat.
+    */
+   activeAgent?: AiChatAuthorInfo,
++
++  /** Fast requested for the next accepted user turn; absent means false. */
++  fastMode?: boolean,
+ 
+   /**
+    * The workpieces to which this chat has proposed changes that have not been accepted yet
+@@ -3526,7 +3529,10 @@
+   /** Server-derived marker for the connection's configured physical default model. */
+   isDefault?: true;
+ 
++  /** Server-derived capability for the current subscription physical model. */
++  supportsFast?: boolean;
++
+   /** Server-derived connection label, captured with new model authors. */
+   providerDisplayName?: string;
+ 
+   /** Display name for author, e.g. "Kenton Varda" or "GPT" */

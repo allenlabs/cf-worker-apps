@@ -22,6 +22,7 @@ const textBlock = z.object({ type: z.literal("text"), text, textSignature: text.
 const thinkingBlock = z.object({ type: z.literal("thinking"), thinking: text, thinkingSignature: text.optional(), redacted: z.boolean().optional() });
 const toolCall = z.object({ type: z.literal("toolCall"), id: z.string().min(1).max(1024), name: z.string().min(1).max(128), arguments: z.record(z.string(), z.json()), thoughtSignature: text.optional(), namespace: z.string().max(128).optional() });
 const assistant = z.object({ role: z.literal("assistant"), content: z.array(z.union([textBlock, thinkingBlock, toolCall])).max(128), api: z.string().max(128), provider: z.string().max(128), model: z.string().max(128), responseModel: z.string().max(128).optional(), responseId: z.string().max(1024).optional(), providerThinkingLevel: z.string().max(128).optional(), thinkingLevel: z.string().max(128).optional(), usage: z.object({ input: counter, output: counter, cacheRead: counter, cacheWrite: counter, totalTokens: counter, reasoning: counter.optional(), cost: z.object({ input: z.literal(0), output: z.literal(0), cacheRead: z.literal(0), cacheWrite: z.literal(0), total: z.literal(0) }) }), stopReason: z.enum(["pending", "stop", "length", "toolUse", "error", "aborted"]), errorMessage: z.enum(["inference_bridge_aborted", "inference_bridge_provider_error", "inference_bridge_failed"]).optional(), timestamp: counter });
+const terminalAssistant = assistant.extend({ responseServiceTier: z.enum(["auto", "default", "flex", "scale", "priority", "fast", "ultrafast"]).optional() });
 const indexed = { contentIndex: z.number().int().min(0).max(127), partial: assistant };
 const eventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("start"), partial: assistant }),
@@ -29,8 +30,8 @@ const eventSchema = z.discriminatedUnion("type", [
   ...["text_delta", "thinking_delta", "toolcall_delta"].map(type => z.object({ type: z.literal(type), ...indexed, delta: text })),
   ...["text_end", "thinking_end"].map(type => z.object({ type: z.literal(type), ...indexed, content: text })),
   z.object({ type: z.literal("toolcall_end"), ...indexed, toolCall }),
-  z.object({ type: z.literal("done"), reason: z.enum(["stop", "length", "toolUse"]), message: assistant }),
-  z.object({ type: z.literal("error"), reason: z.enum(["error", "aborted"]), error: assistant })
+  z.object({ type: z.literal("done"), reason: z.enum(["stop", "length", "toolUse"]), message: terminalAssistant }),
+  z.object({ type: z.literal("error"), reason: z.enum(["error", "aborted"]), error: terminalAssistant })
 ]);
 const envelope = z.object({ version: z.literal(1), event: eventSchema }).strict();
 
@@ -41,7 +42,7 @@ function failedMessage(model: Model<Api>, aborted: boolean): AssistantMessage {
 }
 
 /** Server-owned subscription transport enabled by an explicit service binding. */
-export function cloudAgentModel(env: Cloudflare.Env & BridgeEnvironment, config: AiModelConfig, initiator: AiChatAuthorInfo): ModelHandle | undefined {
+export function cloudAgentModel(env: Cloudflare.Env & BridgeEnvironment, config: AiModelConfig, initiator: AiChatAuthorInfo, routing: { fastMode?: boolean } = {}): ModelHandle | undefined {
   if (config.subscriptionAccountId !== undefined && config.transport !== "subscription")
     throw Error("inference_bridge_model_denied");
   // Legacy user-managed deployments select their sole bridge through deployment configuration.
@@ -67,6 +68,7 @@ export function cloudAgentModel(env: Cloudflare.Env & BridgeEnvironment, config:
     .find(model => model.id === config.model);
   if (!catalog) throw Error("inference_bridge_model_unavailable");
   const model = { ...catalog, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+  const fastMode = routing.fastMode === true;
   return {
     model,
     stream: (_model, context: Context, options: ModelStreamOptions = {}) => {
@@ -99,7 +101,8 @@ export function cloudAgentModel(env: Cloudflare.Env & BridgeEnvironment, config:
           const input = { version: 1, requestId: crypto.randomUUID(), userId: initiator.id, context,
             ...(subscriptionAccountId === undefined ? {} : { subscriptionAccountId }),
             ...(selected === undefined ? {} : { modelId: model.id }),
-            options: { reasoning, maxTokens: Math.min(options.maxTokens ?? config.outputLimit ?? 4096, 8192) } };
+            options: { reasoning, maxTokens: Math.min(options.maxTokens ?? config.outputLimit ?? 4096, 8192),
+              ...(fastMode ? { serviceTier: "priority" } : {}) } };
           if (encoder.encode(JSON.stringify(input)).length > limit) throw Error("inference_bridge_input_too_large");
           const call = await bridge.infer(input);
           control = call.cancellation;

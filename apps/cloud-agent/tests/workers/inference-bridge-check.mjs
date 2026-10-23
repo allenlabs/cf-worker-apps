@@ -32,7 +32,7 @@ export class Probe extends WorkerEntrypoint {
  requestHeaders(){return globalThis.fixtureFetchHeaders;}
  credentialCalls(){return globalThis.fixtureCredentialCalls??0;}
  accessCalls(){return {codex:globalThis.fixtureCodexAccessCalls??0,siwc:globalThis.fixtureSiwcAccessCalls??0};}
- async native(context){const models=createModels();installSubscriptionModels(models,async()=>({async codexAccess(){return {access:${JSON.stringify(access)}};}}));const events=models.streamSimple(models.getModel('openai-codex',${JSON.stringify(model)}),context,{reasoning:'low',signal:AbortSignal.timeout(3000)});for await(const event of events){}return events.result();}
+ async native(context,siwc=false){const models=createModels();installSubscriptionModels(models,async()=>({async codexAccess(){return {access:${JSON.stringify(access)}};},async access(){return ${JSON.stringify(siwcAccess)};}}));const events=models.streamSimple(models.getModel(siwc?'openai':'openai-codex',${JSON.stringify(model)}),context,{...(siwc?{maxTokens:4096}:{reasoning:'low'}),signal:AbortSignal.timeout(3000)});for await(const event of events){}return events.result();}
  projectDiagnostic(value){return terminalDiagnostic(value);}
  checkExpiry(value){return credentialExpiry(value,1000000);}
  fetchAttempts(){return globalThis.fixtureFetchAttempts??0;}
@@ -57,7 +57,7 @@ export default {async fetch(request,env){
   if(input.requestHeaders)return Response.json(await env.PROBE.requestHeaders());
   if(input.credentialCalls)return Response.json({count:await env.PROBE.credentialCalls()});
   if(input.accessCalls)return Response.json(await env.PROBE.accessCalls());
-  if(input.nativeProvider)return Response.json(await env.PROBE.native(input.context));
+  if(input.nativeProvider)return Response.json(await env.PROBE.native(input.context,input.siwc));
   if(input.projectDiagnostic)return Response.json(await env.PROBE.projectDiagnostic(input.projectDiagnostic));
   if(input.checkExpiry)return Response.json({expiry:await env.PROBE.checkExpiry(input.checkExpiry.token)});
   if(input.fetchAttempts)return Response.json({count:await env.PROBE.fetchAttempts()});
@@ -65,8 +65,9 @@ export default {async fetch(request,env){
   const context=input.context??{messages:[{role:'user',content:input.prompt??'hello',timestamp:1}],tools:input.tools};
   if(input.admission){const call=await env.CODEX_BRIDGE.infer(input.admission);await call.cancellation.cancel();await call.stream.cancel();return Response.json({admitted:true});}
   if(input.direct){const call=await env.CODEX_BRIDGE.infer(input.direct);if(input.cancelBeforeHTTP)await call.cancellation.cancel();return new Response(call.stream);}
+  if(input.bridge){const call=await env.CODEX_BRIDGE.infer(input.bridge);try{const body=await new Response(call.stream).text();const events=body.trim().split('\\n').map(line=>JSON.parse(line).event);const terminal=events.at(-1);return Response.json({events,result:terminal.message??terminal.error});}finally{call.cancellation[Symbol.dispose]();}}
   const transport=input.fault?{...env,CODEX_BRIDGE:{async infer(input){return {stream:await env.FAULT_BRIDGE.infer(input),cancellation:{async cancel(){},[Symbol.dispose](){}}};}}}:env;
-  const handle=cloudAgentModel(transport,{provider:'openai',model:${JSON.stringify(model)},apiToken:'',...input.config},{type:'user',id:${JSON.stringify(user)},name:'Fixture',...input.actor});
+  const handle=cloudAgentModel(transport,{provider:'openai',model:${JSON.stringify(model)},apiToken:'',...input.config},{type:'user',id:${JSON.stringify(user)},name:'Fixture',...input.actor},{fastMode:input.fastMode});
   const abort=new AbortController();
   const events=handle.stream(handle.model,context,{signal:abort.signal,maxTokens:128});
   const collected=[];for await(const event of events){collected.push(event);if(input.abort&&event.type==='text_delta')abort.abort();}
@@ -88,7 +89,7 @@ const bundle = async (file, piDirectory) => build({
 await bundle("server.js", join(root, "node_modules/@earendil-works/pi-ai"));
 await bundle("client.ts", upstream ? join(upstream, "packages/workshop-backend/node_modules/@earendil-works/pi-ai") : join(root, "node_modules/@earendil-works/pi-ai"));
 let calls = 0, seenToolOutput = false, lastNative, lastWire, expectedProvider = "codex";
-let responseModelFixture;
+let responseModelFixture, retryResponse = false;
 const sse = (events) => new Response(events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
 const outbound = async request => {
   calls++;
@@ -99,6 +100,7 @@ const outbound = async request => {
   const body = JSON.parse(lastWire.json);
   lastNative = body;
   assert.equal(body.model, model);
+  if (retryResponse) { retryResponse = false; return new Response('Fixture temporary failure', { status: 503, headers: { 'content-type': 'application/json', 'retry-after-ms': '0' } }); }
   seenToolOutput ||= body.input.some(item => item.type === "function_call_output" && item.output.includes("READ_ONLY_OK"));
   if (JSON.stringify(body).includes("provider_denial")) return new Response("secret raw provider failure", { status: 403, headers: { "content-type": "application/json", "x-request-id": "PRIVATE-request-id", "cf-ray": "PRIVATE-ray-id-HKG", "server":"cloudflare" } });
   if (JSON.stringify(body).includes("provider_challenge")) return new Response("<!doctype html><html><title>Just a moment...</title><body>PRIVATE provider html fixture@example.invalid</body></html>", { status: 403, headers: { "content-type": "text/html", "cf-mitigated": "challenge", "x-request-id": "PRIVATE-request-id", "cf-ray": "PRIVATE-ray-id", "set-cookie": "PRIVATE-cookie" } });
@@ -154,6 +156,101 @@ const checkDiagnostic = async expected => {
   return record;
 };
 try {
+  for (const provider of ["codex", "auto"]) {
+    await mf.setOptions(convertV4MiniflareOptions({ workers: [client, { ...server, bindings: { ...server.bindings, INFERENCE_BRIDGE_PROVIDER: provider } }] }));
+    await invoke({ configure: {} });
+    const before = calls;
+    const rejected = await invoke({ admission: wire({ options: { serviceTier: "priority" } }) });
+    assert.equal(rejected.status, 400);
+    assert.equal(rejected.data.error, "inference_bridge_service_tier_unavailable", "priority is rejected for resolved Codex before bearer access");
+    assert.equal(calls, before);
+    assert.deepEqual((await invoke({ accessCalls: true })).data, { codex: 0, siwc: 0 });
+  }
+  expectedProvider = "siwc";
+  for (const provider of ["siwc", "auto"]) {
+    await mf.setOptions(convertV4MiniflareOptions({ workers: [client, { ...server, bindings: { ...server.bindings, INFERENCE_BRIDGE_PROVIDER: provider } }] }));
+    await invoke({ configure: { status: { provider: "siwc" } } });
+    const standard = await invoke({ bridge: wire({}) });
+    assert.equal(standard.data.result.stopReason, "stop");
+    const standardWire = structuredClone(lastWire);
+    assert.equal(Object.hasOwn(lastNative, "service_tier"), false, "Standard leaves the serialized tier absent");
+    await invoke({ nativeProvider: true, siwc: true, context: wire({}).context });
+    assert.deepEqual(lastWire, standardWire, "Standard preserves the native installed SDK serializer's exact JSON and headers");
+    const priority = await invoke({ bridge: wire({ options: { serviceTier: "priority" } }) });
+    assert.equal(priority.status, 200, JSON.stringify(priority));
+    assert.equal(priority.data.result.stopReason, "stop");
+    assert.equal(lastNative.service_tier, "priority", "priority reaches the installed SDK's serialized API payload");
+    assert.equal(lastNative.store, false);
+    assert.equal(lastNative.stream, true);
+    assert.equal(lastWire.encoding, "identity");
+    const { service_tier, ...priorityBody } = lastNative;
+    assert.equal(JSON.stringify(priorityBody), standardWire.json, "opting in adds only service_tier to the existing JSON");
+    assert.equal(Object.hasOwn(priority.data.result, "responseServiceTier"), false, "requested priority is not a delivered-tier observation");
+    await invoke({ bridge: wire({}) });
+    assert.deepEqual(lastWire, standardWire, "omission restores the exact Standard request JSON and headers");
+    const before = calls;
+    for (const value of ["auto", "default", "fast", "flex", "scale", "ultrafast", "Priority", "", null, true, 1, {}, []]) {
+      const rejected = await invoke({ admission: wire({ options: { serviceTier: value } }) });
+      assert.equal(rejected.data.error, "inference_bridge_input_invalid", "only the explicit priority enum is accepted");
+    }
+    assert.equal(calls, before, "invalid tiers fail before provider HTTP");
+    const terminal = fields => ({ type: "response.completed", fields });
+    const tierCases = [
+      ...["auto", "default", "flex", "scale", "priority", "fast", "ultrafast"].map(value => ({ name: "observed " + value, fixture: { terminals: [terminal({ model, service_tier: value })] }, expected: value })),
+      { name: "priority fallback", fixture: { terminals: [terminal({ model, service_tier: "default" })] }, expected: "default" },
+      { name: "incomplete tier", fixture: { terminals: [{ type: "response.incomplete", fields: { model, service_tier: "priority", incomplete_details: { reason: "max_output_tokens" } } }] }, expected: "priority" },
+      { name: "created-only tier", fixture: { created: { service_tier: "priority" }, terminals: [terminal({ model })] } },
+      { name: "missing tier", fixture: { terminals: [terminal({ model })] } },
+      { name: "matching terminal tiers", fixture: { terminals: [terminal({ model, service_tier: "priority" }), terminal({ model, service_tier: "priority" })] }, expected: "priority" },
+      { name: "conflicting terminal tiers", fixture: { terminals: [terminal({ model, service_tier: "priority" }), terminal({ model, service_tier: "default" })] } },
+      { name: "valid then missing tier", fixture: { terminals: [terminal({ model, service_tier: "priority" }), terminal({ model })] } },
+      { name: "valid then malformed tier", fixture: { terminals: [terminal({ model, service_tier: "priority" }), terminal({ model, service_tier: null })] } },
+      { name: "malformed then valid tier", fixture: { terminals: [terminal({ model, service_tier: null }), terminal({ model, service_tier: "priority" })] } },
+      { name: "unrelated event tier", fixture: { extraEvents: [{ type: "response.fixture_metadata", response: { service_tier: "priority" } }], terminals: [terminal({ model })] } },
+      { name: "wrong tier property", fixture: { terminals: [terminal({ model, responseServiceTier: "priority" })] } },
+      { name: "valid tier and malformed model", fixture: { terminals: [terminal({ model: null, service_tier: "priority" })] }, expected: "priority", invalidModel: true },
+      ...[null, 42, {}, [], "", "Priority", "priority ", "PRIVATE@malformed.invalid", "x".repeat(129)].map(value => ({ name: "malformed tier", fixture: { terminals: [terminal({ model, service_tier: value })] } })),
+    ];
+    for (const { name, fixture, expected, invalidModel = false } of tierCases) {
+      responseModelFixture = fixture;
+      const result = await invoke({ bridge: wire({ options: { serviceTier: "priority" } }) });
+      assert.equal(result.status, 200, name);
+      assert.equal(result.data.result.responseServiceTier, expected, name);
+      assert.equal(Object.hasOwn(result.data.result, "responseServiceTier"), expected !== undefined, name);
+      assert.equal(result.data.result.responseModel, invalidModel ? undefined : model, "tier validity leaves model observations independent");
+      assert(result.data.events.filter(event => !["done", "error"].includes(event.type)).every(event => !Object.hasOwn(event.partial, "responseServiceTier")), "delivered tier appears only on terminal output");
+    }
+    responseModelFixture = { created: { service_tier: "priority" } };
+    const history = await invoke({ bridge: wire({ context: { messages: [{ role: "user", content: "Earlier turn", timestamp: 0 }, { ...standard.data.result, responseServiceTier: "priority", timestamp: 1 }, { role: "user", content: "hello", timestamp: 2 }] } }) });
+    assert.equal(Object.hasOwn(history.data.result, "responseServiceTier"), false, "assistant history cannot supply delivered-tier evidence");
+    responseModelFixture = { terminals: [terminal({ model, service_tier: "priority" })] };
+    const adapted = await invoke({ prompt: "hello", fastMode: true });
+    assert.equal(adapted.data.result.responseServiceTier, "priority", "the genuine OS adapter preserves observed tier metadata");
+    assert.equal(lastNative.service_tier, "priority", "the OS handle's captured Fast option reaches the serializer");
+    const delivered = await invoke({ prompt: "hello" });
+    assert.equal(delivered.data.result.responseServiceTier, "priority", "observed delivery does not require a requested tier");
+    assert.equal(Object.hasOwn(lastNative, "service_tier"), false);
+    responseModelFixture = undefined;
+    await invoke({ configure: { status: { provider: "siwc" }, retryLimit: 1 } });
+    retryResponse = true;
+    const retried = await invoke({ bridge: wire({ options: { serviceTier: "priority" } }) });
+    assert.equal(retried.data.result.stopReason, "stop");
+    assert.equal((await invoke({ fetchAttempts: true })).data.count, 2, "real SDK retry makes exactly two HTTP attempts");
+    assert.equal(lastNative.service_tier, "priority", "the selected tier survives the provider retry");
+    assert.equal(Object.hasOwn(retried.data.result, "responseServiceTier"), false, "retry with absent metadata retains no prior call's observation");
+    const tool = { name: "read_health", description: "Read only", parameters: { type: "object", properties: {}, additionalProperties: false } };
+    const first = await invoke({ bridge: wire({ context: { messages: [{ role: "user", content: "use_read_tool", timestamp: 1 }], tools: [tool] }, options: { serviceTier: "priority" } }) });
+    assert.equal(first.data.result.stopReason, "toolUse");
+    assert.equal(lastNative.service_tier, "priority");
+    const called = first.data.result.content.find(block => block.type === "toolCall");
+    const next = await invoke({ bridge: wire({ context: { messages: [{ role: "system", content: "Use declared tools", toolsAdded: [tool], timestamp: 0 }, { role: "user", content: "use_read_tool", timestamp: 1 }, first.data.result, { role: "toolResult", toolCallId: called.id, toolName: called.name, content: [{ type: "text", text: "READ_ONLY_OK" }], isError: false, timestamp: 3 }] }, options: { serviceTier: "priority" } }) });
+    assert.equal(next.data.result.stopReason, "stop");
+    assert.equal(lastNative.service_tier, "priority", "the next tool-result request retains the explicit Fast setting");
+    assert(lastNative.input.some(item => item.type === "function_call_output" && item.output.includes("READ_ONLY_OK")));
+    assert.deepEqual((await invoke({ diagnostics: true })).data, [], "tier metadata adds no success diagnostics");
+  }
+  console.log("inference bridge Fast checks passed: strict priority and SIWC-only transport, exact installed SDK serialization, Standard parity, terminal tier allowlist, requested/actual separation, model independence, spoof/malformed/conflict refusal, tool results and retry isolation");
+  expectedProvider = "codex";
   for (const provider of ["", "unknown", "openai", "Codex"]) {
     await mf.setOptions(convertV4MiniflareOptions({ workers: [client, { ...server, bindings: { ...server.bindings, INFERENCE_BRIDGE_PROVIDER: provider } }] }));
     const before = calls, credentialsBefore = (await invoke({ credentialCalls: true })).data.count;

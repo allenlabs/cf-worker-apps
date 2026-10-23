@@ -93,6 +93,7 @@ try {
         run('pnpm', ['exec', 'vitest', 'run',
           ...(config.auth.mode === 'access' ? ['__tests__/access.test.ts', '__tests__/client-errors.test.ts'] : []),
           '__tests__/subscription-models.test.ts', '__tests__/subscription-setup-session.test.ts',
+          '__tests__/subscription-fast.test.ts', '__tests__/chat-fast-mode.test.ts',
           '__tests__/admin-config.test.ts', '__tests__/ai-gateway.test.ts',
           '__tests__/pending-login.test.ts', '__tests__/redirect-login.test.ts',
           '__tests__/user-models.test.ts', '__tests__/admin-settings-models.test.ts',

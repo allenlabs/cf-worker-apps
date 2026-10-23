@@ -1,6 +1,15 @@
 const MAX_BODY_BYTES = 1024 * 1024;
 const invalid = () => { throw new Error("subscription_model_catalog_unavailable"); };
 
+function supportsFast(model) {
+  const string = (value, limit) => typeof value === "string" && value.length <= limit;
+  const modern = model.service_tiers, legacy = model.additional_speed_tiers;
+  if (modern !== undefined && (!Array.isArray(modern) || modern.length > 32 || !modern.every(tier => tier && typeof tier === "object" && !Array.isArray(tier)
+    && string(tier.id, 128) && string(tier.name, 256) && string(tier.description, 4096)))) return false;
+  if (legacy !== undefined && (!Array.isArray(legacy) || legacy.length > 32 || !legacy.every(tier => string(tier, 128)))) return false;
+  return modern?.some(tier => tier.id === "priority") || legacy?.includes("fast") || false;
+}
+
 // SIWC lists the models available to this bearer, unlike the public API model-list shape.
 export async function readSiwcModelCatalog(access, supported) {
   const controller = new AbortController();
@@ -40,7 +49,7 @@ export async function readSiwcModelCatalog(access, supported) {
         || typeof model.display_name !== "string" || !model.display_name.trim()
         || encoder.encode(model.display_name).length > 256 || /[\x00-\x1f\x7f-\x9f]/.test(model.display_name)) invalid();
       seen.add(model.slug);
-      if (model.visibility === "list" && supported.has(model.slug)) models.push({ id: model.slug, name: model.display_name });
+      if (model.visibility === "list" && supported.has(model.slug)) models.push({ id: model.slug, name: model.display_name, ...(supportsFast(model) ? { supportsFast: true } : {}) });
     }
     return models;
   } catch {

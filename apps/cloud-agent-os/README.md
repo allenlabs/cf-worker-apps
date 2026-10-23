@@ -156,6 +156,13 @@ models become available independently of chat history. Each subscription lists i
 default once under the actual model name, with a star labeled **Default model**; administrator model
 names still take precedence. The star does not choose a provider or model automatically.
 
+**Fast** is a per-chat choice and starts off. The control appears only when the selected SIWC
+account's model catalog advertises Fast support. Changing to an unsupported model clears the choice.
+The next accepted send or retry saves the choice; a running turn retains its own snapshot, including
+after a restart. Fast requests `service_tier: "priority"` without changing reasoning. The provider can
+serve another tier. Terminal `responseServiceTier` metadata records the provider's actual tier when
+reported. Fast can consume more allowance or credits; the rate depends on the plan.
+
 Opening the subscription panel reads saved state without querying every provider. Row refresh and
 bounded refresh-all reuse the existing account-scoped cache. A failed lookup retains the last
 successful reading and shows its age and failure separately. Recorded quota history contains at most
@@ -244,6 +251,9 @@ The current limits are 5,000 models per backend, a 1 MiB catalog response, and 4
 cached data. Larger installations need a paginated catalog API.
 
 ## Native OpenCode agent loop
+
+The [external coding-agent backend review](docs/AGENT_BACKENDS.md) compares direct Cursor and Devin
+cloud APIs with Paseo-style local ACP integration. These remote-agent integrations are not implemented.
 
 The Workshop runs its actual agent loop through `@opencode/sdk/workerd` 2.0.24. The existing
 `ModelHandle` remains the inference transport, including subscription routing, streamed text and

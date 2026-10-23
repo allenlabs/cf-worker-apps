@@ -168,7 +168,8 @@ const outboundService = async request => {
     if(duringModelRead) { const action=duringModelRead;duringModelRead=null;await action(); }
     if(modelNetworkFailed)throw Error(accessToken);
     if(modelHttpStatus!==200)return new Response(accessToken,{status:modelHttpStatus,headers:modelHttpStatus===302?{location:'https://unapproved.example.invalid/models'}:{}});
-    return modelResponse instanceof Response?modelResponse:Response.json(modelResponse);
+    const body=typeof modelResponse==='function'?modelResponse(authorization):modelResponse;
+    return body instanceof Response?body:Response.json(body);
   }
   if (request.url === `${issuer}/cdn-cgi/access/certs`) return Response.json({ keys: [accessJwk] });
   if (request.url === "https://auth.openai.com/.well-known/jwks.json") return Response.json({ keys: [openaiJwk] });
@@ -800,11 +801,33 @@ try {
   assert.deepEqual(modelReads,['named','named'],'each read refreshes current grants without a catalog cache');
   await put({credential:beforeReconnect.credential});
   assert.equal((await send('/gatekeeper/subscription/select',{provider:'siwc'})).status,200);
-  await privateClient.fetch('https://fixture.invalid/models');
+  const priorityTier={id:'priority',name:'Fast fixture',description:'Synthetic tier description'};
+  modelResponse=authorization=>({models:visibleModels.map(item=>({...item,...(authorization===`Bearer ${namedAccessToken}`?{service_tiers:[priorityTier]}:{})}))});
+  const isolatedCatalog=await (await privateClient.fetch('https://fixture.invalid/models')).json();
+  assert.ok(isolatedCatalog.connections.find(row=>row.id===connectionA).models.every(item=>item.supportsFast===true),'each selected SIWC account supplies its own Fast capability');
+  assert.ok(isolatedCatalog.connections.find(row=>row.id==='owner').models.every(item=>!Object.hasOwn(item,'supportsFast')),'a sibling account cannot inherit another bearer capability');
   assert.deepEqual(modelReads.slice(-2).sort(),['named','owner'],'two SIWC objects independently use their own access');
   assert.equal((await send('/gatekeeper/subscription/select',{provider:'codex'})).status,200);
   await put({credential:ownerBeforeNamed.credential??null});
   const localModels=()=>targetObject(connectionA).fetch('https://fixture.invalid/fixture-models');
+  const capabilityCases=[
+    {name:'official priority tier',metadata:{service_tiers:[priorityTier]},fast:true},
+    {name:'legacy fast tier',metadata:{additional_speed_tiers:['future','fast']},fast:true},
+    {name:'both compatible metadata',metadata:{service_tiers:[priorityTier],additional_speed_tiers:['fast']},fast:true},
+    {name:'unknown tier IDs',metadata:{service_tiers:[{...priorityTier,id:'future'}],additional_speed_tiers:['priority','FAST']}},
+    {name:'omitted capability',metadata:{}},
+    {name:'untrusted capability projection',metadata:{supportsFast:true}},
+    {name:'empty tier arrays',metadata:{service_tiers:[],additional_speed_tiers:[]}},
+    ...[null,{},'priority',[null],[{id:'priority'}],[{...priorityTier,name:42}],[{...priorityTier,description:null}],[{...priorityTier,id:'x'.repeat(129)}],[{...priorityTier,name:'x'.repeat(257)}],[{...priorityTier,description:'x'.repeat(4097)}],Array.from({length:33},()=>priorityTier)].map(service_tiers=>({name:'malformed modern metadata',metadata:{service_tiers,additional_speed_tiers:['fast']}})),
+    ...[null,{},'fast',[null],['fast',42],['fast','x'.repeat(129)],Array(33).fill('fast')].map(additional_speed_tiers=>({name:'malformed legacy metadata',metadata:{additional_speed_tiers,service_tiers:[priorityTier]}})),
+  ];
+  for(const {name,metadata,fast} of capabilityCases) {
+    modelResponse={models:[{...visibleModels[0],...metadata},{slug:'gpt-5',display_name:'Hidden Fast model',visibility:'hide',service_tiers:[priorityTier]},{slug:'future-unsupported-model',display_name:'Unsupported Fast model',visibility:'list',service_tiers:[priorityTier]}]};
+    const response=await localModels();assert.equal(response.status,200,name);
+    const catalog=await response.json();
+    assert.deepEqual(catalog.models,[{id:visibleModels[0].slug,name:visibleModels[0].display_name,...(fast?{supportsFast:true}:{})}],name+' exposes only the safe optional capability and keeps Standard available');
+  }
+  modelResponse={models:visibleModels};
   const assertCatalogUnavailable=async()=>{const response=await privateClient.fetch('https://fixture.invalid/models');assert.equal(response.status,503);assert.deepEqual(await response.json(),{error:'subscription_model_catalog_unavailable'},'catalog failure never returns a static fallback or raw provider error');};
   for(const status of [302,401,403,500]) { modelHttpStatus=status;await assertCatalogUnavailable(); }modelHttpStatus=200;
   assert.ok(!outboundUrls.includes('https://unapproved.example.invalid/models'),'model discovery never forwards a bearer to a redirect target');

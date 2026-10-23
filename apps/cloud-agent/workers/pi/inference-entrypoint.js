@@ -7,6 +7,7 @@ import { codexDiagnostic, codexPayloadShape, codexRequestShape } from "./codex-h
 const encoder = new TextEncoder();
 const INPUT_LIMIT = 1048576, FRAME_LIMIT = 524288, OUTPUT_LIMIT = 8388608;
 const DIAGNOSTIC_WIRE_LIMIT = 16777216; // Observation bound only; this does not limit provider transport.
+const SERVICE_TIERS = ["auto", "default", "flex", "scale", "priority", "fast", "ultrafast"];
 const fail = code => { throw Error(code); };
 const text = z.string().max(262144);
 const jsonObject = z.record(z.string(), z.json());
@@ -16,7 +17,7 @@ const toolCall = z.object({ type: z.literal("toolCall"), id: z.string().min(1).m
 const tool = z.object({ name: z.string().min(1).max(128), description: text, parameters: jsonObject });
 const counter = z.number().int().nonnegative();
 const usage = z.object({ input: counter, output: counter, cacheRead: counter, cacheWrite: counter, totalTokens: counter, reasoning: counter.optional(), cost: z.object({ input: z.number(), output: z.number(), cacheRead: z.number(), cacheWrite: z.number(), total: z.number() }) });
-const assistant = z.object({ role: z.literal("assistant"), content: z.array(z.union([textBlock, thinkingBlock, toolCall])).max(128), api: z.string().max(128), provider: z.string().max(128), model: z.string().max(128), responseModel: z.string().max(128).optional(), responseId: z.string().max(1024).optional(), providerThinkingLevel: z.string().max(128).optional(), thinkingLevel: z.string().max(128).optional(), usage, stopReason: z.enum(["pending", "stop", "length", "toolUse", "error", "aborted"]), timestamp: counter });
+const assistant = z.object({ role: z.literal("assistant"), content: z.array(z.union([textBlock, thinkingBlock, toolCall])).max(128), api: z.string().max(128), provider: z.string().max(128), model: z.string().max(128), responseModel: z.string().max(128).optional(), responseServiceTier: z.enum(SERVICE_TIERS).optional(), responseId: z.string().max(1024).optional(), providerThinkingLevel: z.string().max(128).optional(), thinkingLevel: z.string().max(128).optional(), usage, stopReason: z.enum(["pending", "stop", "length", "toolUse", "error", "aborted"]), timestamp: counter });
 const message = z.discriminatedUnion("role", [
   z.object({ role: z.literal("system"), content: z.union([text, z.array(textBlock).max(128)]), timestamp: counter, sections: z.record(z.string().max(128), text.nullable()).optional(), toolsAdded: z.array(tool).max(64).optional(), toolsRemoved: z.array(z.object({ name: z.string().max(128) })).max(64).optional() }),
   z.object({ role: z.literal("user"), content: z.union([text, z.array(textBlock).max(128)]), timestamp: counter }),
@@ -28,7 +29,7 @@ const requestSchema = z.object({
   subscriptionAccountId: z.string().regex(/^(?:owner|account-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/).optional(),
   modelId: z.string().regex(/^[a-zA-Z0-9._-]{1,128}$/).optional(),
   context: z.object({ systemPrompt: text.optional(), messages: z.array(message).min(1).max(256), tools: z.array(tool).max(64).optional() }).strict(),
-  options: z.object({ reasoning: z.enum(["minimal", "low", "medium", "high", "xhigh"]).optional(), maxTokens: z.number().int().min(1).max(8192).optional() }).strict()
+  options: z.object({ reasoning: z.enum(["minimal", "low", "medium", "high", "xhigh"]).optional(), maxTokens: z.number().int().min(1).max(8192).optional(), serviceTier: z.literal("priority").optional() }).strict()
 }).strict();
 
 function policy(env) {
@@ -146,6 +147,22 @@ function observeTerminalModel(event, observed) {
   } catch { observed.invalid = true; observed.model = undefined; }
 }
 
+function observeTerminalServiceTier(event, observed) {
+  const data = (value, key) => {
+    const field = Object.getOwnPropertyDescriptor(value, key);
+    return field && Object.hasOwn(field, "value") ? field.value : undefined;
+  };
+  try {
+    if (!["response.completed", "response.incomplete"].includes(data(event, "type"))) return;
+    const value = data(data(event, "response"), "service_tier");
+    if (observed.invalid || !SERVICE_TIERS.includes(value) || observed.seen && observed.tier !== value) {
+      observed.invalid = true;
+      observed.tier = undefined;
+    } else observed.tier = value;
+    observed.seen = true;
+  } catch { observed.invalid = true; observed.tier = undefined; }
+}
+
 class InferenceCancellation extends RpcTarget {
   #cancel;
   constructor(cancel) { super(); this.#cancel = cancel; }
@@ -180,6 +197,7 @@ export class CloudAgentInference extends WorkerEntrypoint {
       if (!["siwc", "codex"].includes(status.provider)) fail("inference_bridge_account_unavailable");
       configured.provider = status.provider;
     }
+    if (input.options.serviceTier !== undefined && configured.provider !== "siwc") fail("inference_bridge_service_tier_unavailable");
     if (configured.provider === "codex" ? status.codexInferenceReady !== true : status.siwcInferenceReady !== true) fail("inference_bridge_account_unavailable");
     const models = createModels();
     const observed = { provider: configured.provider, credentialAccessFailed: false, fetchAttempted: false, responseReceived: false };
@@ -213,9 +231,13 @@ export class CloudAgentInference extends WorkerEntrypoint {
     const abort = new AbortController(), deadline = setTimeout(() => abort.abort(), configured.timeoutMs);
     let identityBody;
     const returnedModel = {};
+    const returnedServiceTier = {};
     const iterator = models.streamSimple(model, input.context, {
       ...input.options, maxTokens: input.options.maxTokens ?? 4096, signal: abort.signal,
-      onProviderStreamEvent: configured.provider === "siwc" ? event => observeTerminalModel(event, returnedModel) : undefined,
+      onProviderStreamEvent: configured.provider === "siwc" ? event => {
+        observeTerminalModel(event, returnedModel);
+        observeTerminalServiceTier(event, returnedServiceTier);
+      } : undefined,
       fetch: async (...args) => {
         observed.fetchAttempted = true;
         observed.responseReceived = false;
@@ -225,6 +247,9 @@ export class CloudAgentInference extends WorkerEntrypoint {
         returnedModel.seen = false;
         returnedModel.invalid = false;
         returnedModel.model = undefined;
+        returnedServiceTier.seen = false;
+        returnedServiceTier.invalid = false;
+        returnedServiceTier.tier = undefined;
         if (configured.provider === "codex" && configured.requestEncoding === "identity") {
           if (typeof identityBody !== "string") fail("inference_bridge_payload_unavailable");
           const headers = new Headers(args[1]?.headers);
@@ -256,6 +281,8 @@ export class CloudAgentInference extends WorkerEntrypoint {
         return response;
       },
       onPayload: body => {
+        // streamSimple in the pinned SDK drops serviceTier before building the request.
+        if (configured.provider === "siwc" && input.options.serviceTier === "priority") body.service_tier = "priority";
         // Keep the exact provider JSON only for this call; native encoding forwards the original fetch arguments.
         if (configured.provider === "codex" && configured.requestEncoding === "identity") identityBody = JSON.stringify(body);
         try { observed.payload = codexPayloadShape(body); } catch { /* Observation cannot change payload. */ }
@@ -282,7 +309,9 @@ export class CloudAgentInference extends WorkerEntrypoint {
             const terminal = event.type === "done" || event.type === "error";
             const message = event[event.type === "done" ? "message" : event.type === "error" ? "error" : "partial"];
             delete message.responseModel;
+            delete message.responseServiceTier;
             if (terminal && returnedModel.model !== undefined) message.responseModel = returnedModel.model;
+            if (terminal && returnedServiceTier.tier !== undefined) message.responseServiceTier = returnedServiceTier.tier;
           }
           if (event.type === "start") { if (started) fail("inference_bridge_response_invalid"); started = true; }
           else if (event.type !== "error" && !started) fail("inference_bridge_response_invalid");
