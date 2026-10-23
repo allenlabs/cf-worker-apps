@@ -228,9 +228,15 @@ connects and authorizes OAuth separately through the existing connector flow, co
 [OpenCode remote MCP configuration](https://docs.opencode.ai/docs/mcp-servers/). Existing observation,
 write-approval, and tool restrictions still apply.
 
-Subscription choices include the active protocol's complete bundled SDK model catalog for each
-connection. This is a supported-model catalog, not proof of the account's entitlement to every
-model. The provider can still reject a model. OpenAI-compatible discovery reports only returned
+SIWC subscription choices come from the selected account's `GET https://api.openai.com/v1/models`
+response using its inference access token. Only `visibility: "list"` models supported by the
+installed SDK appear, in provider order with the supplied display names. A configured default
+appears only when that account lists it. Discovery runs again on each catalog read, and failures
+show the existing retry state without falling back to the bundled OpenAI catalog. Selection and
+stored subscription bindings are revalidated against the current account list. This follows the
+[SIWC model-list contract](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference).
+Codex device connections retain their bundled SDK catalog, which does not verify account entitlement.
+OpenAI-compatible discovery reports only returned
 model IDs; prices, context limits, and capabilities remain unknown unless independently supplied.
 Catalog failures retain eligible previous results with an error and observation time. Discovery
 rejects oversized or incomplete results instead of silently reporting a partial catalog as complete.

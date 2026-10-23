@@ -18,6 +18,7 @@ const oidcIssuer = "https://identity.example.invalid/oidc", oidcSubject = "fixtu
 const osToken = email + ":" + Buffer.alloc(32, 1).toString("base64");
 const osOtherToken = email + ":" + Buffer.alloc(32, 2).toString("base64");
 const sessionToken = suffix => email + ":" + Buffer.alloc(32, suffix).toString("base64");
+const namedAccessToken = "synthetic-named-siwc-access-never-log";
 const accessToken = "synthetic-siwc-access-never-log", refreshToken = "synthetic-siwc-refresh-never-log";
 const accessKeys = generateKeyPairSync("rsa", { modulusLength: 2048 });
 const openaiKeys = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -34,6 +35,11 @@ const deviceClient = "app_EMoamEEZ73f0CkXaXp7hrann";
 const deviceVerifier = "fixture-device-verifier-abcdefghijklmnopqrstuvwxyz";
 let expectedModel = model;
 let nonce, tokenCalls = 0, inferenceCalls = 0, refreshCalls = 0, claimsOverride = {}, refreshClaims = null, duringToken = null, outboundUrls = [];
+const visibleModels = [
+  {slug:'gpt-5.4',display_name:'Provider model first',visibility:'list'},
+  {slug:model,display_name:'Provider model second',visibility:'list'},
+];
+let modelReads = [], modelResponse = {models:visibleModels}, modelHttpStatus = 200, modelNetworkFailed = false, duringModelRead = null;
 const logs = [];
 class CaptureLog extends Log { log(message) { logs.push(message); } }
 await writeFile(join(work, "server.js"), `
@@ -92,6 +98,10 @@ export class Credentials extends BaseCredentials {
       if(request.method==='POST')return Response.json({ok:true});
       return Response.json(await this.open(await this.ctx.storage.get('subscriptionAccountHistory')) ?? null);
     }
+    if(new URL(request.url).pathname==='/fixture-models') {
+      try { return Response.json(await this.subscriptionModelCatalog()); }
+      catch(error) { return Response.json({error:error.message},{status:503}); }
+    }
     if(new URL(request.url).pathname==='/fixture-disconnect') return Response.json(await this.disconnect());
     if(new URL(request.url).pathname==='/fixture-device-time') { const change=await request.json(); const pending=await this.open(await this.ctx.storage.get('codexImagePending')); await this.ctx.storage.put('codexImagePending',await this.seal({...pending,...change})); }
     if(new URL(request.url).pathname==='/fixture-put') { const input=await request.json();for(const [key,value] of Object.entries(input)) { if(value===null)await this.ctx.storage.delete(key);else await this.ctx.storage.put(key,value); } }
@@ -106,7 +116,7 @@ export class Probe extends WorkerEntrypoint {
 await writeFile(join(work, "client.js"), `export default { async fetch(request, env) {
   const path=new URL(request.url).pathname;
   if(path==='/connections')return Response.json(await env.BRIDGE.subscriptionConnections());
-  if(path==='/models')return Response.json(await env.BRIDGE.subscriptionModels());
+  if(path==='/models'){try{return Response.json(await env.BRIDGE.subscriptionModels());}catch(error){return Response.json({error:error.message},{status:503});}}
   if(path==='/events')return Response.json(await env.PROBE.events());
   if(path==='/session-calls')return Response.json(await env.SESSION.count());
   if(path==='/fail'){await env.PROBE.fail((await request.json()).value);return Response.json({ok:true});}
@@ -150,6 +160,16 @@ const sse = events => new Response(events.map(event => `event: ${event.type}\nda
 const outboundService = async request => {
   outboundUrls.push(request.url);
   if(request.url==='https://fixture.invalid/hold-status') { await duringStatus();return new Response('ok'); }
+  if (request.url === "https://api.openai.com/v1/models") {
+    assert.equal(request.method,'GET');
+    const authorization=request.headers.get('authorization');
+    assert.ok([`Bearer ${accessToken}`,`Bearer ${namedAccessToken}`].includes(authorization),'model discovery uses only the selected SIWC bearer');
+    modelReads.push(authorization===`Bearer ${namedAccessToken}`?'named':'owner');
+    if(duringModelRead) { const action=duringModelRead;duringModelRead=null;await action(); }
+    if(modelNetworkFailed)throw Error(accessToken);
+    if(modelHttpStatus!==200)return new Response(accessToken,{status:modelHttpStatus,headers:modelHttpStatus===302?{location:'https://unapproved.example.invalid/models'}:{}});
+    return modelResponse instanceof Response?modelResponse:Response.json(modelResponse);
+  }
   if (request.url === `${issuer}/cdn-cgi/access/certs`) return Response.json({ keys: [accessJwk] });
   if (request.url === "https://auth.openai.com/.well-known/jwks.json") return Response.json({ keys: [openaiJwk] });
   if (request.url === "https://chatgpt.com/backend-api/wham/accounts/check") {
@@ -199,7 +219,7 @@ const outboundService = async request => {
     assert.equal(input.get("redirect_uri"), "http://127.0.0.1:1455/auth/callback");
     assert.equal(input.get("resource"), "https://api.openai.com/v1");
     assert.match(input.get("code_verifier"), /^[A-Za-z0-9_-]{43}$/);
-    return Response.json({ access_token: accessToken, refresh_token: refreshToken, token_type: "Bearer", expires_in: 3600,
+    return Response.json({ access_token: claimsOverride.sub==='synthetic-openai-A'?namedAccessToken:accessToken, refresh_token: refreshToken, token_type: "Bearer", expires_in: 3600,
       scope: "resource.invoke chatgpt.tokens.use.direct", id_token: jwt(openaiKeys, openaiJwk.kid, {
         iss: "https://auth.openai.com", aud: "synthetic-client", sub: "synthetic-openai-owner", email: other, name: "Verified subscriber",
         email_verified: true, nonce, exp: Date.now() / 1000 + 3600,
@@ -209,7 +229,7 @@ const outboundService = async request => {
   }
   assert.ok(["https://api.openai.com/v1/responses", "https://chatgpt.com/backend-api/codex/responses"].includes(request.url), "outbound network is fixture-only");
   inferenceCalls++;
-  if (request.url.startsWith("https://api.openai.com/")) assert.equal(request.headers.get("authorization"), `Bearer ${accessToken}`);
+  if (request.url.startsWith("https://api.openai.com/")) assert.ok([`Bearer ${accessToken}`,`Bearer ${namedAccessToken}`].includes(request.headers.get("authorization")));
   else assert.equal(request.headers.get("chatgpt-account-id"), deviceAccount);
   const bytes = Buffer.from(await request.arrayBuffer());
   const input = JSON.parse(request.headers.get("content-encoding") === "zstd" ? zstdDecompressSync(bytes).toString() : bytes.toString());
@@ -759,19 +779,62 @@ try {
   for (const row of namedCatalog) assert.deepEqual(Object.keys(row).sort(),['id','label','provider','ready']);
   assert.deepEqual({account:accountReads,usage:usageReads},readsBeforeNamed,'catalog reads local readiness without usage requests');
   assert.deepEqual(await (await privateClient.fetch('https://fixture.invalid/connections')).json(),namedCatalog,'trusted catalog needs no user ID');
+  modelResponse={models:[...visibleModels,{slug:'gpt-5',display_name:'Hidden model',visibility:'hide'},{slug:'gpt-5-mini',display_name:'Future visibility',visibility:'future'},{slug:'future-unsupported-model',display_name:'Unsupported model',visibility:'list'}]};
   const modelCatalog = await (await privateClient.fetch('https://fixture.invalid/models')).json();
-  assert.equal(modelCatalog.source, 'bundled-provider-catalog');
-  assert.equal(modelCatalog.entitlementVerified, false);
-  assert.deepEqual(modelCatalog.connections.map(({models,...connection})=>connection),namedCatalog,'legacy connection response remains unchanged');
+  assert.equal(modelCatalog.source, 'subscription-provider-catalog');
+  assert.deepEqual(modelReads,['named'],'named SIWC discovery uses its own grant; Codex never calls the SIWC catalog');
+  assert.deepEqual(modelCatalog.connections.map(({models,source,entitlementVerified,...connection})=>connection),namedCatalog,'legacy connection response remains unchanged');
+  const siwcCatalog=modelCatalog.connections.find(row=>row.id===connectionA);
+  assert.deepEqual(siwcCatalog.models,visibleModels.map(({slug,display_name})=>({id:slug,name:display_name})),'provider order/display names and visible supported subset are preserved');
+  assert.equal(siwcCatalog.source,'provider-account-catalog');assert.equal(siwcCatalog.entitlementVerified,true);
   const selectedModels = [];
   for (const row of modelCatalog.connections) {
-    assert.ok(row.models.length > 2, 'each active protocol contributes its full bundled chat catalog');
+    if(row.provider==='codex') { assert.ok(row.models.length>2,'Codex retains its bundled catalog');assert.equal(row.source,'bundled-provider-catalog');assert.equal(row.entitlementVerified,false); }
     assert.equal(new Set(row.models.map(model=>model.id)).size,row.models.length);
     for(const item of row.models)assert.deepEqual(Object.keys(item).sort(),['id','name'],'catalog exposes safe model metadata only');
+    assert.ok(!JSON.stringify(row).includes(accessToken)&&!JSON.stringify(row).includes(namedAccessToken),'no bearer in model metadata');
     const selected = row.models.find(item=>item.id!==model);
     selectedModels.push({accountId:row.id,provider:row.provider,modelId:selected.id});
   }
-  assert.deepEqual({account:accountReads,usage:usageReads},readsBeforeNamed,'complete model catalog does not probe account entitlement or quota');
+  await privateClient.fetch('https://fixture.invalid/models');
+  assert.deepEqual(modelReads,['named','named'],'each read refreshes current grants without a catalog cache');
+  await put({credential:beforeReconnect.credential});
+  assert.equal((await send('/gatekeeper/subscription/select',{provider:'siwc'})).status,200);
+  await privateClient.fetch('https://fixture.invalid/models');
+  assert.deepEqual(modelReads.slice(-2).sort(),['named','owner'],'two SIWC objects independently use their own access');
+  assert.equal((await send('/gatekeeper/subscription/select',{provider:'codex'})).status,200);
+  await put({credential:ownerBeforeNamed.credential??null});
+  const localModels=()=>targetObject(connectionA).fetch('https://fixture.invalid/fixture-models');
+  const assertCatalogUnavailable=async()=>{const response=await privateClient.fetch('https://fixture.invalid/models');assert.equal(response.status,503);assert.deepEqual(await response.json(),{error:'subscription_model_catalog_unavailable'},'catalog failure never returns a static fallback or raw provider error');};
+  for(const status of [302,401,403,500]) { modelHttpStatus=status;await assertCatalogUnavailable(); }modelHttpStatus=200;
+  assert.ok(!outboundUrls.includes('https://unapproved.example.invalid/models'),'model discovery never forwards a bearer to a redirect target');
+  modelNetworkFailed=true;await assertCatalogUnavailable();modelNetworkFailed=false;
+  for(const models of [null,{},[null],[{slug:'bad/id',display_name:'Bad',visibility:'list'}],[{slug:'gpt-5',display_name:'bad\nname',visibility:'list'}],[visibleModels[0],visibleModels[0]],Array.from({length:5001},()=>visibleModels[0])]) {
+    modelResponse={models};await assertCatalogUnavailable();
+  }
+  for(const response of [
+    new Response('{invalid-json',{headers:{'content-type':'application/json'}}),
+    new Response(JSON.stringify({models:[]}),{headers:{'content-type':'text/html'}}),
+    new Response(new Uint8Array([0xff]),{headers:{'content-type':'application/json'}}),
+    new Response(JSON.stringify({models:[]}),{headers:{'content-type':'application/json; charset=utf-16'}}),
+    new Response(JSON.stringify({models:[],padding:'x'.repeat(1024*1024)}),{headers:{'content-type':'application/json'}}),
+  ]) { modelResponse=response;await assertCatalogUnavailable(); }
+  modelResponse={models:[]};
+  assert.deepEqual((await (await localModels()).json()).models,[],'a successful empty provider catalog stays empty');
+  const savedNamedState=await targetState(connectionA);
+  const setNamed=value=>targetObject(connectionA).fetch('https://fixture.invalid/fixture-put',{method:'POST',body:JSON.stringify(value)});
+  await setNamed({credential:null});const readsBeforeDisconnected=modelReads.length;
+  const disconnectedModels=await (await localModels()).json();
+  assert.equal(disconnectedModels.ready,false);assert.equal(disconnectedModels.entitlementVerified,false);assert.deepEqual(disconnectedModels.models,[]);
+  assert.equal(modelReads.length,readsBeforeDisconnected,'disconnected SIWC never asks for a bearer or calls the provider');
+  await setNamed({credential:savedNamedState.credential});modelResponse={models:visibleModels};
+  duringModelRead=()=>setNamed({registration:{...savedNamedState.registration,subjectHash:'changed-synthetic-subject'}});
+  assert.deepEqual(await (await localModels()).json(),{error:'account_selection_changed'},'changed registration discards the in-flight catalog');
+  await setNamed({registration:savedNamedState.registration});
+  duringModelRead=()=>setNamed({subscriptionProvider:'codex'});
+  assert.deepEqual(await (await localModels()).json(),{error:'account_selection_changed'},'changed protocol discards the in-flight catalog');
+  await setNamed({subscriptionProvider:'siwc'});
+  assert.deepEqual({account:accountReads,usage:usageReads},readsBeforeNamed,'model discovery never probes quota endpoints');
   const beforeNamedOverview={account:accountReads,usage:usageReads};
   let namedOverview=await overview();
   assert.deepEqual(namedOverview.map(row=>row.id),['owner',connectionA,connectionB]);
@@ -1197,7 +1260,7 @@ try {
       assert.ok(!document.body.textContent.includes(osToken));
     } finally { dom.window.close(); }
   }
-  for (const secret of [osToken, accessToken, refreshToken, "synthetic-code-never-log", nonce, email, other, "renamed@example.invalid"]) assert.ok(!logs.join("\n").includes(secret), "no callback, identity or grant in runtime logs");
+  for (const secret of [osToken, accessToken, namedAccessToken, refreshToken, "synthetic-code-never-log", nonce, email, other, "renamed@example.invalid"]) assert.ok(!logs.join("\n").includes(secret), "no callback, identity or grant in runtime logs");
   assert.ok(outboundUrls.every(url => !url.includes("callback") && !url.includes("code=") && !url.includes(osToken)));
   const config = JSON.parse((await readFile(join(here, "wrangler.example.jsonc"), "utf8")));
   assert.deepEqual(config.durable_objects.bindings, [{ name: "Credentials", class_name: "Credentials" }]);
@@ -1209,5 +1272,5 @@ try {
   assert.equal(oidcConfig.vars.CF_ACCESS_AUD, undefined);
   assert.deepEqual(oidcConfig.durable_objects, config.durable_objects);
   assert.deepEqual(oidcConfig.migrations, config.migrations);
-  console.log(JSON.stringify({ result: "PASS", nativeRuntime: "Miniflare/workerd", checks: ["Access signature/issuer/audience/expiry/admin", "OIDC private session and exact issuer/subject/email pins before Credentials", "OIDC no-form bootstrap, authenticated document GET and matching CSP nonce, same-tab 401 recovery and 403 denial", "same-origin JSON bounded requests before DO", "automatic verified SIWC identity, legacy pins and concurrent registration conflicts", "independent encrypted SIWC and Codex completion in either order", "device empty/arbitrary pending objects, interval, expiry and terminal denial or invalid response", "explicit active transport and unavailable selection fails closed", "account cache privacy and in-flight selection change", "both login choices and bounded device polling with navigation guard", "automatic metadata and manual callback UI with no browser persistence", "owner plus two named isolated connections, complete safe SDK model catalogs and validated physical private inference selectors", "confirmed named deletion removes connected/pending credentials and quota, blocks busy/routing references, preserves owner/siblings, rejects removed IDs and late login starts", "rendered add/list/switch/delete ignores late status, login, metadata and device-poll responses"], tokenCalls, inferenceCalls, temporaryBuild: work }));
+  console.log(JSON.stringify({ result: "PASS", nativeRuntime: "Miniflare/workerd", checks: ["Access signature/issuer/audience/expiry/admin", "OIDC private session and exact issuer/subject/email pins before Credentials", "OIDC no-form bootstrap, authenticated document GET and matching CSP nonce, same-tab 401 recovery and 403 denial", "same-origin JSON bounded requests before DO", "automatic verified SIWC identity, legacy pins and concurrent registration conflicts", "independent encrypted SIWC and Codex completion in either order", "device empty/arbitrary pending objects, interval, expiry and terminal denial or invalid response", "explicit active transport and unavailable selection fails closed", "account cache privacy and in-flight selection change", "both login choices and bounded device polling with navigation guard", "automatic metadata and manual callback UI with no browser persistence", "owner plus two named isolated connections, fresh account-scoped SIWC model catalogs, Codex SDK catalogs and validated physical private inference selectors", "confirmed named deletion removes connected/pending credentials and quota, blocks busy/routing references, preserves owner/siblings, rejects removed IDs and late login starts", "rendered add/list/switch/delete ignores late status, login, metadata and device-poll responses"], tokenCalls, inferenceCalls, temporaryBuild: work }));
 } finally { await mf.dispose(); }

@@ -8,6 +8,7 @@ import { Agent } from "agents";
 import { PiHarness, skills } from "agents/harness/pi";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { installSubscriptionModels, subscriptionModel } from "./subscription-models.js";
+import { readSiwcModelCatalog } from "./siwc-model-catalog.js";
 import { subscriptionInferenceProvider } from "./subscription-inference-policy.js";
 import { fauxProvider, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { Harness, createRegistry, LiveDoc } from "@earendil-works/pi-durable";
@@ -192,17 +193,38 @@ export class Credentials extends ManagementCredentials {
   }
 
   async subscriptionModels() {
-    const models = createModels();
-    installSubscriptionModels(models, () => this, undefined, undefined, this.env.SUBSCRIPTION_INFERENCE_PROVIDER);
-    const connections = await this.subscriptionConnections();
+    const rows = await this.#subscriptionInventory();
     return {
-      source: "bundled-provider-catalog", entitlementVerified: false,
-      connections: connections.map(connection => ({
-        ...connection,
-        models: models.getModels(connection.provider === "codex" ? "openai-codex" : "openai")
-          .map(({ id, name }) => ({ id, name }))
-      }))
+      source: "subscription-provider-catalog",
+      connections: await Promise.all(rows.map(async ({ id, label }) => ({
+        id, label, ...await (id === "owner" ? this : this.env.Credentials.getByName(id)).subscriptionModelCatalog(),
+      }))),
     };
+  }
+
+  async subscriptionModelCatalog() {
+    try {
+      const status = await this.status();
+      const connection = { provider: status.provider, ready: status.inferenceReady === true };
+      if (status.provider === "siwc" && !connection.ready) return { ...connection, source: "provider-account-catalog", entitlementVerified: false, models: [] };
+      const models = createModels();
+      installSubscriptionModels(models, () => this, undefined, undefined, this.env.SUBSCRIPTION_INFERENCE_PROVIDER);
+      const bundled = models.getModels(status.provider === "codex" ? "openai-codex" : "openai").map(({ id, name }) => ({ id, name }));
+      if (status.provider === "codex") return { ...connection, source: "bundled-provider-catalog", entitlementVerified: false, models: bundled };
+      const registration = await digest(JSON.stringify(await this.ctx.storage.get("registration") ?? null));
+      const stillSelected = async () => {
+        const current = await this.status();
+        requireCondition(current.provider === "siwc" && current.inferenceReady && !await this.ctx.storage.get("subscriptionDeleted")
+          && registration === await digest(JSON.stringify(await this.ctx.storage.get("registration") ?? null)), "account_selection_changed");
+      };
+      const access = await this.access();
+      await stillSelected();
+      const available = await readSiwcModelCatalog(access, new Set(bundled.map(model => model.id)));
+      await stillSelected();
+      return { ...connection, source: "provider-account-catalog", entitlementVerified: true, models: available };
+    } catch (error) {
+      throw new Error(error?.message === "account_selection_changed" ? "account_selection_changed" : "subscription_model_catalog_unavailable");
+    }
   }
 
   async createSubscriptionConnection(input) {

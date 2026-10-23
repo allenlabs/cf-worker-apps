@@ -10,6 +10,20 @@ The owner catalog reuses `adminAccounts`, includes `owner` plus only rows marked
 
 The authenticated same-origin `POST /connections` returns `{connections}` and `POST /connections/create` accepts only `{label}`, returning `{id, connections}`. These paths are relative to `/gatekeeper/subscription`. Catalog rows contain only `{id, label, provider, ready}`. Existing operations accept optional `accountId` alongside their existing fields. Omission retains the legacy owner behavior. A supplied ID must belong to this catalog before the Worker opens its Credentials object. Authentication and exact request validation precede account access. Catalog listing reads local status without querying usage for every connection.
 
+The private inference binding's `subscriptionModels()` returns
+`{source: "subscription-provider-catalog", connections}`. Each connection adds `source`,
+`entitlementVerified` and safe `{id, name}` models to its ordinary catalog metadata. For a ready
+SIWC connection, its own Credentials object uses its selected access bearer with the documented
+[SIWC model endpoint](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference).
+It preserves provider ordering and display names, includes only `visibility: "list"` entries,
+and intersects slugs with the pinned SDK's supported OpenAI models. These successful reads use
+`source: "provider-account-catalog"` and `entitlementVerified: true`; this is current model-list
+availability rather than a promise that a later inference request will succeed. Each read refreshes
+the provider list. A disconnected SIWC row has no models and does not contact OpenAI. A denied,
+unavailable or malformed provider response fails the catalog so the picker can offer Retry.
+Codex keeps `source: "bundled-provider-catalog"` and `entitlementVerified: false`, with its SDK
+catalog rather than an account entitlement claim. Neither path returns provider tokens.
+
 The native OS Admin Providers panel uses these same protected endpoints for subscription settings.
 `POST /connections/delete` accepts only `{accountId, confirmed: true}` and returns `{connections}` with only the surviving IDs and labels. The response does not query sibling status after deletion. It disconnects both protocols, cancels pending attempts, removes the named catalog row and its saved identity, registration pins and encrypted quota cache/history. It rejects owner, unknown and general administrator accounts. A Channel Talk default, pool or observed-thread reference blocks deletion without changing routing. Busy OAuth work keeps the row. The owner serializes reference checks, disconnect and catalog removal with its native Durable Object concurrency gate. Routing writers recheck the current inventory in their commit transaction, so an earlier readiness check cannot restore a deleted account reference. These writes span two objects: an interrupted deletion can leave a disconnected catalog row for a later explicit retry. A stored deletion marker rejects late login starts already resolved to the removed object. Deletion cannot cancel inference requests that already obtained a provider token or revoke provider-side authorization.
 

@@ -1,0 +1,313 @@
+diff --git a/packages/workshop-backend/__tests__/subscription-binding-catalog.test.ts b/packages/workshop-backend/__tests__/subscription-binding-catalog.test.ts
+index 0d82d78..1b59bb2 100644
+--- a/packages/workshop-backend/__tests__/subscription-binding-catalog.test.ts
++++ b/packages/workshop-backend/__tests__/subscription-binding-catalog.test.ts
+@@ -52,3 +52,58 @@ describe('subscription physical models in stored gadget bindings', () => {
+     });
+   });
+ });
++
++describe('account catalog revocation in existing selections', () => {
++  it('revokes missing default and physical choices in quick models and persisted gadget bindings', async () => {
++    await setModes({});
++    const accountModels = [defaultModel, physical.id].map(id => ({ id,
++      name: Object.values(OPENAI_MODELS).find(model => model.id === id)!.name }));
++    let currentModels = accountModels;
++    const accountDeployment = { ...deployment, CODEX_BRIDGE: { ...deployment.CODEX_BRIDGE,
++      async subscriptionModels() { return { source: 'subscription-provider-catalog', connections: [{
++        ...connection, source: 'provider-account-catalog', entitlementVerified: true, models: currentModels,
++      }] }; },
++    } };
++    const before = inputs.length;
++    async function inUser(action: (user: import('../src/user').UserDurableObject) => Promise<void>) {
++      await runInDurableObject(env.TEST_USER.getByName(userId), async user => {
++        const original = user.env;
++        user.env = accountDeployment;
++        try {
++          await user.loginOrCreateViaGatekeeper(userId, true);
++          await action(user);
++        } finally {
++          user.env = original;
++        }
++      });
++    }
++    for (const selected of [defaultModel, selectedId]) {
++      currentModels = accountModels;
++      const models = new SubscriptionModels(accountDeployment, DEFAULT_ADMIN_CONFIG, userId,
++        await readSubscriptionConnections(accountDeployment));
++      const record = models.resolve(selected)!;
++      await inUser(async user => {
++        await user.setQuickModel(selected);
++        expect(await user.getQuickModel()).toBe(selected);
++      });
++      const startBinding = () => runInDurableObject(env.TEST_USER_DIRECTORY.getByName(`account-revocation-${selected}`), async (_host, state) => {
++        Object.defineProperty(state, 'props', { configurable: true, value: {
++          displayName: record.profile.name, config: record.config,
++          initiator: { type: 'gadget', id: userId, name: 'Synthetic workspace' },
++        } });
++        await new LanguageModelGatekeeper(state, accountDeployment).startSession(undefined!);
++      });
++      await expect(startBinding()).resolves.toBeUndefined();
++      currentModels = accountModels.filter(model => model.id !== record.config.model);
++      await inUser(async user => {
++        expect((await user.listModels()).map(model => model.id)).not.toContain(selected);
++        expect(await user.getQuickModel()).toBeNull();
++        expect((await user.getChatContext(null)).quickModel).toBeUndefined();
++        await expect(user.setQuickModel(selected)).rejects.toThrow('No such model');
++        await expect(user.getChatContext(selected)).rejects.toThrow('No such model');
++      });
++      await expect(startBinding()).rejects.toThrow('Unknown subscription connection');
++    }
++    expect(inputs).toHaveLength(before);
++  });
++});
+diff --git a/packages/workshop-backend/__tests__/subscription-models.test.ts b/packages/workshop-backend/__tests__/subscription-models.test.ts
+index 48a80be..b925218 100644
+--- a/packages/workshop-backend/__tests__/subscription-models.test.ts
++++ b/packages/workshop-backend/__tests__/subscription-models.test.ts
+@@ -973,3 +973,122 @@ describe("complete subscription model catalogs", () => {
+     await expect(readSubscriptionConnections(deployment)).rejects.toThrow();
+   });
+ });
++
++
++describe("account-specific subscription model catalogs", () => {
++  const physical = Object.values(OPENAI_MODELS).filter(model => model.id !== MODEL).slice(0, 2);
++  const codexPhysical = Object.values(OPENAI_CODEX_MODELS).find(model => model.id !== MODEL)!;
++  const physicalId = (modelId: string, accountId = "owner", provider = "siwc") =>
++    `subscription-model:${accountId}:${provider}:${modelId}`;
++  function accountCatalog() {
++    return { source: "subscription-provider-catalog", connections: CONNECTIONS.map(connection => ({
++      ...connection, source: connection.provider === "siwc" ? "provider-account-catalog" : "bundled-provider-catalog",
++      entitlementVerified: connection.provider === "siwc" && connection.ready,
++      models: connection.provider === "codex" ? [{ id: codexPhysical.id, name: codexPhysical.name }]
++        : connection.ready ? [physical[0], { id: MODEL, name: "Account default" }, physical[1],
++          { id: "synthetic-upstream-model-without-sdk-support", name: "Future model" }].map(({ id, name }) => ({ id, name })) : [],
++    })) };
++  }
++  function accountEnvironment() {
++    let current = accountCatalog();
++    let calls = 0;
++    return { replace: (catalog: ReturnType<typeof accountCatalog>) => { current = catalog; }, calls: () => calls,
++      deployment: { ...managed({}, CONNECTIONS), CODEX_BRIDGE: {
++        async subscriptionConnections() { return current.connections.map(({ id, label, provider, ready }) => ({ id, label, provider, ready })); },
++        async subscriptionModels() { ++calls; return current; },
++      } },
++    };
++  }
++  it("normalizes mixed per-account provenance and preserves supported SIWC account order without injecting disconnected defaults", async () => {
++    const { deployment } = accountEnvironment();
++    const rows = await readSubscriptionConnections(deployment);
++    expect(rows?.map(row => row.catalog && [row.catalog.source, row.catalog.entitlementVerified])).toEqual([
++      ["provider-account-catalog", true], ["bundled-provider-catalog", false], ["provider-account-catalog", false],
++    ]);
++    const models = new SubscriptionModels(deployment, DEFAULT_ADMIN_CONFIG, USER, rows);
++    const owner = models.catalog.filter(model => model.accountId === "owner");
++    expect(owner.map(model => model.modelId)).toEqual([physical[0].id, MODEL, physical[1].id]);
++    expect(owner.map(model => model.id)).toEqual([physicalId(physical[0].id), MODEL, physicalId(physical[1].id)]);
++    expect(owner.map(model => model.name)).toEqual([physical[0].name, "Account default", physical[1].name]);
++    expect(owner.filter(model => model.isDefault).map(model => model.id)).toEqual([MODEL]);
++    expect(models.list().filter(model => model.provider?.id === "subscription:owner").map(model => model.id))
++      .toEqual(owner.map(model => model.id));
++    expect(models.providerCatalog().providers.find(provider => provider.id === "subscription:owner")?.models.map(model => model.modelId))
++      .toEqual(owner.map(model => model.modelId));
++    expect(models.all.map(model => model.id)).toEqual([MODEL, A, B]);
++    expect(models.get(B)).toBeUndefined();
++    expect(models.resolve(B)).toBeUndefined();
++    expect(models.all.find(model => model.id === B)).not.toHaveProperty("isDefault");
++    expect(models.get(A)?.modelId).toBe(MODEL); // Codex retains its configured bundled default.
++    expect(models.list().some(model => model.name === "Future model")).toBe(false);
++  });
++  it("does not synthesize a missing account default and retains names, grouping and admin authority for listed models", async () => {
++    const fixture = accountEnvironment(), catalog = accountCatalog();
++    catalog.connections[0].models = [physical[0], physical[1]].map(({ id, name }) => ({ id, name }));
++    fixture.replace(catalog);
++    const rows = await readSubscriptionConnections(fixture.deployment), id = physicalId(physical[0].id);
++    const models = new SubscriptionModels(fixture.deployment, { ...DEFAULT_ADMIN_CONFIG,
++      modelDisplayNames: { [id]: "Selected account model" } }, USER, rows);
++    expect(models.get(MODEL)).toBeUndefined();
++    expect(models.resolve(MODEL)).toBeUndefined();
++    expect(models.resolveConfig({ ...CONFIG, subscriptionProvider: "siwc" })).toBeUndefined();
++    expect(models.resolveConfig(CONFIG)).toBeUndefined();
++    expect(models.all.find(model => model.id === MODEL)).not.toHaveProperty("isDefault");
++    expect(models.list().filter(model => model.provider?.id === "subscription:owner"))
++      .toEqual([expect.objectContaining({ id, name: "Selected account model" }), expect.objectContaining({ id: physicalId(physical[1].id) })]);
++    expect(models.resolve(id)?.profile).toMatchObject({ name: "Selected account model", providerDisplayName: OWNER.label });
++    expect(models.resolve(id)?.profile).not.toHaveProperty("isDefault");
++    const hidden = new SubscriptionModels(fixture.deployment, { ...DEFAULT_ADMIN_CONFIG, modelModes: { [MODEL]: "hidden" } }, USER, rows);
++    expect(hidden.list().some(model => model.id === id)).toBe(false);
++    expect(hidden.resolve(id)).toBeDefined();
++    const disabled = new SubscriptionModels(fixture.deployment, { ...DEFAULT_ADMIN_CONFIG,
++      modelModes: { [MODEL]: "disabled", [id]: "enabled" } }, USER, rows);
++    expect(disabled.resolve(id)).toBeUndefined();
++    expect(() => disabled.resolveConfig(models.resolve(id)!.config)).toThrow("disabled");
++  });
++  it("fetches fresh account and provider choices and rejects persisted choices after account models change", async () => {
++    const fixture = accountEnvironment();
++    const initial = new SubscriptionModels(fixture.deployment, DEFAULT_ADMIN_CONFIG, USER, await readSubscriptionConnections(fixture.deployment));
++    const persisted = initial.resolve(physicalId(physical[0].id))!;
++    const changed = accountCatalog();
++    changed.connections[0].models = [{ id: physical[1].id, name: physical[1].name }];
++    changed.connections[2] = { ...changed.connections[2], ready: true, entitlementVerified: true,
++      models: [{ id: physical[0].id, name: physical[0].name }] };
++    fixture.replace(changed);
++    const next = new SubscriptionModels(fixture.deployment, DEFAULT_ADMIN_CONFIG, USER, await readSubscriptionConnections(fixture.deployment));
++    expect(next.resolveConfig(persisted.config)).toBeUndefined();
++    expect(next.resolve(physicalId(physical[0].id))).toBeUndefined();
++    expect(next.resolve(physicalId(physical[0].id, ACCOUNT_B))).toBeDefined();
++    expect(next.resolveConfig({ ...persisted.config, subscriptionAccountId: ACCOUNT_B })).toBeDefined();
++    const switched = accountCatalog();
++    switched.connections[0] = { ...switched.connections[0], provider: "codex", source: "bundled-provider-catalog",
++      entitlementVerified: false, models: [{ id: codexPhysical.id, name: codexPhysical.name }] };
++    fixture.replace(switched);
++    const codex = new SubscriptionModels(fixture.deployment, DEFAULT_ADMIN_CONFIG, USER, await readSubscriptionConnections(fixture.deployment));
++    expect(codex.resolveConfig(initial.resolve(MODEL)!.config)).toBeUndefined();
++    expect(codex.resolve(physicalId(codexPhysical.id, "owner", "codex"))).toBeDefined();
++    expect(fixture.calls()).toBe(3);
++  });
++  it("propagates model discovery failures without falling back to bundled SIWC models", async () => {
++    const { deployment } = accountEnvironment();
++    deployment.CODEX_BRIDGE.subscriptionModels = async () => { throw Error("Synthetic account model discovery unavailable"); };
++    await expect(readSubscriptionConnections(deployment)).rejects.toThrow("Synthetic account model discovery unavailable");
++    await expect(getGatewayModels(deployment, USER)).rejects.toThrow("Synthetic account model discovery unavailable");
++  });
++  it("rejects unsafe fields and invalid per-provider verification claims", async () => {
++    const mutations = [
++      (value: ReturnType<typeof accountCatalog>) => Object.assign(value, { entitlementVerified: true }),
++      (value: ReturnType<typeof accountCatalog>) => Object.assign(value.connections[0], { token: "synthetic-rejected-metadata" }),
++      (value: ReturnType<typeof accountCatalog>) => Object.assign(value.connections[0].models[0], { visibility: "list" }),
++      (value: ReturnType<typeof accountCatalog>) => { value.connections[0].entitlementVerified = false; },
++      (value: ReturnType<typeof accountCatalog>) => { value.connections[0].source = "bundled-provider-catalog"; },
++      (value: ReturnType<typeof accountCatalog>) => { value.connections[1].entitlementVerified = true; },
++      (value: ReturnType<typeof accountCatalog>) => { value.connections[2].models = [{ id: physical[0].id, name: physical[0].name }]; },
++    ];
++    for (const mutate of mutations) {
++      const fixture = accountEnvironment(), value = accountCatalog();
++      mutate(value); fixture.replace(value);
++      await expect(readSubscriptionConnections(fixture.deployment)).rejects.toThrow();
++    }
++  });
++});
+diff --git a/packages/workshop-backend/src/subscription-models.ts b/packages/workshop-backend/src/subscription-models.ts
+index 49102d8..2cfb3bd 100644
+--- a/packages/workshop-backend/src/subscription-models.ts
++++ b/packages/workshop-backend/src/subscription-models.ts
+@@ -1,3 +1,4 @@
++import { OPENAI_MODELS } from "@earendil-works/pi-ai/providers/openai.models";
+ import { OPENAI_CODEX_MODELS } from "@earendil-works/pi-ai/providers/openai-codex.models";
+ import type {
+   AiChatAuthorInfo,
+@@ -9,6 +10,8 @@ import { z } from "zod";
+ import type { AdminConfig } from "./storage-schema/admin-settings-storage.js";
+ import type { UserAiModelRecord } from "./storage-schema/user-storage.js";
+ 
++const supportedSiwcModelIds = new Set<string>(Object.values(OPENAI_MODELS).map(model => model.id));
++
+ type SubscriptionEnvironment = {
+   CODEX_BRIDGE_MANAGEMENT?: string;
+   CODEX_BRIDGE_SETUP?: string;
+@@ -35,19 +38,33 @@ const subscriptionConnectionsSchema = z.array(z.object({
+   connections.some(connection => connection.id === "owner") &&
+   new Set(connections.map(connection => connection.id)).size === connections.length,
+ );
+-const subscriptionCatalogSchema = z.object({
++const subscriptionCatalogModelsSchema = z.array(z.object({
++  id: z.string().regex(/^[a-zA-Z0-9._-]{1,128}$/),
++  name: z.string().trim().min(1).max(256).refine(value => !/[\u0000-\u001f\u007f-\u009f]/.test(value)),
++}).strict()).max(2048).refine(models => new Set(models.map(model => model.id)).size === models.length);
++const legacySubscriptionCatalogSchema = z.object({
+   source: z.literal("bundled-provider-catalog"),
+   entitlementVerified: z.literal(false),
+-  connections: z.array(subscriptionConnectionsSchema.element.extend({
+-    models: z.array(z.object({
+-      id: z.string().regex(/^[a-zA-Z0-9._-]{1,128}$/),
+-      name: z.string().trim().min(1).max(256).refine(value => !/[\u0000-\u001f\u007f-\u009f]/.test(value)),
+-    }).strict()).max(2048).refine(models => new Set(models.map(model => model.id)).size === models.length),
+-  }).strict()).min(1).max(20),
++  connections: z.array(subscriptionConnectionsSchema.element.extend({ models: subscriptionCatalogModelsSchema }).strict()).min(1).max(20),
+ }).strict();
++const subscriptionCatalogSchema = z.union([
++  legacySubscriptionCatalogSchema,
++  z.object({
++    source: z.literal("subscription-provider-catalog"),
++    connections: z.array(subscriptionConnectionsSchema.element.extend({
++      source: z.enum(["provider-account-catalog", "bundled-provider-catalog"]),
++      entitlementVerified: z.boolean(),
++      models: subscriptionCatalogModelsSchema,
++    }).strict().refine(connection => connection.provider === "codex"
++      ? connection.source === "bundled-provider-catalog" && !connection.entitlementVerified
++      : connection.source === "provider-account-catalog" && connection.entitlementVerified === connection.ready &&
++        (connection.ready || connection.models.length === 0))).min(1).max(20),
++  }).strict(),
++]).transform(catalog => catalog.source === "bundled-provider-catalog"
++  ? catalog.connections.map(connection => ({ ...connection, source: catalog.source, entitlementVerified: catalog.entitlementVerified }))
++  : catalog.connections);
+ export type SubscriptionConnections = (z.infer<typeof subscriptionConnectionsSchema>[number] & {
+-  catalog?: { source: z.infer<typeof subscriptionCatalogSchema>["source"]; entitlementVerified: false;
+-    models: z.infer<typeof subscriptionCatalogSchema>["connections"][number]["models"] };
++  catalog?: Pick<z.infer<typeof subscriptionCatalogSchema>[number], "source" | "entitlementVerified" | "models">;
+ })[];
+ 
+ /** Parse the private binding's safe catalog without granting model access to its caller. */
+@@ -61,13 +78,13 @@ export async function readSubscriptionConnections(env: Cloudflare.Env & Subscrip
+   const connections = subscriptionConnectionsSchema.parse(connectionData);
+   if (typeof env.CODEX_BRIDGE.subscriptionModels !== "function") return connections;
+   const catalog = subscriptionCatalogSchema.parse(catalogData);
+-  if (catalog.connections.length !== connections.length || catalog.connections.some(row => {
++  if (catalog.length !== connections.length || catalog.some(row => {
+     const connection = connections.find(connection => connection.id === row.id);
+     return !connection || connection.label !== row.label || connection.provider !== row.provider || connection.ready !== row.ready;
+-  }) || new Set(catalog.connections.map(row => row.id)).size !== connections.length)
++  }) || new Set(catalog.map(row => row.id)).size !== connections.length)
+     throw new Error("inference_bridge_catalog_changed");
+-  return catalog.connections.map(({ models, ...connection }) => ({ ...connection, catalog: {
+-    source: catalog.source, entitlementVerified: catalog.entitlementVerified, models,
++  return catalog.map(({ source, entitlementVerified, models, ...connection }) => ({ ...connection, catalog: {
++    source, entitlementVerified, models,
+   } }));
+ }
+ 
+@@ -80,7 +97,7 @@ export class SubscriptionModels {
+   readonly all: readonly { id: string; name: string; providerDisplayName: string; provider: "openai"; mode: GatewayModelMode;
+     isDefault?: true; accountId: string; subscriptionProvider: SubscriptionConnections[number]["provider"] | null; ready: boolean | null }[];
+   readonly catalog: readonly (SubscriptionModels["all"][number] & {
+-    modelId: string; catalogSource?: "bundled-provider-catalog"; entitlementVerified?: false;
++    modelId: string; catalogSource?: NonNullable<SubscriptionConnections[number]["catalog"]>["source"]; entitlementVerified?: boolean;
+   })[];
+   readonly #selectable: boolean;
+   readonly #authorized: boolean;
+@@ -116,19 +133,29 @@ export class SubscriptionModels {
+     this.all = (connections ?? [{ id: "owner", label: "Codex subscription", provider: null, ready: null }]).map(connection => {
+       const id = connection.id === "owner" ? catalog.id : `subscription-${connection.id}`;
+       const mode = Object.hasOwn(config.modelModes, id) ? config.modelModes[id] : "enabled";
+-      const modelName = connections?.find(row => row.id === connection.id)?.catalog?.models.find(model => model.id === catalog.id)?.name ?? catalog.name;
++      const metadata = connections?.find(row => row.id === connection.id)?.catalog;
++      const modelName = metadata?.models.find(model => model.id === catalog.id)?.name ?? catalog.name;
++      const defaultAvailable = metadata?.source !== "provider-account-catalog" ||
++        metadata.models.some(model => model.id === catalog.id && supportedSiwcModelIds.has(model.id));
+       return { id, name: config.modelDisplayNames && Object.hasOwn(config.modelDisplayNames, id)
+           ? config.modelDisplayNames[id] : modelName,
+-        isDefault: true as const, providerDisplayName: connection.label, provider: "openai", mode, accountId: connection.id,
++        ...(defaultAvailable && { isDefault: true as const }), providerDisplayName: connection.label, provider: "openai", mode, accountId: connection.id,
+         subscriptionProvider: connection.provider, ready: connection.ready };
+     });
+     this.catalog = this.all.flatMap(connection => {
+       const metadata = connections?.find(row => row.id === connection.accountId)?.catalog;
+-      const choices: SubscriptionModels["catalog"][number][] = [{ ...connection, modelId: catalog.id,
+-        ...(metadata ? { catalogSource: metadata.source, entitlementVerified: metadata.entitlementVerified } : {}) }];
++      const accountCatalog = metadata?.source === "provider-account-catalog";
++      const defaultChoice = { ...connection, modelId: catalog.id,
++        ...(metadata ? { catalogSource: metadata.source, entitlementVerified: metadata.entitlementVerified } : {}) };
++      const choices: SubscriptionModels["catalog"][number][] = accountCatalog ? [] : [defaultChoice];
+       if (!metadata) return choices;
+       for (const physical of metadata.models) {
+-        if (physical.id === env.CODEX_BRIDGE_MODEL) continue;
++        // Account discovery grants no support for models absent from the pinned transport SDK.
++        if (accountCatalog && !supportedSiwcModelIds.has(physical.id)) continue;
++        if (physical.id === env.CODEX_BRIDGE_MODEL) {
++          if (accountCatalog) choices.push(defaultChoice);
++          continue;
++        }
+         const id = `subscription-model:${connection.accountId}:${connection.subscriptionProvider}:${physical.id}`;
+         const mode = connection.mode === "disabled" ? "disabled" : Object.hasOwn(config.modelModes, id)
+           ? config.modelModes[id] : connection.mode;
