@@ -79,7 +79,7 @@ const defaultHandler = {
     if (path === '/webhooks/notion') return notionWebhook(request, env);
     if (path === '/authorize') return ownerConsent(request, env, {
       scope: SCOPE, productName: 'Personal Notion Events',
-      description: 'This permits comment-created event subscriptions for the configured Notion pages, integration status, source and comment archive reads, and retries of failed capture or delivery.',
+      description: 'This permits created/updated comment metadata notifications, source and comment archive reads, diagnostic write receipts, status and failed-delivery retries for configured pages. Authorship remains unknown. Automatic comment responses are not supported.',
       metadata: {}
     });
     return new Response('Personal Notion Events. Connect /mcp with OAuth.', { status: path === '/' ? 200 : 404 });
@@ -91,7 +91,7 @@ export default {
     const configured = Boolean(configuration(env));
     if (publicOrigin(env) && new URL(request.url).origin !== publicOrigin(env)) return new Response('Unexpected origin', { status: 421 });
     if (new URL(request.url).pathname === '/health' && request.method === 'GET') {
-      return Response.json({ ok: configured, provider: 'notion', protocolVersion: '2026-07-28', configured }, { status: configured ? 200 : 503 });
+      return Response.json({ ok: configured, provider: 'notion', protocolVersion: '2026-07-28', configured, notification_only: true, automatic_response_allowed: false }, { status: configured ? 200 : 503 });
     }
     if (!configured) return new Response('Service configuration is incomplete', { status: 503 });
     return new OAuthProvider(oauthOptions(env, { apiHandler: mcpHandler, defaultHandler })).fetch(request, env, context);

@@ -1,4 +1,5 @@
 // Source contracts: https://developers.notion.com/reference/webhooks/comment-created
+// https://developers.notion.com/reference/webhooks/comment-updated
 // https://developers.notion.com/reference/retrieve-comment
 // https://developers.notion.com/reference/comment-object
 const MAX_COMMENT_BYTES = 8 * 1024 * 1024;
@@ -31,7 +32,7 @@ export function sourceConfig(env) {
 
 export function normalizeSource(payload, config) {
   if (!record(payload)) throw error('invalid_source');
-  if (payload.type !== 'comment.created') return { skip: 'event_type' };
+  if (!['comment.created', 'comment.updated'].includes(payload.type)) return { skip: 'event_type' };
   const id = uuid(payload.id), workspaceId = uuid(payload.workspace_id), integrationId = uuid(payload.integration_id), subscriptionId = uuid(payload.subscription_id);
   const pageId = uuid(payload.data?.page_id), commentId = uuid(payload.entity?.id), parentId = uuid(payload.data?.parent?.id);
   const parentType = payload.data?.parent?.type;
@@ -46,10 +47,14 @@ export function normalizeSource(payload, config) {
   if (subscriptionId !== config.subscriptionId) return { skip: 'subscription_mismatch' };
   if (!config.pageIds.includes(pageId)) return { skip: 'out_of_scope' };
   const authors = payload.authors.map(author => ({ id: uuid(author.id), type: author.type }));
-  if (authors.some(author => author.id === config.botUserId)) return { skip: 'self_authored' };
-  if (authors.some(author => config.ignoredAuthorIds?.includes(author.id))) return { skip: 'ignored_author' };
+  // IDs alone cannot distinguish a person's instruction from an automation write.
+  // Updates are retained because the signed authors describe the edit, not creation.
+  if (payload.type === 'comment.created' && authors.every(author => author.type !== 'person' &&
+      (author.id === config.botUserId || config.ignoredAuthorIds?.includes(author.id)))) {
+    return { skip: authors.every(author => author.id === config.botUserId) ? 'self_authored' : 'ignored_author' };
+  }
   return {
-    id, timestamp: payload.timestamp, pageId, commentId,
+    id, type: payload.type, timestamp: payload.timestamp, pageId, commentId,
     parent: { id: parentId, ...(parentType === undefined ? {} : { type: parentType }) },
     authors, workspaceId, integrationId, subscriptionId,
     ...(hasDiscussion ? { discussionId } : {})
@@ -145,7 +150,7 @@ export async function hydrateComment(source, env, fetcher = fetch) {
   if (uuid(comment.id) !== commentId || fetchedParentId !== parentId || (type === 'page_id' && fetchedParentId !== pageId) ||
       (source.parent.type !== undefined && `${source.parent.type}_id` !== type) ||
       (source.discussionId !== undefined && uuid(comment.discussion_id) !== uuid(source.discussionId))) throw error('source_mismatch');
-  if (uuid(comment.created_by.id) === config.botUserId) return { skip: 'self_authored' };
-  if (config.ignoredAuthorIds?.includes(uuid(comment.created_by.id))) return { skip: 'ignored_author' };
+  // created_by is the original PartialUser creator, not the editor. Hydration also
+  // accepts legacy sources without type; both event types use the same GET.
   return { comment, text: comment.rich_text.map(part => part.plain_text).join(''), observedAt: new Date().toISOString() };
 }

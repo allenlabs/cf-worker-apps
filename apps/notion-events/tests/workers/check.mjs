@@ -26,6 +26,7 @@ const bot = '44444444-4444-4444-8444-444444444444';
 const page = '55555555-5555-4555-8555-555555555555';
 const person = '66666666-6666-4666-8666-666666666666';
 const discussion = '77777777-7777-4777-8777-777777777777';
+const revision = '2026-10-25T12:00:01.000Z';
 const uuid = number => `00000000-0000-4000-8000-${String(number).padStart(12, '0')}`;
 const callback = 'https://chatgpt.com/mcp-events/notion-check';
 const signingSecret = `whsec_${randomBytes(32).toString('base64')}`;
@@ -37,6 +38,28 @@ const source = (number, changes = {}) => ({
   data: { page_id: page, parent: { id: page, type: 'page' } }, ...changes,
 });
 const comments = new Map();
+const comment = (id, text = 'Synthetic comment 한글🙂', changes = {}) => ({
+  id, object: 'comment', parent: { type: 'page_id', page_id: page }, discussion_id: discussion,
+  created_by: { object: 'user', id: person, type: 'person' }, created_time: '2026-10-25T12:00:00.000Z', last_edited_time: revision,
+  rich_text: [{ type: 'text', plain_text: text, href: null, text: { content: text, link: null },
+    annotations: { bold: false, italic: false, strikethrough: false, underline: false, code: false, color: 'default' } }],
+  ...changes,
+});
+function metadataNotice(body) {
+  const data = body.data;
+  const allowed = ['workspace_id', 'page_id', 'comment_id', 'archive_id', 'capture_observed_at', 'observed_revision', 'source_type',
+    'notification_contract', 'notification_only', 'automatic_response_allowed', 'attribution', 'text_in_archive', 'url'];
+  for (const key of Object.keys(data)) assert.ok(allowed.includes(key), `Metadata contract rejects unexpected payload field ${key}`);
+  assert.equal(data.notification_contract, 'metadata-only-v1');
+  assert.equal(data.notification_only, true);
+  assert.equal(data.automatic_response_allowed, false);
+  assert.equal(data.attribution, 'unknown');
+  assert.equal(data.text_in_archive, true);
+  assert.ok(['comment.created', 'comment.updated'].includes(data.source_type));
+  assert.equal(body.name, data.source_type === 'comment.created' ? 'notion.comment.created' : 'notion.comment.updated');
+  assert.ok(typeof data.observed_revision === 'string' || data.observed_revision === null);
+  for (const key of ['text', 'authors', 'parent', 'discussion_id', 'rich_text', 'content', 'comment']) assert.equal(data[key], undefined, `Metadata callback excludes ${key}`);
+}
 const notionFailures = new Map();
 const notionCalls = [];
 const deliveries = [];
@@ -87,6 +110,18 @@ export class NotionEvents extends BaseEvents {
         'ledger_'+String(n).padStart(4,'0'),'fixture-ledger',eventId,'{}','dead','callback_http_410');
       return Response.json({ok:true});
     }
+    if(path==='/test/legacy-queued') {
+      const {id,body}=await request.json();
+      this.testContext.storage.sql.exec("UPDATE deliveries SET state='pending',attempts=0,nextAttempt=0,error=NULL,status=NULL,body=? WHERE id=?",body,id);
+      return Response.json({ok:true});
+    }
+    if(path==='/test/legacy-source') {
+      const {eventId}=await request.json();
+      const row=this.testContext.storage.sql.exec('SELECT source FROM inbox WHERE id=?',eventId).toArray()[0];
+      const source=JSON.parse(row.source); delete source.type;
+      this.testContext.storage.sql.exec('UPDATE inbox SET source=? WHERE id=?',JSON.stringify(source),eventId);
+      return Response.json({ok:true});
+    }
     if(path==='/test/state') return Response.json({
       inbox:this.testContext.storage.sql.exec('SELECT * FROM inbox ORDER BY rowid').toArray(),
       deliveries:this.testContext.storage.sql.exec('SELECT * FROM deliveries ORDER BY rowid').toArray(),
@@ -113,7 +148,7 @@ export class NotionEvents extends BaseEvents {
     bindings: { PUBLIC_ORIGIN: origin, EVENTS_OBJECT_NAME: 'personal-notion-events', OAUTH_OWNER_ID: 'sample-personal-owner',
       OWNER_LOGIN_KEY: ownerKey, NOTION_VERIFICATION_TOKEN: verificationToken, NOTION_API_TOKEN: apiToken,
       NOTION_WORKSPACE_ID: workspace, NOTION_INTEGRATION_ID: integration, NOTION_SUBSCRIPTION_ID: subscription,
-      NOTION_BOT_USER_ID: bot, NOTION_PAGE_IDS: JSON.stringify([page]) },
+      NOTION_BOT_USER_ID: person, NOTION_IGNORED_AUTHOR_IDS: JSON.stringify([person]), NOTION_PAGE_IDS: JSON.stringify([page]) },
     outboundService: async request => {
       const url = new URL(request.url);
       if (url.origin === 'https://cloudflare-dns.com') {
@@ -131,9 +166,7 @@ export class NotionEvents extends BaseEvents {
         notionCalls.push(id);
         const failure = notionFailures.get(id);
         if (failure?.remaining > 0) { failure.remaining--; return new Response('', { status: failure.status, headers: { 'retry-after': '1' } }); }
-        return Response.json(comments.get(id) ?? { id, object: 'comment', parent: { type: 'page_id', page_id: page },
-          discussion_id: discussion, created_by: { id: person },
-          rich_text: [{ type: 'text', plain_text: 'Synthetic comment 한글🙂', text: { content: 'Synthetic comment 한글🙂' } }] });
+        return Response.json(comments.get(id) ?? comment(id));
       }
       assert.equal(request.url, callback, 'All external traffic is intercepted at fixed synthetic destinations');
       const bytes = await request.text();
@@ -147,6 +180,7 @@ export class NotionEvents extends BaseEvents {
         if (verificationStarted) { const started = verificationStarted; verificationStarted = undefined; started(); await new Promise(resolve => { releaseVerification = resolve; }); }
         return Response.json({ challenge: rejectVerification ? 'wrong-challenge' : body.challenge });
       }
+      metadataNotice(body);
       deliveries.push({ body, bytes, id, timestamp });
       if (deliveryStarted) { const started = deliveryStarted; deliveryStarted = undefined; started(); await new Promise(resolve => { releaseDelivery = resolve; }); }
       return new Response('', { status: callbackFailures-- > 0 ? 503 : callbackStatus });
@@ -292,7 +326,7 @@ export class NotionEvents extends BaseEvents {
   }
   const discover = await rpc(token, 'server/discover');
   assert.ok(discover.data.result.capabilities.events);
-  assert.equal((await rpc(token, 'events/list')).data.result.events[0].name, 'notion.comment.created');
+  assert.deepEqual((await rpc(token, 'events/list')).data.result.events.map(event => event.name).sort(), ['notion.comment.created', 'notion.comment.updated']);
   const tool = async (name, args = {}) => {
     const result = await rpc(token, 'tools/call', { name, arguments: args });
     assert.equal(result.status, 200);
@@ -323,7 +357,11 @@ export class NotionEvents extends BaseEvents {
   assert.equal((await capture(event)).raw, raw, 'Archive preserves exact signed UTF-8 source');
   await waitFor(() => deliveries.length === 1, 'Verified comment is delivered');
   assert.equal(deliveries[0].body.eventId, deliveries[0].id);
-  assert.ok(deliveries[0].bytes.includes('Synthetic comment 한글🙂'));
+  assert.equal(deliveries[0].body.data.notification_only, true);
+  assert.equal(deliveries[0].body.data.automatic_response_allowed, false);
+  assert.equal(deliveries[0].body.data.attribution, 'unknown');
+  assert.equal(deliveries[0].body.data.text, undefined, 'All callbacks carry metadata only; full text stays in archives');
+  assert.ok(!deliveries[0].bytes.includes('Synthetic comment 한글🙂'));
   assert.equal(notionCalls.filter(id => id === event.entity.id).length, 1);
   await ingress(raw);
   await internal('/test/alarm');
@@ -344,7 +382,7 @@ export class NotionEvents extends BaseEvents {
   const excluded = [
     source(2, { workspace_id: uuid(900) }), source(3, { integration_id: uuid(901) }), source(4, { subscription_id: uuid(902) }),
     source(5, { data: { page_id: uuid(903), parent: { id: uuid(903), type: 'page' } } }),
-    source(6, { authors: [{ id: bot, type: 'bot' }] }), source(7, { type: 'page.created' }),
+    source(6, { authors: [{ id: person, type: 'bot' }] }), source(7, { type: 'page.created' }),
   ];
   for (const value of excluded) assert.ok([200, 202].includes((await ingress(value)).status));
   await internal('/test/alarm');
@@ -439,8 +477,7 @@ export class NotionEvents extends BaseEvents {
 
   const huge = source(20, { extra: '한글🙂'.repeat(20000) });
   const hugeText = 'Original 한글🙂\n'.repeat(40000);
-  comments.set(huge.entity.id, { id: huge.entity.id, object: 'comment', parent: { type: 'page_id', page_id: page }, discussion_id: discussion,
-    created_by: { id: person }, rich_text: [{ type: 'text', plain_text: hugeText, text: { content: hugeText } }] });
+  comments.set(huge.entity.id, comment(huge.entity.id, hugeText));
   const hugeRaw = JSON.stringify(huge, null, 2), beforeHuge = deliveries.length;
   await ingress(hugeRaw);
   await waitFor(() => deliveries.length === beforeHuge + 1, 'Large comment delivers bounded notification');
@@ -558,6 +595,138 @@ export class NotionEvents extends BaseEvents {
   await internal('/test/due');
   assert.equal(deliveries.length, stoppedCount + 1, 'Revocation permits only the callback already in flight');
   console.log('PASS rejected challenge, idempotent unsubscribe, challenge cancellation and queued grant revocation');
+
+  const policyAuth = await authenticate();
+  const policyToken = policyAuth.access_token;
+  const policyTool = async (name, args = {}) => {
+    const result = await rpc(policyToken, 'tools/call', { name, arguments: args });
+    assert.equal(result.status, 200);
+    assert.equal(result.data.error, undefined, JSON.stringify(result.data));
+    assert.notEqual(result.data.result.isError, true, JSON.stringify(result.data));
+    return result.data.result.structuredContent;
+  };
+  assert.ok((await rpc(policyToken, 'events/subscribe', params)).data.result.id);
+  const posted = source(100);
+  const postedText = 'Synthetic owner-reported posted comment';
+  const acknowledgement = comment(posted.entity.id, postedText);
+  comments.set(posted.entity.id, acknowledgement);
+  const beforePosted = deliveries.length;
+  await ingress(posted);
+  await waitFor(() => deliveries.length === beforePosted + 1, 'A person remains observable when bot and ignored IDs collide with that same person');
+  const postedCapture = await capture(posted);
+  const postedNotice = deliveries.at(-1);
+  assert.equal(postedNotice.body.data.observed_revision, revision);
+  assert.ok(!postedNotice.bytes.includes(postedText));
+  const beforeReceipt = await policyTool('inspect_event_provenance', { event_id: postedCapture.id });
+  assert.equal(beforeReceipt.attribution, 'unknown');
+  assert.equal(beforeReceipt.automatic_response_allowed, false);
+  assert.equal(beforeReceipt.exact_snapshot_receipt_match, false);
+  const partialReceipt = await rpc(policyToken, 'tools/call', { name: 'record_posted_comment',
+    arguments: { page_id: page, comment: { object: 'comment', id: posted.entity.id } } });
+  assert.ok(partialReceipt.data.error || partialReceipt.data.result?.isError, 'A sparse write acknowledgment cannot invent the missing original snapshot');
+  await policyTool('record_posted_comment', { page_id: page, comment: acknowledgement });
+  const exactReceipt = await policyTool('inspect_event_provenance', { event_id: postedCapture.id });
+  assert.equal(exactReceipt.attribution, 'unknown');
+  assert.equal(exactReceipt.notification_only, true);
+  assert.equal(exactReceipt.automatic_response_allowed, false);
+  assert.equal(exactReceipt.exact_snapshot_receipt_match, true);
+  assert.equal(exactReceipt.receipt_evidence, 'owner_reported_exact_snapshot');
+  assert.equal(exactReceipt.activation_blocker, 'writer_prewrite_receipt_barrier_unverified');
+  await internal('/test/due');
+  assert.equal(deliveries.length, beforePosted + 1, 'Post-hoc receipt registration never replays or changes a notification');
+  assert.equal((await state()).deliveries.find(item => item.eventId === postedCapture.id).body, postedNotice.bytes);
+  const matchedCreate = source(108, { entity: { type: 'comment', id: posted.entity.id } });
+  const beforeMatchedCreate = deliveries.length;
+  await ingress(matchedCreate);
+  await waitFor(() => deliveries.length === beforeMatchedCreate + 1, 'A later created event with an exact receipt still remains notification-only');
+  const matchedCreateProvenance = await policyTool('inspect_event_provenance', { event_id: (await capture(matchedCreate)).id });
+  assert.equal(matchedCreateProvenance.exact_snapshot_receipt_match, true);
+  assert.equal(matchedCreateProvenance.attribution, 'unknown');
+  assert.equal(matchedCreateProvenance.automatic_response_allowed, false);
+  console.log('PASS same-human author collision and diagnostic-only exact posted-comment receipt');
+
+  const sameText = source(101);
+  comments.set(sameText.entity.id, comment(sameText.entity.id, postedText));
+  const beforeSameText = deliveries.length;
+  await ingress(sameText);
+  await waitFor(() => deliveries.length === beforeSameText + 1, 'Same-author same-content comments with a different ID remain visible');
+  assert.equal((await policyTool('inspect_event_provenance', { event_id: (await capture(sameText)).id })).exact_snapshot_receipt_match, false);
+  const unmatchedUpdate = source(102, { type: 'comment.updated', entity: { type: 'comment', id: posted.entity.id } });
+  const beforeUnmatchedUpdate = deliveries.length;
+  await ingress(unmatchedUpdate);
+  await internal('/test/due');
+  assert.equal((await capture(unmatchedUpdate)).state, 'ready', 'Comment updates are captured even with the same original creator');
+  assert.equal(deliveries.length, beforeUnmatchedUpdate, 'A created subscription never receives an updated event');
+  const updateParams = { ...params, name: 'notion.comment.updated' };
+  const updateSubscription = await rpc(policyToken, 'events/subscribe', updateParams);
+  assert.ok(updateSubscription.data.result.id);
+  assert.notEqual(updateSubscription.data.result.id, (await rpc(policyToken, 'events/subscribe', params)).data.result.id);
+  const editedRevision = '2026-10-25T12:01:00.000Z';
+  const formatted = comment(posted.entity.id, postedText, { last_edited_time: editedRevision });
+  formatted.rich_text[0].annotations.bold = true;
+  const edited = comment(posted.entity.id, 'Synthetic human edited this comment', { last_edited_time: '2026-10-25T12:02:00.000Z' });
+  const restored = comment(posted.entity.id, postedText, { last_edited_time: '2026-10-25T12:03:00.000Z' });
+  const snapshots = [formatted, edited, restored];
+  let lastUpdate;
+  for (const [index, snapshot] of snapshots.entries()) {
+    comments.set(posted.entity.id, snapshot);
+    const updated = source(103 + index, { type: 'comment.updated', timestamp: snapshot.last_edited_time,
+      entity: { type: 'comment', id: posted.entity.id } });
+    const beforeUpdate = deliveries.length;
+    await ingress(updated);
+    await waitFor(() => deliveries.length === beforeUpdate + 1, 'Every edit, restore and exact receipt match still emits an unknown-attribution update notice');
+    assert.equal(deliveries.at(-1).body.name, 'notion.comment.updated');
+    assert.equal(deliveries.at(-1).body.data.comment_id, posted.entity.id);
+    assert.equal(deliveries.at(-1).body.data.observed_revision, snapshot.last_edited_time);
+    const provenance = await policyTool('inspect_event_provenance', { event_id: (await capture(updated)).id });
+    assert.equal(provenance.exact_snapshot_receipt_match, false, 'ID, rich-text formatting and observed revision all bind the reported snapshot');
+    assert.equal(provenance.attribution, 'unknown');
+    assert.equal(provenance.automatic_response_allowed, false);
+    assert.equal(provenance.activation_blocker, 'writer_prewrite_receipt_barrier_unverified');
+    lastUpdate = updated;
+  }
+  await policyTool('record_posted_comment', { page_id: page, comment: restored });
+  lastUpdate = source(107, { type: 'comment.updated', timestamp: restored.last_edited_time,
+    entity: { type: 'comment', id: posted.entity.id } });
+  const beforeExactUpdate = deliveries.length;
+  await ingress(lastUpdate);
+  await waitFor(() => deliveries.length === beforeExactUpdate + 1, 'An exact reported receipt still never suppresses an updated notification');
+  const exactUpdated = await policyTool('inspect_event_provenance', { event_id: (await capture(lastUpdate)).id });
+  assert.equal(exactUpdated.exact_snapshot_receipt_match, true);
+  assert.equal(exactUpdated.attribution, 'unknown');
+  assert.equal(exactUpdated.automatic_response_allowed, false);
+  const beforeDuplicateCalls = notionCalls.length, beforeDuplicateNotices = deliveries.length;
+  await ingress({ ...lastUpdate, attempt_number: 2 });
+  await internal('/test/due');
+  assert.equal(notionCalls.length, beforeDuplicateCalls);
+  assert.equal(deliveries.length, beforeDuplicateNotices);
+  console.log('PASS created/updated subscription separation, human edits and restores, and non-suppressing receipt diagnostics');
+
+  await internal('/test/legacy-source', { eventId: postedCapture.id });
+  const beforeLegacyDuplicateCalls = notionCalls.length, beforeLegacyDuplicateNotices = deliveries.length;
+  assert.equal((await ingress({ ...posted, attempt_number: 2 })).status, 202, 'A created event saved before source.type existed remains an accepted duplicate');
+  await internal('/test/due');
+  assert.equal(notionCalls.length, beforeLegacyDuplicateCalls);
+  assert.equal(deliveries.length, beforeLegacyDuplicateNotices);
+  assert.equal((await capture(posted)).raw, JSON.stringify(posted));
+  console.log('PASS legacy source format accepts provider retries without rewriting original archive or replaying notifications');
+
+  const legacyRow = (await state()).deliveries.find(item => item.eventId === postedCapture.id);
+  const legacyBody = JSON.stringify({ eventId: postedCapture.id, name: 'notion.comment.created', timestamp: posted.timestamp,
+    data: { page_id: page, comment_id: posted.entity.id, archive_id: postedCapture.id, text: 'Synthetic legacy queued full-text payload', text_in_archive: false }, cursor: null });
+  const beforeLegacy = deliveries.length;
+  await internal('/test/legacy-queued', { id: legacyRow.id, body: legacyBody });
+  await internal('/test/due');
+  const retainedLegacy = (await state()).deliveries.find(item => item.id === legacyRow.id);
+  assert.equal(retainedLegacy.state, 'dead');
+  assert.equal(retainedLegacy.error, 'legacy_payload_requires_review');
+  assert.equal(retainedLegacy.body, legacyBody, 'Legacy payload evidence remains retained for explicit review');
+  assert.equal(deliveries.length, beforeLegacy, 'Legacy queued text can never be sent under the metadata-only contract');
+  const legacyRetry = await rpc(policyToken, 'tools/call', { name: 'retry_failed', arguments: { kind: 'delivery', id: legacyRow.id } });
+  assert.ok(legacyRetry.data.error || legacyRetry.data.result?.isError, 'Generic retry cannot bypass legacy-payload review');
+  await internal('/test/due');
+  assert.equal(deliveries.length, beforeLegacy);
+  console.log('PASS unsafe legacy queue payload is retained as review-required failure without automatic or generic retry');
 
   if (coverageRequested && !coverageUnavailable) {
     const profile = await sendInspector('Profiler.takePreciseCoverage');

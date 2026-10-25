@@ -9,7 +9,7 @@ Inventory snapshot verified against all remote heads and GitHub branches on 2026
 | Common owner context, selected/all bot recall and main bot | `8724334`, isolation and full-build corrections `34209e4`, [shared memory](SHARED_BOT_MEMORY.md) | Pending | Included |
 | Account-scoped SIWC model selection and Fast mode | `d2c0e5a`, `d2d2414` | Included | Preserved |
 | SIWC-only inference, native OpenCode loop, scoped resources, approved plugins and named subscriptions | `be656f6`, `1c8fbcc`, `b62c69c`, `a0ddafa`, `5dc0f44` | Included | Preserved |
-| Independent personal Notion MCP Events Worker | `23146ec`, [design](../../../docs/superpowers/specs/2026-10-25-personal-notion-events.md) | In implementation | Included |
+| Independent personal Notion MCP Events Worker | `23146ec`, [design](../../../docs/superpowers/specs/2026-10-25-personal-notion-events.md), [shared-author correction](../../notion-events/PROVENANCE.md) | In implementation | Notification-only source included; automatic responder activation blocked |
 
 Cursor and Devin integrations remain feasibility notes in [agent backends](AGENT_BACKENDS.md), not implemented functionality. Browser teaching and scheduled routines are explicitly outside the bot-workspace scope; their absence is not evidence of an unfinished request.
 

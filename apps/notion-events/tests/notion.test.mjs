@@ -11,7 +11,7 @@ const id = digit => `${digit.repeat(8)}-${digit.repeat(4)}-4${digit.repeat(3)}-8
 const ids = { workspace: id('1'), integration: id('2'), subscription: id('3'), page: id('4'), block: id('5'), comment: id('6'), author: id('7'), bot: id('8'), event: id('9'), discussion: id('a'), other: id('b') };
 const env = () => ({ NOTION_WORKSPACE_ID: ids.workspace, NOTION_INTEGRATION_ID: ids.integration, NOTION_SUBSCRIPTION_ID: ids.subscription, NOTION_PAGE_IDS: JSON.stringify([ids.page]), NOTION_BOT_USER_ID: ids.bot, NOTION_API_TOKEN: 'synthetic-unit-test-token' });
 const event = () => ({ id: ids.event, timestamp: '2026-10-25T12:00:00.000Z', workspace_id: ids.workspace, integration_id: ids.integration, subscription_id: ids.subscription, type: 'comment.created', entity: { type: 'comment', id: ids.comment }, authors: [{ id: ids.author, type: 'person' }], data: { page_id: ids.page, parent: { id: ids.page, type: 'page' } } });
-const source = changes => ({ id: ids.event, timestamp: '2026-10-25T12:00:00.000Z', pageId: ids.page, commentId: ids.comment, parent: { id: ids.page, type: 'page' }, authors: [{ id: ids.author, type: 'person' }], workspaceId: ids.workspace, integrationId: ids.integration, subscriptionId: ids.subscription, ...changes });
+const source = changes => ({ id: ids.event, type: 'comment.created', timestamp: '2026-10-25T12:00:00.000Z', pageId: ids.page, commentId: ids.comment, parent: { id: ids.page, type: 'page' }, authors: [{ id: ids.author, type: 'person' }], workspaceId: ids.workspace, integrationId: ids.integration, subscriptionId: ids.subscription, ...changes });
 const comment = changes => ({ object: 'comment', id: ids.comment, parent: { type: 'page_id', page_id: ids.page }, discussion_id: ids.discussion, created_by: { object: 'user', id: ids.author }, created_time: '2026-10-25T12:00:00.000Z', last_edited_time: '2026-10-25T12:01:00.000Z', rich_text: [{ type: 'text', plain_text: 'Hello', text: { content: 'Hello' } }], ...changes });
 const response = body => Response.json(body);
 const rejects = (operation, code, retryable) => assert.rejects(operation, error => error.code === code && error.retryable === retryable);
@@ -60,9 +60,9 @@ test('only signed page_id determines scope for block comments', () => {
   assert.deepEqual(normalize(payload, config), { skip: 'out_of_scope' });
 });
 
-test('unrelated events, mismatched source identities and self authors are skipped', () => {
+test('unrelated events, mismatched source identities and known bot-only creates are skipped', () => {
   const normalize = use('normalizeSource'), config = use('sourceConfig')(env());
-  for (const type of ['comment.updated', 'comment.deleted', 'page.created']) assert.deepEqual(normalize({ ...event(), type }, config), { skip: 'event_type' });
+  for (const type of ['comment.deleted', 'page.created']) assert.deepEqual(normalize({ ...event(), type }, config), { skip: 'event_type' });
   for (const [field, reason] of [['workspace_id', 'workspace_mismatch'], ['integration_id', 'integration_mismatch'], ['subscription_id', 'subscription_mismatch']]) {
     assert.deepEqual(normalize({ ...event(), [field]: ids.other }, config), { skip: reason });
   }
@@ -78,9 +78,80 @@ test('configured automation authors are excluded across integrations without exc
   for (const invalid of ['null', '{}', 'not-json', '["invalid"]']) assert.throws(() => use('sourceConfig')({ ...env(), NOTION_IGNORED_AUTHOR_IDS: invalid }));
 });
 
-test('retrieved creator also honors configured cross-integration loop exclusions', async () => {
+test('regression: retrieved original creator ID never suppresses an event', async () => {
   const configured = { ...env(), NOTION_IGNORED_AUTHOR_IDS: JSON.stringify([ids.other]) };
-  assert.deepEqual(await use('hydrateComment')(source(), configured, async () => response(comment({ created_by: { id: ids.other } }))), { skip: 'ignored_author' });
+  const value = comment({ created_by: { id: ids.other } });
+  assert.deepEqual((await use('hydrateComment')(source(), configured, async () => response(value))).comment, value);
+});
+
+test('regression: person instructions survive matching bot and ignored IDs through normalization and GET', async () => {
+  const configured = { ...env(), NOTION_BOT_USER_ID: ids.author, NOTION_IGNORED_AUTHOR_IDS: JSON.stringify([ids.author, ids.other]) };
+  const config = use('sourceConfig')(configured);
+  const normalize = use('normalizeSource');
+  for (const type of ['comment.created', 'comment.updated']) {
+    const normalized = normalize({ ...event(), type }, config);
+    assert.deepEqual(normalized, source({ type }));
+    let calls = 0;
+    const hydrated = await use('hydrateComment')(normalized, configured, async (url, init) => {
+      calls++;
+      assert.equal(url, `https://api.notion.com/v1/comments/${ids.comment}`);
+      assert.equal(init.method, 'GET');
+      return response(comment());
+    });
+    assert.equal(calls, 1);
+    assert.deepEqual(hydrated.comment, comment());
+    assert.equal(hydrated.text, 'Hello');
+  }
+});
+
+test('mixed person and known automation authors preserve creates regardless of their IDs', () => {
+  const config = use('sourceConfig')({ ...env(), NOTION_IGNORED_AUTHOR_IDS: JSON.stringify([ids.other]) });
+  for (const authors of [
+    [{ id: ids.bot, type: 'bot' }, { id: ids.other, type: 'person' }],
+    [{ id: ids.bot, type: 'person' }, { id: ids.other, type: 'agent' }],
+    [{ id: ids.other, type: 'agent' }, { id: ids.author, type: 'person' }]
+  ]) assert.deepEqual(use('normalizeSource')({ ...event(), authors }, config), source({ authors }));
+});
+
+test('only creates whose every actor is a known bot or agent are filtered', () => {
+  const config = use('sourceConfig')({ ...env(), NOTION_IGNORED_AUTHOR_IDS: JSON.stringify([ids.other]) });
+  const normalize = use('normalizeSource');
+  const known = [{ id: ids.bot, type: 'bot' }, { id: ids.other, type: 'agent' }];
+  assert.deepEqual(normalize({ ...event(), authors: known }, config), { skip: 'ignored_author' });
+  for (const authors of [
+    [{ id: ids.bot, type: 'bot' }, { id: ids.author, type: 'agent' }],
+    [{ id: ids.other, type: 'agent' }, { id: ids.author, type: 'bot' }]
+  ]) assert.deepEqual(normalize({ ...event(), authors }, config), source({ authors }));
+  for (const authors of [known, [{ id: ids.bot, type: 'bot' }], [{ id: ids.other, type: 'agent' }]]) {
+    assert.deepEqual(normalize({ ...event(), type: 'comment.updated', authors }, config), source({ type: 'comment.updated', authors }));
+  }
+});
+
+test('updated comments retain their signed event type when source IDs are identical', () => {
+  const normalize = use('normalizeSource'), config = use('sourceConfig')(env());
+  const created = normalize(event(), config);
+  const updated = normalize({ ...event(), type: 'comment.updated' }, config);
+  assert.equal(created.id, updated.id);
+  assert.equal(created.type, 'comment.created');
+  assert.equal(updated.type, 'comment.updated');
+  assert.notDeepEqual(created, updated);
+});
+
+test('human edits of bot-created comments survive hydration with the original creator intact', async () => {
+  const configured = { ...env(), NOTION_IGNORED_AUTHOR_IDS: JSON.stringify([ids.bot, ids.other]) };
+  const normalized = use('normalizeSource')({ ...event(), type: 'comment.updated' }, use('sourceConfig')(configured));
+  const value = comment({ created_by: { object: 'user', id: ids.bot }, rich_text: [{ plain_text: 'Human edit\nKeep all text.' }] });
+  const result = await use('hydrateComment')(normalized, configured, async () => response(value));
+  assert.deepEqual(result.comment, value);
+  assert.equal(result.text, 'Human edit\nKeep all text.');
+});
+
+test('legacy sources without event type still hydrate without creator ID filtering', async () => {
+  const legacy = source();
+  delete legacy.type;
+  const configured = { ...env(), NOTION_IGNORED_AUTHOR_IDS: JSON.stringify([ids.bot]) };
+  const value = comment({ created_by: { id: ids.bot } });
+  assert.deepEqual((await use('hydrateComment')(legacy, configured, async () => response(value))).comment, value);
 });
 
 test('malformed signed source data fails closed', () => {
@@ -146,8 +217,9 @@ test('hydration refuses changed ID or parent without trusting stale update conte
   }
 });
 
-test('hydration skips comments actually created by this bot', async () => {
-  assert.deepEqual(await use('hydrateComment')(source(), env(), async () => response(comment({ created_by: { object: 'user', id: ids.bot.replaceAll('-', '').toUpperCase() } }))), { skip: 'self_authored' });
+test('regression: hydration preserves a creator matching the configured bot ID', async () => {
+  const value = comment({ created_by: { object: 'user', id: ids.bot.replaceAll('-', '').toUpperCase() } });
+  assert.deepEqual((await use('hydrateComment')(source(), env(), async () => response(value))).comment, value);
 });
 
 test('hydration rejects malformed comment schema and JSON', async () => {
