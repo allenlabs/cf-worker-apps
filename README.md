@@ -8,6 +8,12 @@ Publish reusable code, tests, technical design and reproducible verification her
 team-chat agent and SSO management source. Start cloud continuation with its
 [handoff](apps/cloud-agent/docs/CLOUD_HANDOFF.md). Deployment branding and identity are supplied through private configuration.
 
+[Cloud Agent OS](apps/cloud-agent-os/README.md) maintains the upstream Workerd
+runtime and bot workspaces. See its [feature integration record](apps/cloud-agent-os/docs/FEATURE_INTEGRATION.md).
+[Personal Notion Events](apps/notion-events/README.md) is a separate MCP Events
+Worker with independent personal OAuth and storage; it reuses generic protocol
+code from the existing Channel Talk server without sharing installation state.
+
 ## CF Observe
 
 The telemetry explorer is available in [apps/cf-observe](apps/cf-observe/README.md).

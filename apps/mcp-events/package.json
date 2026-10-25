@@ -5,9 +5,9 @@
   "type": "module",
   "description": "Channel Talk MCP Events on Cloudflare Workers.",
   "scripts": {
-    "test": "node tests/workers/check.mjs",
+    "test": "node --test tests/workers/shared.test.mjs && node tests/workers/check.mjs",
     "test:coverage": "node tests/workers/check.mjs --coverage",
-    "typecheck": "node --check workers/api/index.js && node --check tests/workers/check.mjs",
+    "typecheck": "node --check workers/api/index.js && node --check workers/api/protocol.js && node --check workers/api/oauth.js && node --check tests/workers/check.mjs && node --check tests/workers/shared.test.mjs",
     "build": "wrangler deploy --config workers/api/wrangler.toml --dry-run --outdir ../../../../../mcp-events-build",
     "deploy": "wrangler deploy --config workers/api/wrangler.toml"
   },

@@ -1,21 +1,14 @@
-import { OAuthProvider, getOAuthApi, AuthorizationError, CimdFetchError, insufficientScope } from '@cloudflare/workers-oauth-provider';
+import { OAuthProvider, getOAuthApi, insufficientScope } from '@cloudflare/workers-oauth-provider';
 import { commandFunctions, commandFunction, commandPage } from './command.js';
+import { MAX_BODY, encoder, identifier, publicOrigin, fail, canonical, digest, equal, bodyBytes, bodyText, signingKey, callbackUrl, sendSigned } from './protocol.js';
+import { ownerConsent } from './oauth.js';
 
 const SCOPE = 'channel:events';
-const MAX_BODY = 256 * 1024;
 const MAX_TTL = 7 * 86400000;
 const MAX_HISTORY_MESSAGES = 100;
 const MAX_HISTORY_LOOKUP = 10000;
 const MAX_TEXT_BYTES = 8000;
-const encoder = new TextEncoder();
-const identifier = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,255}$/.test(value);
 const messageIdentifier = value => typeof value === 'string' && /^[A-Za-z0-9_:-]{1,255}$/.test(value);
-function publicOrigin(env) {
-  try {
-    const url = new URL(env.PUBLIC_ORIGIN);
-    return url.protocol === 'https:' && !url.username && !url.password && !url.port && url.origin === env.PUBLIC_ORIGIN ? url.origin : null;
-  } catch { return null; }
-}
 const configured = env => Boolean(publicOrigin(env) && ['EVENTS_OBJECT_NAME', 'OAUTH_OWNER_ID', 'ALLOWED_CHAT_ID', 'CHANNEL_SLUG', 'CHANNEL_APP_ID'].every(key => identifier(env[key])) && (!env.ALLOWED_CHANNEL_ID || identifier(env.ALLOWED_CHANNEL_ID)));
 const productName = env => typeof env.PRODUCT_NAME === 'string' && env.PRODUCT_NAME.trim() ? env.PRODUCT_NAME.trim() : 'Channel Talk MCP Events';
 const serverName = env => identifier(env.SERVER_NAME) ? env.SERVER_NAME : 'channel-talk-events';
@@ -25,66 +18,6 @@ function boundedText(text, limit = MAX_TEXT_BYTES) {
   let end = limit;
   while ((bytes[end] & 0xc0) === 0x80) end--;
   return { text: new TextDecoder().decode(bytes.subarray(0, end)), truncated: true };
-}
-const escape = value => String(value).replace(/[&<>"']/g, char => `&#${char.charCodeAt(0)};`);
-const fail = (message, code = -32602, data) => { throw Object.assign(new Error(message), { code, data }); };
-const canonical = args => JSON.stringify(Object.fromEntries(Object.keys(args).sort().map(key => [key, args[key]])));
-const digest = async value => [...new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(value)))].map(byte => byte.toString(16).padStart(2, '0')).join('');
-async function equal(left, right) {
-  const [a, b] = await Promise.all([crypto.subtle.digest('SHA-256', encoder.encode(left)), crypto.subtle.digest('SHA-256', encoder.encode(right))]);
-  const aa = new Uint8Array(a), bb = new Uint8Array(b);
-  let difference = 0;
-  for (let i = 0; i < aa.length; i++) difference |= aa[i] ^ bb[i];
-  return difference === 0;
-}
-async function bodyBytes(request, limit = MAX_BODY) {
-  if (Number(request.headers.get('content-length')) > limit) fail('Request body too large', 413);
-  const reader = request.body?.getReader();
-  if (!reader) return new Uint8Array();
-  const chunks = [];
-  let size = 0;
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > limit) { await reader.cancel(); fail('Request body too large', 413); }
-    chunks.push(value);
-  }
-  const bytes = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-  return bytes;
-}
-const bodyText = async (request, limit) => new TextDecoder('utf-8', { fatal: true }).decode(await bodyBytes(request, limit));
-function signingKey(secret) {
-  if (typeof secret !== 'string' || !/^whsec_[A-Za-z0-9+/]+={0,2}$/.test(secret)) fail('Invalid webhook signing secret');
-  let bytes;
-  try { bytes = Uint8Array.from(atob(secret.slice(6)), char => char.charCodeAt(0)); } catch { fail('Invalid webhook signing secret'); }
-  if (bytes.length < 24 || bytes.length > 64) fail('Signing key must contain 24–64 bytes');
-  return bytes;
-}
-function callbackUrl(value) {
-  let url;
-  try { url = new URL(value); } catch { fail('Invalid callback URL'); }
-  // ponytail: trusted OpenAI domains only; add a reviewed provider allowlist to support other MCP clients.
-  const trusted = ['chatgpt.com', 'openai.com'].some(host => url.hostname === host || url.hostname.endsWith(`.${host}`));
-  if (url.protocol !== 'https:' || !trusted || url.username || url.password || url.hash || (url.port && url.port !== '443')) fail('Callback must use a trusted OpenAI HTTPS endpoint', -32602, { callbackHost: url.hostname });
-  return url.href;
-}
-async function sendSigned(subscription, body, id) {
-  if (encoder.encode(body).byteLength > MAX_BODY) fail('Event body too large', 413);
-  const timestamp = String(Math.floor(Date.now() / 1000));
-  const secrets = [subscription.delivery.secret];
-  if (subscription.previousSecret && subscription.rotationUntil > Date.now()) secrets.push(subscription.previousSecret);
-  const signatures = await Promise.all(secrets.map(async secret => {
-    const key = await crypto.subtle.importKey('raw', signingKey(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-    const bytes = new Uint8Array(await crypto.subtle.sign('HMAC', key, encoder.encode(`${id}.${timestamp}.${body}`)));
-    return `v1,${btoa(String.fromCharCode(...bytes))}`;
-  }));
-  return fetch(callbackUrl(subscription.delivery.url), {
-    method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(10000), body,
-    headers: { 'Content-Type': 'application/json', 'webhook-id': id, 'webhook-timestamp': timestamp, 'webhook-signature': signatures.join(' '), 'X-MCP-Subscription-Id': subscription.id }
-  });
 }
 const inputSchema = {
   type: 'object', additionalProperties: false, required: ['chat_id'],
@@ -252,40 +185,11 @@ const defaultHandler = {
         return Response.json({ result: hookResult('succeeded') });
       } catch (error) { return nativeError(error.code === -32602 ? 2 : -32603, error.code === -32602 ? 'BadRequestError' : 'InternalError', error.code === -32602 ? 'Invalid hook parameters' : 'Event could not be stored', error.code === -32602 ? 400 : 503); }
     }
-    if (url.pathname === '/authorize') {
-      if (!env.OWNER_LOGIN_KEY || env.OWNER_LOGIN_KEY.length < 32) return new Response('Owner sign-in is not configured', { status: 503 });
-      const oauth = env.OAUTH_PROVIDER;
-      try {
-        if (request.method === 'GET') {
-          const authRequest = await oauth.parseAuthRequest(request);
-          const details = await oauth.describeConsent(authRequest);
-          if (!details.scope.includes(SCOPE) || details.scope.some(scope => scope !== SCOPE)) return new Response('Unsupported access scope', { status: 400 });
-          const consent = await oauth.beginConsent(authRequest);
-          consent.headers.set('Content-Type', 'text/html; charset=utf-8');
-          return new Response(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escape(productName(env))} access</title><body><h1>Connect ${escape(productName(env))}</h1><p>Client: <strong>${escape(details.clientName)}</strong>${details.clientDomain ? `, published by ${escape(details.clientDomain)}` : ' (self-registered name)'}</p><p>Access returns to <strong>${escape(details.redirectHost)}</strong>.</p>${details.redirectIsLoopback ? '<p>This sends access to an app on your computer. Continue only if you started this sign-in.</p>' : ''}<p>Scope: ${escape(details.scope.join(' '))}. This permits event subscriptions, integration status and observed staff thread history from the configured team group.</p><form method="post"><input type="hidden" name="handle" value="${escape(consent.handle)}"><label>Owner access key <input name="owner_key" type="password" autocomplete="off" required maxlength="256"></label><p><button name="decision" value="approve">Allow</button> <button name="decision" value="deny" formnovalidate>Deny</button></p></form></body></html>`, { headers: consent.headers });
-        }
-        if (request.method === 'POST') {
-          const form = new URLSearchParams(await bodyText(request, 16384));
-          const handle = form.get('handle') ?? '';
-          if (form.get('decision') !== 'approve') {
-            const denied = await oauth.denyConsent(request, handle);
-            denied.headers.set('Location', denied.redirectTo);
-            return new Response(null, { status: 302, headers: denied.headers });
-          }
-          const key = form.get('owner_key') ?? '';
-          if (key.length > 256 || !await equal(key, env.OWNER_LOGIN_KEY)) return new Response('Invalid owner access key. Restart connection.', { status: 401 });
-          const approved = await oauth.approveConsent(request, handle, { scope: [SCOPE] });
-          const { redirectTo } = await oauth.completeAuthorization({ request: approved.request, userId: env.OAUTH_OWNER_ID, scope: [SCOPE], metadata: { channelSlug: env.CHANNEL_SLUG }, props: { userId: env.OAUTH_OWNER_ID } });
-          approved.headers.set('Location', redirectTo);
-          return new Response(null, { status: 302, headers: approved.headers });
-        }
-        return new Response(null, { status: 405 });
-      } catch (error) {
-        if (error instanceof AuthorizationError && error.redirectTo) return Response.redirect(error.redirectTo, 302);
-        if (error instanceof AuthorizationError || error instanceof CimdFetchError) return new Response('Authorization expired or invalid. Restart connection.', { status: 400 });
-        return new Response('Authorization unavailable', { status: 500 });
-      }
-    }
+    if (url.pathname === '/authorize') return ownerConsent(request, env, {
+      scope: SCOPE, productName: productName(env),
+      description: 'This permits event subscriptions, integration status and observed staff thread history from the configured team group.',
+      metadata: { channelSlug: env.CHANNEL_SLUG }
+    });
     return new Response(`${productName(env)}. Connect /mcp with OAuth.`, { status: url.pathname === '/' ? 200 : 404 });
   }
 };
