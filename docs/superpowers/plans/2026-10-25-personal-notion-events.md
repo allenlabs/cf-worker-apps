@@ -62,7 +62,7 @@ Consumes Tasks 2 and 3. Produces independent OAuth MCP endpoint and Notion ingre
 - [x] Run both app suites, syntax/type checks, coverage attempts and dry-run bundles.
 - [x] Run OS wrapper and full configured check; report any baseline lint failures separately.
 - [x] Review public diff and history; resolve material findings with regression tests.
-- [ ] Commit/push verified work, recheck remote main and integrate only if deployment coupling is safe. Retain feature refs. Check remote checks to terminal or verified absence.
+- [x] Commit/push verified work, recheck remote main and integrate only if deployment coupling is safe. Retain feature refs. Check remote checks to terminal or verified absence.
 
 ## Execution record
 
@@ -70,3 +70,4 @@ Consumes Tasks 2 and 3. Produces independent OAuth MCP endpoint and Notion ingre
 
 - Verification: new app 31 unit tests and 14 Worker groups, shared helpers 11 tests, existing Channel Talk 6 Worker groups; both syntax/dry-run builds passed. Full OS check passed (132 wrapper, 765 backend, 507 frontend, 35 MCP, five dry-runs). Existing upstream lint remains 127 unchanged errors; Worker coverage profiler is unavailable.
 - Decisions: source receipts distinguish changed Notion retry metadata from conflicting event identities; failure inspection is paginated; explicit writer exclusions cover automation using a different integration; source settings are rechecked before queued delivery.
+- Integration: source commit `23146ec` pushed to the existing feature branch and fast-forwarded into remote main, preserving the branch. No Actions workflow, commit run, check run or commit status was present in the post-push inspection. No deployment or live connection was performed.
