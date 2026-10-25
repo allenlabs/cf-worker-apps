@@ -1100,7 +1100,7 @@
 +  const botCatalog = useBotProfiles(authenticatedApi);
 +  const [newChatBotId, setNewChatBotId] = useState<string | undefined>();
 +  const [newChatBotTouched, setNewChatBotTouched] = useState(false);
-+  useEffect(() => { setNewChatBotId(undefined); setNewChatBotTouched(false); }, [workspaceId]);
++  useEffect(() => { setNewChatBotId(undefined); setNewChatBotTouched(false); }, [workspaceId, authenticatedApi]);
 +  const effectiveNewChatBotId = preferredBotId(newChatBotId, botCatalog.mainBot?.botId, newChatBotTouched);
 +  let newChatBotBlockedReason: string | undefined;
 +  try {
@@ -1111,7 +1111,7 @@
    const getOverseer = useCallback(() => overseer, [overseer]);
    const cacheRef = useRef<ChatCache>({
      chats: new Map(),
-@@ -4067,9 +4094,12 @@
+@@ -4067,9 +4094,14 @@
      try {
        if (selectedChatId === null) {
          if (newChatModel === undefined) throw new Error("Choose a provider and model before starting a chat.");
@@ -1123,10 +1123,12 @@
 +        const newChatId = await (botSelection
 +          ? overseer.newChat(message, model, capsules, attachments, formats, fastMode, botSelection)
 +          : overseer.newChat(message, model, capsules, attachments, formats, fastMode));
++        setNewChatBotId(undefined);
++        setNewChatBotTouched(false);
          setFastMode(newChatFastKey, false);
          setNewChatModel(undefined);
          onNavigateToChatRef.current(newChatId);
-@@ -4113,8 +4142,11 @@
+@@ -4113,8 +4142,13 @@
        throw new Error("Choose a provider and model before starting a chat.");
      }
      try {
@@ -1137,6 +1139,8 @@
 +      const newChatId = await (botSelection
 +        ? overseer.newChat(message, model, capsules, attachments, formats, fastMode, botSelection)
 +        : overseer.newChat(message, model, capsules, attachments, formats, fastMode));
++      setNewChatBotId(undefined);
++      setNewChatBotTouched(false);
        setNewChatModel(undefined);
        setFastMode(newChatFastKey, false);
        onNavigateToChatRef.current(newChatId);

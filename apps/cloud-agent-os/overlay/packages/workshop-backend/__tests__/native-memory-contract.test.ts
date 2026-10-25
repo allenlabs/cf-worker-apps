@@ -24,6 +24,21 @@ import './test-worker';
 
 let serial = 0;
 describe('native memory with actual workspace storage and archive pages', () => {
+  it('checkpoints memory when committing compaction rather than when rolling it back', async () => {
+    await runInDurableObject(env.TEST_OVERSEER.getByName(`native-checkpoint-${++serial}`), async instance => {
+      const impl = (instance as any).impl;
+      const checkpoints: number[] = [];
+      const previous = impl.nativeMemory;
+      impl.nativeMemory = () => ({ checkpoint: (id: number) => checkpoints.push(id), nextAlarm: () => null });
+      try {
+        impl.storage.chatMeta.put({ id: 1, title: 'Checkpoint', started: new Date(0), lastActive: new Date(0) });
+        impl.commitChatCompaction(1, { chatId: 1, compactedTo: 1, summary: 'Derived handoff', bindings: {} });
+        expect(checkpoints).toEqual([1]);
+        impl.rollbackChatCompaction(impl.storage.chatMeta.get(1), 1);
+        expect(checkpoints).toEqual([1]);
+      } finally { impl.nativeMemory = previous; }
+    });
+  });
   it('keeps full canonical text and resumes the same frozen batch from durable storage', async () => {
     await runInDurableObject(env.TEST_OVERSEER.getByName(`native-memory-${++serial}`), async (instance, state) => {
       const impl = (instance as any).impl;

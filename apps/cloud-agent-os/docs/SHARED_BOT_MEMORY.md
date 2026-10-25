@@ -1,75 +1,100 @@
 # Shared memory and main bot
 
-This feature builds on native Cloudflare Agent Memory support in `feat/bdots-bot-workspaces`.
-The Cloudflare API has namespace/profile/session scopes; it does **not** expose arbitrary
-metadata filtering across profiles. The OS owns the source catalog and joins recall results
-server-side. No new Cloudflare credential or cross-account grants are introduced.
+This extends native Cloudflare Agent Memory in `feat/bdots-bot-workspaces` without
+changing the pinned OS runtime. The documented API isolates profiles and has no
+arbitrary tags or multi-profile recall field. The OS selects authorized profiles
+and combines their recall responses with source attribution.
 
 ## Memory routing
 
-- **Private bot**: every new canonical text record is ingested into the bot's stable per-UUID
-  profile (existing route). Standard-assistant chats use their existing separate null-bot profile.
-- **Common**: the same original text is independently ingested into an owner-wide common profile.
-  It is not a derived summary or an undocumented API `tags` property.
-- **Default lookup**: search the current bot (or Standard assistant) and common memory.
-- **Selected lookup**: default plus named other bots selected by UUID from the authenticated
-  owner's catalog. Archived bots can still supply historical memory.
-- **All lookup**: current bot, common memory, every bot profile and Standard assistant.
-  The operation rejects more than 64 distinct profiles rather than silently dropping results.
+- **Bot conversation:** capture each canonical text record once into its stable
+  owner-plus-bot-UUID profile. Renames, edits and main-bot changes preserve this key.
+- **Common owner context:** reuse the existing Standard assistant (`botId: null`)
+  profile. Start a Standard assistant conversation for context that every bot may
+  recall. Its original profile and historical memory remain available.
+- **Default recall:** current bot plus common owner context. Standard assistant
+  searches the common profile once. Other bot transcripts remain in their own profiles.
+- **Selected recall:** add specified bot UUIDs from the authenticated owner's catalog,
+  including archived bots with retained history.
+- **All recall:** search all catalogued owner bot profiles plus common once. Reject
+  more than 64 distinct profiles explicitly; never silently omit a source.
 
-The bot tool `listBotMemorySources()` returns the allowed bot IDs and names; then
-`searchBotMemory({query, scope:'selected', botIds:[...]})` or
-`searchBotMemory({query, scope:'all'})` expands the lookup.
-The server resolves profile names using a verified owner, never the model's free-form
-profile name. Search uses up to four simultaneous profile recalls. A failed profile is
-marked as an error with `complete:false`; successful profiles remain present, with
-their originating bot IDs, labels, session IDs and candidate memory IDs.
+This choice avoids copying every bot transcript into common memory, which would
+both double ingestion and allow default recall to bypass the selected/all choice.
+The editor explains that Standard assistant conversations provide common context.
 
-**Canonical original source** is still in the workspace DO text archive. Agent Memory is
-derived memory, and `recall` does not guarantee original full transcript text.
-Raw retrieval and page integrity remain separate from semantic recall.
+`listBotMemorySources()` returns authorized bot IDs and names. The agent can use
+`searchBotMemory({query, scope:'selected', botIds:[...]})` or `scope:'all'`.
+The server derives profile names from the verified owner and catalog UUIDs, never
+from model-supplied owner/profile names. At most four profile recalls run together.
+A source failure produces `complete:false` and a source-specific error while
+retaining successful results. Each lookup has a combined 90-second bound. A timed-out
+uncancellable request retains its concurrency slot; sources that cannot be started
+receive explicit errors rather than exceeding four in-flight calls or hanging recall. Each result identifies its source kind, bot UUID,
+label and candidate memory/session IDs. Scores are not globally reranked.
 
-## Common ingest and migrations
+Semantic recall is a derived view, not an exhaustive transcript export or proof
+of finished indexing. Canonical original text remains in the workspace DO archive;
+raw retrieval and page integrity remain independently available.
 
-The common name is `common-` plus SHA-256 of a versioned tuple with verified owner.
-It remains stable when the main bot or individual bot names change.
-Each conversation sends to two independent destinations, with distinct durable
-`position/pending` and `commonPosition/commonPending` cursors. The same frozen
-message timestamp, content fragments and session ID are used in retries.
-Both destinations must be acknowledged to report caught-up; an error cannot advance
-an unsent cursor.
+## Delivery and legacy state
 
-On enrolling a previously existing private-only chat, the private cursor is retained
-and the common cursor starts at canonical sequence zero for a lossless backfill.
-Previously unused chats are not globally scanned. Deleting a chat prevents local
-retries but does not automatically delete already accepted Agent Memory data.
-Doubling full-text ingest increases service work and may increase billing when
-the Cloudflare private beta pricing changes.
+The original per-bot queue keeps its frozen messages, timestamps, stable session
+ID, source authorization checks, retry backoff and acknowledged cursor. Each page
+is sent once per destination; ambiguous responses may replay the identical batch
+using the service's documented ingest idempotency. No message is truncated and
+no automatic backfill to a second profile is scheduled.
+
+The earlier branch implementation automatically copied all bot transcripts into
+separate `common-*` profiles. Existing `commonPosition` and `commonPending` data
+are retained unchanged, but no longer transmitted. `memorySyncStatus()` exposes
+`commonSharing:'paused'`, the retained cursor and backlog when this legacy state
+exists. `caught-up` describes the active per-bot destination only; it does not
+claim that paused legacy sharing completed. Already accepted legacy profiles are
+not deleted, renamed, migrated or searched by default. Any migration requires a
+separately authorized operation. This code does not run real-data migration.
 
 ## Main bot
 
-An account owns **at most one** optional main-bot pointer, persisted in the User
-Durable Object collection `mainBot` with a revision. Setting/clearing it uses
-optimistic concurrency and owner authorization. Archived or unknown bots cannot
-become main; archiving the current main clears only the pointer, not the bot's
-historical snapshots or memory.
+The authenticated account owns at most one optional main-bot pointer in its User
+DO. Revision checks reject stale changes. Unknown/archived bots cannot become main;
+archiving main clears the pointer without modifying historical snapshots or memory.
 
-New conversations choose the main bot by default on the home page and inside
-workspaces, subject to loading the authenticated account's selection.
-An explicit deep-linked bot takes precedence. A deliberate selection of
-`Standard assistant` bypasses main-bot auto-selection for that draft.
-Changing main never rewrites an existing chat's fixed bot configuration.
+Home and workspace new-chat drafts use main after the owner's catalog loads.
+An explicit deep-link selection takes precedence; selecting Standard assistant
+bypasses main for that draft. After accepted chat creation, the next draft returns
+to main. API/account changes clear local selections, and delayed responses from
+an old account cannot replace the current main setting. Existing chats retain
+immutable bot snapshots.
 
 ## Verification
 
-Pure main-bot and memory-scope tests were executed separately with Node 22's
-TypeScript stripping, 12/12 passed. Native Worker queue, profile fanout and
-frontend picker regression tests are included in the wrapper's normal build
-gate; full Workerd integration requires running `build.mjs --check` from
-a dependency-equipped environment. No production deployment is implied.
+Verified on 2026-10-25 with Node 24.19.0 and pnpm 11.19.0 against pinned upstream
+`4358072f8cb1bc9ddfb6ee11122e194c76cd71e0`:
+
+- Wrapper `npm test`, with optional compiler, Text asset and Wrangler fixtures enabled:
+  **132 passed, zero failed or skipped**. `npm run typecheck` also passed.
+- Full `node scripts/build.mjs --config <synthetic-native-oidc-mcp.json> --check`:
+  **exit 0**. All applicable package/browser TypeScript checks and frontend bundles
+  passed; native backend **765 tests / 42 files**, frontend **507 / 33**, and MCP
+  **35 / 1** passed. Native OIDC/OAuth JWT login and handoff checks also passed.
+- All **five Worker dry-runs** passed, including the native `OS_AGENT_MEMORY`
+  binding and frontend assets. No namespace provisioning runs in check mode.
+- Targeted lint passed for all **14 changed TypeScript files**. Full upstream
+  `pnpm run lint:check` still fails with **127 existing errors in 27 files**.
+  Comparison with base `8724334` confirmed every remaining error line pre-existed
+  this continuation; 19 bot/memory lint errors were removed and none introduced.
+- Independent code review and `git diff --check` passed. The app has no configured
+  coverage script; these results do not claim a coverage threshold.
+
+Tests use synthetic identities/configuration and local temporary storage. A live
+Agent Memory connection, service indexing, production deployment, resource creation
+and real-data ingestion/backfill were not run. The checks establish local runtime,
+RPC schema, archive/outbox and UI integration, not live service availability.
 
 ## Official Cloudflare references
 
-- https://developers.cloudflare.com/agent-memory/api/workers-api/
-- https://developers.cloudflare.com/agent-memory/concepts/namespaces-profiles/
-- https://developers.cloudflare.com/agent-memory/concepts/how-agent-memory-works/
+- [Workers API](https://developers.cloudflare.com/agent-memory/api/workers-api/)
+- [Namespaces, profiles and session isolation](https://developers.cloudflare.com/agent-memory/concepts/namespaces-profiles/)
+- [Ingest idempotency](https://developers.cloudflare.com/agent-memory/concepts/how-agent-memory-works/#idempotency-and-deduplication)
+- [Limits](https://developers.cloudflare.com/agent-memory/platform/limits/)

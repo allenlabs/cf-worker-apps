@@ -5,6 +5,19 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { prepare } from '../scripts/prepare.mjs';
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+const pinnedSource = fileURLToPath(new URL('../.upstream/cloudflare-os', import.meta.url));
+test('the full reviewed patch stack composes against the cached pinned upstream', {
+  skip: !existsSync(join(pinnedSource, '.git')) && 'Run prepare once to fetch the pinned upstream',
+}, async () => {
+  const checkout = await prepare({ source: pinnedSource });
+  const agent = await readFile(join(checkout, 'packages/workshop-backend/src/agent.ts'), 'utf8');
+  assert.match(agent, /tools\.searchBotMemory = defineTool/);
+  assert.match(await readFile(join(checkout, 'packages/workshop-frontend/src/ChatInterface.tsx'), 'utf8'),
+    /case "searchBotMemory": return "Searching bot memory"/);
+});
 
 test('prepare pins source, applies reviewed overlays once and leaves source untouched', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'cloud-agent-os-prepare-'));

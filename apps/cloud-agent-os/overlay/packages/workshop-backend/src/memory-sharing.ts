@@ -2,7 +2,7 @@
 export type MemorySearchScope = 'default' | 'selected' | 'all';
 export type MemorySearchOptions = { scope?: MemorySearchScope; botIds?: string[] };
 export type BotMemoryReference = { id: string; name: string; archived: boolean };
-export type MemorySearchSource = { kind: 'bot' | 'common' | 'standard'; botId: string | null; label: string };
+export type MemorySearchSource = { kind: 'bot' | 'common'; botId: string | null; label: string };
 export type MemorySearchResponse = { scope: MemorySearchScope; complete: boolean; sources: Array<MemorySearchSource & {
   count?: number; answer?: string; candidates?: Array<{id: string; summary: string; sessionId: string | null; score: number}>; error?: string;
 }> };
@@ -14,7 +14,7 @@ const utf8 = new TextEncoder();
 export function selectMemorySources(currentBotId: string | null, bots: BotMemoryReference[], options: MemorySearchOptions = {}): MemorySearchSource[] {
   const scope = options.scope ?? 'default';
   if (!['default', 'selected', 'all'].includes(scope)) throw new Error('Invalid memory search scope');
-  if (!Array.isArray(bots) || bots.some(bot => !bot || typeof bot.name !== 'string' || !UUID.test(bot.id) || typeof bot.archived !== 'boolean')) {
+  if (!Array.isArray(bots) || bots.some(bot => !bot || typeof bot.name !== 'string' || typeof bot.id !== 'string' || !UUID.test(bot.id) || typeof bot.archived !== 'boolean')) {
     throw new Error('Invalid authorized bot catalog');
   }
   if (currentBotId !== null && !UUID.test(currentBotId)) throw new Error('Invalid current bot');
@@ -31,13 +31,13 @@ export function selectMemorySources(currentBotId: string | null, bots: BotMemory
   const sources: MemorySearchSource[] = [];
   const seen = new Set<string>();
   const append = (kind: MemorySearchSource['kind'], botId: string | null, label: string) => {
-    const key = kind === 'common' ? 'common' : botId === null ? 'standard' : `bot:${botId}`;
+    const key = kind === 'common' ? 'common' : `bot:${botId}`;
     if (seen.has(key)) return;
     if (sources.length >= MAX_SOURCES) throw new Error('Too many bot profiles for one lookup; choose specific bots. Nothing was omitted silently.');
     seen.add(key); sources.push({ kind, botId, label });
   };
-  append(currentBotId === null ? 'standard' : 'bot', currentBotId, currentBotId ? catalog.get(currentBotId)?.name ?? 'Current bot' : 'Standard assistant');
-  append('common', null, 'Common memory');
+  if (currentBotId !== null) append('bot', currentBotId, catalog.get(currentBotId)?.name ?? 'Current bot');
+  append('common', null, 'Common memory (Standard assistant)');
   if (scope === 'selected') {
     for (const id of options.botIds!) {
       const bot = catalog.get(id);
@@ -46,12 +46,11 @@ export function selectMemorySources(currentBotId: string | null, bots: BotMemory
     }
   } else if (scope === 'all') {
     for (const bot of bots) append('bot', bot.id, bot.name);
-    append('standard', null, 'Standard assistant');
   }
   return sources;
 }
 
-type RecallResult = { count: number; answer: string; candidates: Array<{id: string; summary: string; sessionId: string | null; score: number}> };
+type RecallResult = { count: number; answer?: string; candidates: Array<{id: string; summary: string; sessionId: string | null; score: number}> };
 export interface MemoryProfileBinding { getProfile(name: string): Promise<{ recall(query: string, opts: {thinkingLevel:'low';responseLength:'short'}): Promise<RecallResult> }> }
 
 export async function searchMemoryProfiles(input: {
@@ -62,26 +61,41 @@ export async function searchMemoryProfiles(input: {
   if (typeof input.query !== 'string' || !input.query.isWellFormed()) throw new Error('Memory query requires valid Unicode');
   const size = utf8.encode(input.query).byteLength;
   if (size < 1 || size > 1024 || !input.query.trim()) throw new Error('Memory query must be 1–1024 UTF-8 bytes; it was not shortened');
-  if (typeof input.principal !== 'string' || !input.principal.trim()) throw new Error('No verified memory owner');
+  if (typeof input.principal !== 'string' || !input.principal.trim() || !input.principal.isWellFormed()) throw new Error('No verified memory owner');
   const scope = input.options?.scope ?? 'default';
   const sources = selectMemorySources(input.currentBotId,input.bots,input.options);
-  const results: MemorySearchResponse['sources'] = new Array(sources.length);
+  const results: MemorySearchResponse['sources'] = [];
   let index = 0;
   const worker = async () => {
     for (;;) {
       const n = index++;
       if (n >= sources.length) return;
       const source = sources[n];
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let expired = false;
       try {
-        const name = source.kind === 'common' ? await input.commonName() : await input.profileName(source.botId);
-        const profile = await input.binding.getProfile(name);
-        const { count, answer, candidates } = await profile.recall(input.query,{thinkingLevel:'low',responseLength:'short'});
+        const lookup = (async () => {
+          const name = source.kind === 'common' ? await input.commonName() : await input.profileName(source.botId);
+          if (expired) throw new Error('Memory lookup timed out');
+          const profile = await input.binding.getProfile(name);
+          if (expired) throw new Error('Memory lookup timed out');
+          return profile.recall(input.query,{thinkingLevel:'low',responseLength:'short'});
+        })();
+        const { count, answer, candidates } = await Promise.race([lookup, new Promise<never>((_, reject) => {
+          timer = setTimeout(() => { expired = true; reject(new Error('Memory lookup timed out')); }, 90_000);
+        })]);
         results[n] = { ...source, count, answer, candidates };
       } catch {
         results[n] = { ...source, error: 'Memory lookup failed' };
-      }
+      } finally { clearTimeout(timer); }
+      // The binding cannot cancel remote I/O. Keep a timed-out slot occupied instead of
+      // starting more calls while its remote request may still be running.
+      if (expired) return;
     }
   };
   await Promise.all(Array.from({length:Math.min(4,sources.length)},()=>worker()));
+  for (let n = 0; n < sources.length; n++) {
+    results[n] ??= { ...sources[n], error: 'Memory lookup not attempted because earlier requests timed out' };
+  }
   return { scope, complete: results.every(item => !item.error), sources: results };
 }

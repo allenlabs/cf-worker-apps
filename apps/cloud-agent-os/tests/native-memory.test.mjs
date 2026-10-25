@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createHash } from 'node:crypto';
-import { NativeMemoryQueue, memoryProfileName, memorySessionId, readNativeMemoryConfig } from '../overlay/packages/workshop-backend/src/native-memory.ts';
+import { NativeMemoryQueue, memoryProfileName, commonMemoryProfileName, memorySessionId, readNativeMemoryConfig } from '../overlay/packages/workshop-backend/src/native-memory.ts';
 
 const hash = text => createHash('sha256').update(text).digest('hex');
 function fixture(options = {}) {
@@ -191,4 +191,73 @@ test('a page with a valid shape but a skipped prefix is never accepted',async()=
   f.source.page=async(...args)=>{const value=await page(...args); return {...value,start:1,content:value.content.slice(1)};};
   f.tick(); await f.queue.drain();
   assert.equal(f.calls.length,0); assert.equal(f.queue.status(1).acknowledgedThrough,-1);
+});
+
+test('common recall reuses the existing owner Standard assistant profile',async()=>{
+  const owner='owner@example.invalid';
+  assert.equal(await commonMemoryProfileName(owner),await memoryProfileName(owner,null));
+  assert.notEqual(await commonMemoryProfileName(owner),await commonMemoryProfileName('other@example.invalid'));
+  const legacy=`common-${hash(JSON.stringify(['cloud-agent-os-common-memory-v1',owner]))}`;
+  assert.notEqual(await commonMemoryProfileName(owner),legacy);
+});
+test('automatic capture never copies bot transcripts into common memory, including stale configuration',async()=>{
+  const f=fixture({commonProfile:true}); f.queue.enroll(1,'bot-a');
+  f.add(1,0,'private bot context'); await drainAll(f);
+  assert.equal(f.calls.length,1);
+  assert.equal(f.calls[0].name,await memoryProfileName(f.deps.principal,'bot-a'));
+  assert.equal(f.store.get(1).commonPosition,undefined);
+  const count=f.calls.length;
+  f.restart(); f.queue.enroll(1,'bot-a',1); await drainAll(f);
+  assert.equal(f.calls.length,count);
+});
+test('Standard assistant captures once into the owner common profile',async()=>{
+  const f=fixture({commonProfile:true}); f.queue.enroll(1,null); f.add(1,0,'owner common context');
+  await drainAll(f);
+  assert.equal(f.calls.length,1);
+  assert.equal(f.calls[0].name,await commonMemoryProfileName(f.deps.principal));
+});
+test('legacy common backlog is visibly paused and retained while bot capture continues',async()=>{
+  const f=fixture({commonProfile:true}); f.queue.enroll(1,'bot-a'); f.add(1,0,'first');
+  const current=f.store.get(1);
+  const commonPosition={sequence:0,sourceIndex:0};
+  const commonPending={id:'legacy-frozen-batch',snapshots:[],messages:[{role:'user',content:'retained original',timestamp:'2026-10-25T00:00:00.000Z'}],after:{sequence:1,sourceIndex:0}};
+  Object.assign(current,{commonPosition,commonPending}); f.store.put(current);
+  await drainAll(f);
+  assert.equal(f.calls.length,1);
+  assert.deepEqual(f.store.get(1).commonPosition,commonPosition);
+  assert.deepEqual(f.store.get(1).commonPending,commonPending);
+  assert.equal(f.queue.status(1).commonSharing,'paused');
+  assert.equal(f.queue.status(1).commonBacklog,1);
+  f.restart(); f.queue.enroll(1,'bot-a',1); f.add(1,1,'second'); await drainAll(f);
+  assert.equal(f.calls.length,2);
+  assert.ok(f.calls.every(call=>call.name===f.calls[0].name));
+  assert.deepEqual(f.store.get(1).commonPending,commonPending);
+  assert.equal(f.queue.status(1).state,'caught-up');
+});
+test('paused legacy common copies do not need a binding or schedule automatic retries',async()=>{
+  const f=fixture({binding:undefined}); f.queue.enroll(1,'bot-a');
+  const current=f.store.get(1);
+  const commonPosition={sequence:0,sourceIndex:0};
+  Object.assign(current,{commonPosition,dueAt:0,attempts:2,lastError:'Legacy common failure'});
+  f.store.put(current); await f.queue.drain();
+  assert.equal(f.queue.nextAlarm(),null);
+  assert.equal(f.queue.status(1).state,'caught-up');
+  assert.equal(f.queue.status(1).commonSharing,'paused');
+  assert.deepEqual(f.store.get(1).commonPosition,commonPosition);
+});
+test('a new bot message clears obsolete legacy common backoff without discarding retained copies',async()=>{
+  const f=fixture(); f.queue.enroll(1,'bot-a'); f.add(1,0,'already accepted'); await drainAll(f);
+  const current=f.store.get(1);
+  const commonPosition={sequence:0,sourceIndex:0};
+  const commonPending={id:'legacy-batch',snapshots:[],messages:[{role:'user',content:'retained legacy original',timestamp:'2026-10-25T00:00:00.000Z'}],after:{sequence:1,sourceIndex:0}};
+  Object.assign(current,{commonPosition,commonPending,attempts:8,lastError:'Legacy common failure',dueAt:f.now()+3_600_000,firstPendingAt:f.now()-1_000_000});
+  f.store.put(current); f.add(1,1,'new bot context');
+  assert.equal(f.queue.nextAlarm(),f.now()+30_000);
+  assert.equal(f.queue.status(1).attempts,0);
+  assert.equal(f.queue.status(1).error,undefined);
+  f.tick(29_999); await f.queue.drain(); assert.equal(f.calls.length,1);
+  f.tick(1); await f.queue.drain(); assert.equal(f.calls.length,2);
+  assert.equal(f.queue.status(1).acknowledgedThrough,1);
+  assert.deepEqual(f.store.get(1).commonPosition,commonPosition);
+  assert.deepEqual(f.store.get(1).commonPending,commonPending);
 });

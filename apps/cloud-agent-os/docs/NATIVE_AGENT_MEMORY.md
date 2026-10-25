@@ -1,7 +1,7 @@
 # Native Agent Memory for a private, single-user OS
 
 **Shared-memory extension:** [Shared memory and main bot](SHARED_BOT_MEMORY.md) supersedes
-single-profile search and single-destination ingest descriptions below in this branch.
+single-profile search descriptions below and documents common owner context.
 
 This mode adds automatic namespace/profile provisioning, checkpoint ingestion of complete saved
 text conversations, and per-bot memory to `feat/bdots-bot-workspaces`. It is opt-in deployment
@@ -56,9 +56,10 @@ The documented ingest API does not offer arbitrary `tags` or application metadat
 Profile keys are 68 characters and sessions are 62 characters, within the documented 100/64
 limits. Names and revisions do not enter the profile key. Renaming/editing/archiving a bot retains
 its memory; duplicating a bot creates a new UUID and therefore a new profile. Non-bot chats use
-that owner's separate default profile (`botId: null`). No recall crosses profiles. This is
-isolation, not a flat tagging/filter system. Combining memories from several bots would need an
-explicit authorized fan-out; it is not implemented here.
+that owner's existing Standard assistant profile (`botId: null`), which also supplies common
+owner context. Bot conversations are not copied into that profile. Default recall searches
+current bot plus common; selected/all recall explicitly fans out to other owner bot profiles.
+This is application routing over isolated profiles, not an arbitrary tagging/filter API.
 
 `getProfile()` lazily provisions a profile at first ingest or recall. The local queue also stores
 `botId`. Each submitted content envelope carries bot ID, chat/sequence, source artifact hash,
@@ -76,6 +77,9 @@ Referenced archived outputs are resolved rather than ingesting only their first 
 Binary attachments remain in the original workspace store. Their metadata is captured, but their
 binary payload is not base64-disguised as text and no OCR is invented. Runtime secrets, model-only
 encrypted reasoning, and outputs that an older version never persisted are not reconstructed.
+Capture follows the append-only canonical sequence: later edits to an existing record’s
+connection-decision or capsule metadata do not enqueue a new memory message. Current raw
+history retains those edits; semantic memory is not a live mirror of mutable UI metadata.
 Transient streams that never reached the canonical commit barrier are not successful saved turns.
 This mode does not repair historical data that was already discarded by older implementations.
 
@@ -119,11 +123,14 @@ call resolves. It does **not** imply deletion of previously accepted Agent Memor
 submitted remote call cannot be recalled. Remote session/profile deletion is a separate explicit
 operation and is not automatically issued by this change.
 
-Two native tools are available in enrolled owner chats:
+Three native tools are available in enrolled owner chats:
 
-- `searchBotMemory(query)` searches the server-selected bot profile, never a model-supplied user ID.
+- `searchBotMemory({query, scope, botIds})` searches current bot plus common by default, with
+  authorized selected/all-bot expansion; it never accepts a model-supplied owner or profile name.
+- `listBotMemorySources()` lists the authenticated owner’s selectable bot IDs and names.
 - `memorySyncStatus()` reports pending/retrying/caught-up, acknowledged sequence, high-water mark,
-  next due time and last acceptance. `caught-up` means API acceptance, **not** completed indexing.
+  next due time and last acceptance. Retained legacy common-copy cursors are explicitly paused.
+  `caught-up` means active destination API acceptance, **not** completed indexing or legacy migration.
 
 The bot editor displays a native-mode disclosure. Its existing “automatic recall off” preference
 controls proactive search, not automatic capture. Full capture is the deployment-level opt-in.
@@ -140,12 +147,14 @@ local ACK failure, revocation, namespace configuration and API provisioning. Str
 checks cover the dependency-free transport and host modules. The changed original wrapper files
 were reconstructed and checked against their Git blob SHA before editing.
 
-Native Workerd/typed-storage/archive and frontend disclosure regression tests are included in
-`build.mjs --check`. They must be run in the repository's normal dependency-equipped environment.
-The implementation session could not clone upstream or install dependencies because runtime
-network access was unavailable, so a full reconstructed build, real Agent Memory integration,
-and live deployment were **not** verified. Local patch anchor checks are mechanical checks, not
-substitutes for the full native gate. No production installation is enabled by publishing this code.
+Native Workerd/typed-storage/archive and frontend disclosure regression tests run through
+`build.mjs --check` against the pinned upstream. The continuation verified all wrapper
+transport/provisioning tests with the optional compiler, Text asset and Wrangler fixtures
+activated. The current verification receipt is in [Shared memory and main bot](SHARED_BOT_MEMORY.md).
+
+These checks use synthetic configuration, temporary storage and fake memory transports.
+They do not establish a live Agent Memory connection or completed service indexing. No
+production installation, namespace creation, real transcript upload or backfill was performed.
 
 ## Official references reviewed
 

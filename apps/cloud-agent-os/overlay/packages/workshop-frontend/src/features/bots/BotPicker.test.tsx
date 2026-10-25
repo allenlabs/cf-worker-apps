@@ -27,7 +27,7 @@ describe('bot selection', () => {
     expect(() => botIdFromSearch('someone/else')).toThrow(/bot/i)
   })
   it('keeps a failed selection explicit until the user chooses Standard assistant', async () => {
-    const retry = vi.fn()
+    const retry = vi.fn<() => void>()
     function Fixture() {
       const [id, setId] = useState<string | undefined>(profile.id)
       return <BotPicker profiles={[]} status="error" selectedId={id} onChange={setId} onRetry={retry} />

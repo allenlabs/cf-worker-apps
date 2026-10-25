@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { readMainBot, setMainBot, clearArchivedMainBot } from '../src/main-bot';
 import { selectMemorySources, searchMemoryProfiles } from '../src/memory-sharing';
 
@@ -43,7 +43,7 @@ describe('memory profile fanout',()=>{
     expect(()=>selectMemorySources(A,bots,{scope:'selected',botIds:['99999999-9999-4999-8999-999999999999']})).toThrow(/not available/);
   });
   it('includes Standard assistant and every bot for all scope and refuses hidden truncation',()=>{
-    expect(selectMemorySources(A,bots,{scope:'all'}).map(x=>x.kind)).toEqual(['bot','common','bot','bot','standard']);
+    expect(selectMemorySources(A,bots,{scope:'all'}).map(x=>x.kind)).toEqual(['bot','common','bot','bot']);
     const many=Array.from({length:65},(_,i)=>({id:`00000000-0000-4000-8000-${String(i).padStart(12,'0')}`,name:`Bot ${i}`,archived:false}));
     expect(()=>selectMemorySources(A,many,{scope:'all'})).toThrow(/too many/i);
   });
@@ -71,5 +71,61 @@ describe('memory profile fanout',()=>{
     await expect(searchMemoryProfiles({...props,query:'가'.repeat(342)})).rejects.toThrow(/1024/);
     await expect(searchMemoryProfiles({...props,query:'\uD800'})).rejects.toThrow(/Unicode/);
     expect(count).toBe(0);
+  });
+  it.each(['success','failure'])('cleans up source timeout timers after %s',async outcome=>{
+    vi.useFakeTimers();
+    try {
+      const result=await searchMemoryProfiles({
+        principal:'owner',currentBotId:A,bots,query:'context',profileName:id=>`bot:${id}`,commonName:()=> 'common',
+        binding:{async getProfile(){
+          if(outcome==='failure')throw Error('Synthetic failure');
+          return {async recall(){return {count:0,candidates:[]};}};
+        }},
+      });
+      expect(result.complete).toBe(outcome==='success');
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {vi.useRealTimers();}
+  });
+  it('does not start recall when a timed-out profile resolution finishes late',async()=>{
+    vi.useFakeTimers();
+    let release!:()=>void,recalls=0;
+    const gate=new Promise<void>(resolve=>{release=resolve;});
+    try {
+      const pending=searchMemoryProfiles({
+        principal:'owner',currentBotId:null,bots,query:'context',profileName:id=>`bot:${id}`,commonName:()=> 'common',
+        binding:{async getProfile(){await gate;return {async recall(){recalls++;return {count:0,candidates:[]};}};}},
+      });
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect((await pending).complete).toBe(false);
+      release();await Promise.resolve();await Promise.resolve();
+      expect(recalls).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {release();vi.useRealTimers();}
+  });
+  it('bounds all-bot fanout to four concurrent destinations without omitting later bots',async()=>{
+    const catalog=[...bots,...Array.from({length:3},(_,index)=>({
+      id:`00000000-0000-4000-8000-${String(index).padStart(12,'0')}`,name:'Additional bot',archived:false,
+    }))];
+    let release!:()=>void,active=0,maximum=0;
+    const gate=new Promise<void>(resolve=>{release=resolve;});
+    const lookedUp:string[]=[];
+    const pending=searchMemoryProfiles({
+      principal:'owner',currentBotId:A,bots:catalog,query:'context',options:{scope:'all'},
+      profileName:id=>`bot:${id}`,commonName:()=> 'common',
+      binding:{async getProfile(name){
+        lookedUp.push(name);active++;maximum=Math.max(maximum,active);
+        return {async recall(){await gate;active--;return {count:0,candidates:[]};}};
+      }},
+    });
+    try {
+      await new Promise<void>(resolve=>setImmediate(resolve));
+      expect(lookedUp).toHaveLength(4);
+    } finally {release();}
+    const result=await pending;
+    expect(maximum).toBe(4);
+    expect(lookedUp).toHaveLength(7);
+    expect(new Set(lookedUp).size).toBe(7);
+    expect(result.sources).toHaveLength(7);
+    expect(result.complete).toBe(true);
   });
 });

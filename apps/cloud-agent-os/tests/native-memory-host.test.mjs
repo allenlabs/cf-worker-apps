@@ -29,6 +29,15 @@ test('text attachments preserve BOM and Unicode; binary is a reference, not fabr
   const h=host(record); const snapshot=await createMemorySource(h).load(1,0,'owner');
   assert.equal(snapshot.sources.length,2);assert.deepEqual(h.calls[0],['archive','\ufeff가나다🙂\nlast']);
 });
+test('reading recovery pages does not ingest the entire source artifact again for every page', async () => {
+  const record = { sequence: 1, type: 'message', timestamp: new Date('2026-10-25'), author: { type: 'agent' },
+    toolCalls: [
+      { toolName: 'readStoredText', sourceArtifactId: 'b'.repeat(64) },
+      { toolName: 'readChatHistory', sourceArtifactId: 'c'.repeat(64) },
+    ] };
+  const snapshot = await createMemorySource(host(record)).load(1, 1, 'owner');
+  assert.deepEqual(snapshot.sources.map(source => source.label), ['chat-record']);
+});
 test('invalid UTF-8 attachments fail visibly rather than replacing bytes',async()=>{
   const record={sequence:0,type:'message',timestamp:new Date('2026-10-25'),author:{type:'user'},attachments:[{id:'txt',mimeType:'text/plain'}]};
   const h=host(record);h.attachment=async()=>Uint8Array.from([0xc3,0x28]);

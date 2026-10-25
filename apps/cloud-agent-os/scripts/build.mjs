@@ -141,6 +141,8 @@ try {
           'src/routes/-providers.test.tsx', 'src/OnboardingWizard.test.tsx',
           'src/features/agent-settings/AgentSettingsPanel.test.tsx',
           'src/features/bots/BotLibrary.test.tsx', 'src/features/bots/BotPicker.test.tsx',
+          'src/features/bots/botProfiles.test.tsx',
+          'src/features/bots/WorkspaceBotFlow.test.tsx',
           'src/features/bots/HomeBotFlow.test.tsx',
           'src/features/bots/BotsRoute.test.tsx',
           'src/features/bots/NativeMemoryNotice.test.tsx',

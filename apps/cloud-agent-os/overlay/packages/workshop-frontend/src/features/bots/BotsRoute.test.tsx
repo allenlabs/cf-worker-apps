@@ -3,11 +3,12 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { BotProfilesApi } from './botProfiles'
 
 const state = vi.hoisted(() => ({
   currentUser: null as { id: string } | null,
-  api: { listBotProfiles: vi.fn(), saveBotProfile: vi.fn() },
-  navigate: vi.fn(),
+  api: { listBotProfiles: vi.fn<BotProfilesApi['listBotProfiles']>(), saveBotProfile: vi.fn<BotProfilesApi['saveBotProfile']>() },
+  navigate: vi.fn<(options: unknown) => Promise<void>>(),
 }))
 vi.mock('../../AuthContext', () => ({ useAuthenticatedApi: () => ({ authenticatedApi: state.api, currentUser: state.currentUser }) }))
 vi.mock('@tanstack/react-router', async original => ({ ...await original<typeof import('@tanstack/react-router')>(), useNavigate: () => state.navigate }))

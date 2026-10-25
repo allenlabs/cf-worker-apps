@@ -1,7 +1,7 @@
 import type { MemoryPage, MemorySnapshot, MemorySourceRef, NativeMemorySource } from './native-memory';
 
 type CanonicalRecord = { sequence: number; type: string; timestamp: Date; author: { type: string };
-  toolCalls?: Array<{ archivedOutput?: { id: string }; sourceArtifactId?: string }>;
+  toolCalls?: Array<{ toolName?: string; archivedOutput?: { id: string }; sourceArtifactId?: string }>;
   attachments?: Array<{ id: string; mimeType: string }> };
 export interface MemorySourceHost {
   assertAccess(chatId: number, principal: string): void;
@@ -27,7 +27,10 @@ export function createMemorySource(host: MemorySourceHost): NativeMemorySource {
       const seen = new Set(sources.map(source=>source.id));
       // Raw records contain artifact references. Also ingest their acquired text, never just previews.
       for (const tool of record.toolCalls ?? []) {
-        for (const id of [tool.archivedOutput?.id, tool.sourceArtifactId]) {
+        // Recovery tools read already captured originals; replaying each page must not
+        // cause another full ingest of the same large artifact. Their page stays in the record.
+        const recovered = tool.toolName === 'readStoredText' || tool.toolName === 'readChatHistory';
+        for (const id of [tool.archivedOutput?.id, recovered ? undefined : tool.sourceArtifactId]) {
           if (id && !seen.has(id)) { seen.add(id); sources.push({id,label:'tool-result'}); }
         }
       }

@@ -1,15 +1,18 @@
 // @vitest-environment jsdom
 /* eslint-disable react/react-in-jsx-scope */
-import { act, useEffect, useState } from 'react'
+import { act, useEffect, useRef, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { BotProfile } from '@gadgets/workshop-shared/api'
+import type { AiChatAuthorInfo, BotProfile, Overseer } from '@gadgets/workshop-shared/api'
 import { useComposerDraft } from '../chat/composer/draft/useComposerDraft'
 import { composerDraftStorageKey, readComposerDraft, writeComposerDraft } from '../chat/composer/draft/composerDraft'
 
+type TestOverseer = Pick<Overseer, 'newChat'> & { getMetadata(): Promise<{ id: string }>; [Symbol.dispose](): void }
 const state = vi.hoisted(() => ({
-  listBotProfiles: vi.fn(), listModels: vi.fn(), newChat: vi.fn(), getMetadata: vi.fn(), dispose: vi.fn(), newGadget: vi.fn(),
-  navigate: vi.fn(), addToast: vi.fn(),
+  listBotProfiles: vi.fn<() => Promise<BotProfile[]>>(), listModels: vi.fn<() => Promise<AiChatAuthorInfo[]>>(),
+  newChat: vi.fn<Overseer['newChat']>(), getMetadata: vi.fn<TestOverseer['getMetadata']>(),
+  dispose: vi.fn<() => void>(), newGadget: vi.fn<() => TestOverseer>(),
+  navigate: vi.fn<(options: unknown) => Promise<void>>(), addToast: vi.fn<(options: unknown) => void>(),
   currentUser: { id: 'test-user' } as { id: string } | null,
 }))
 const api = { listBotProfiles: state.listBotProfiles, listModels: state.listModels, newGadget: state.newGadget }
@@ -30,9 +33,11 @@ vi.mock('../chat/composer/ChatComposer', () => ({ ChatComposer: (props: {
     draft.recordEdit()
     draft.replaceDocument({ text: value, capsules: [], formats: [], command: null })
   }
+  const setTextRef = useRef(setText)
+  setTextRef.current = setText
   const [error, setError] = useState('')
-  useEffect(() => { if (props.seedNonce !== undefined) setText(props.seedText ?? '') }, [props.seedNonce])
-  return <div><textarea aria-label="Prompt" role="combobox" value={text} onChange={event => setText(event.target.value)} />
+  useEffect(() => { if (props.seedNonce !== undefined) setTextRef.current(props.seedText ?? '') }, [props.seedNonce, props.seedText])
+  return <div><textarea aria-label="Prompt" value={text} onChange={event => setText(event.target.value)} />
     <button onClick={() => props.onModelChange('model-one')}>Choose test model</button>
     <button onClick={() => { void props.onSend(text || 'First task', 'model-one').catch(cause => setError(cause.message)) }}>Send test message</button>
     {props.blockedReason && <p>{props.blockedReason}</p>}{error && <p role="alert">{error}</p>}</div>

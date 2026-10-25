@@ -2,6 +2,10 @@
 
 ## Scope
 
+When native capture is configured, [Native Agent Memory](NATIVE_AGENT_MEMORY.md) and
+[Shared memory and main bot](SHARED_BOT_MEMORY.md) supersede the connected-MCP-only
+memory descriptions below. Without native configuration, those original behaviors remain.
+
 This branch adapts named roles, a bot library, conversation entry points, and repeated-tool-call
 protection from [bdots](https://github.com/fayazara/bdots/tree/ce94160cd9cf1544f1ab5ddcdfec4006eb151a7b).
 The existing OpenCode Workerd loop, provider selection, scoped resources, and authorization remain
