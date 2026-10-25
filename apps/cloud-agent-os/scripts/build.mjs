@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { ensureNativeMemoryNamespace } from './native-memory-config.mjs';
 import { readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
@@ -113,6 +114,7 @@ try {
           '__tests__/site-launch.test.ts', '__tests__/site-launch-agent.test.ts',
           '__tests__/opencode-loop.test.ts', '__tests__/agent-retry.test.ts',
           '__tests__/bot-profiles.test.ts', '__tests__/bot-chat.test.ts',
+          '__tests__/native-memory-contract.test.ts',
           '__tests__/lossless-context.test.ts', '__tests__/context-preservation.test.ts',
           '__tests__/recoverable-tools.test.ts', '__tests__/archived-replay.test.ts',
           '__tests__/code-output.test.ts', '__tests__/web-fetch.test.ts',
@@ -140,6 +142,7 @@ try {
           'src/features/bots/BotLibrary.test.tsx', 'src/features/bots/BotPicker.test.tsx',
           'src/features/bots/HomeBotFlow.test.tsx',
           'src/features/bots/BotsRoute.test.tsx',
+          'src/features/bots/NativeMemoryNotice.test.tsx',
           'src/ChatInterface.actions.test.tsx', 'src/ChatInterface.compaction.test.ts',
           'src/BlueprintLandingPage.test.tsx',
           'src/features/chat/composer/ComposerModelSelector.test.tsx',
@@ -155,6 +158,8 @@ try {
           cwd: join(checkout, 'packages/workshop-frontend'),
         });
       }
+      // Checking and planning never mutate the account. Provision before any real Worker upload.
+      if (values.deploy) await ensureNativeMemoryNamespace(config);
       const workers = [];
       const esbuild = artifactDir ? createRequire(requireUpstream.resolve('wrangler'))('esbuild') : undefined;
       for (const key of order) {

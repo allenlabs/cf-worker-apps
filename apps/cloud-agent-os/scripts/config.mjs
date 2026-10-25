@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { validateNativeMemory, configureNativeMemory } from './native-memory-config.mjs';
 import { configuredOAuthScope } from '../overlay/packages/mcp-shared/src/oauth-scope.ts';
 
 export const packages = Object.freeze({
@@ -48,7 +49,7 @@ function emails(value, name) {
 
 /** Parse private deployment input before creating any files or running a build. */
 export function parseDeployment(value) {
-  object(value, ['accountId', 'origin', 'workers', 'resources', 'auth', 'admins', 'modelBridge', 'mcp', 'mcpScopes', 'siteLaunch'], 'deployment');
+  object(value, ['accountId', 'origin', 'workers', 'resources', 'auth', 'admins', 'modelBridge', 'mcp', 'mcpScopes', 'siteLaunch', 'agentMemory'], 'deployment');
   text(value.accountId, 'accountId', /^[a-f0-9]{32}$/);
   const origin = https(value.origin, 'origin');
   assert(origin.origin === value.origin && !origin.port && !origin.hostname.endsWith('.workers.dev'),
@@ -156,6 +157,7 @@ export function parseDeployment(value) {
     }
     assert(new Set(parents).size === parents.length, 'siteLaunch.parentOrigins contains duplicates');
   }
+  validateNativeMemory(value);
   return structuredClone(value);
 }
 
@@ -248,6 +250,7 @@ export function generateConfigs(input, bases) {
     MCP_ALLOW_INSECURE: 'false',
     ...(config.mcpScopes ? { MCP_OAUTH_SCOPES: JSON.stringify(config.mcpScopes) } : {}),
   };
+  configureNativeMemory(result, config);
   return result;
 }
 
@@ -262,6 +265,7 @@ export function buildCommands(config) {
     task('@gadgets/gatekeeper-context'),
     ...(config.mcp ? [task('@gadgets/mcp-shared'), task('@gadgets/mcp-gatekeeper', 'build:configurator')] : []),
     task('@gadgets/workshop-frontend', 'build', {
+      VITE_NATIVE_AGENT_MEMORY: String(config.agentMemory !== undefined),
       VITE_CF_ACCESS_MODE: String(config.auth.mode === 'access'), VITE_CODEX_BRIDGE_MODEL: config.modelBridge.model,
       VITE_CODEX_BRIDGE_MANAGEMENT: config.modelBridge.management ?? 'user',
       VITE_SITE_LAUNCH_PARENT_ORIGINS: JSON.stringify(config.siteLaunch?.parentOrigins ?? []),

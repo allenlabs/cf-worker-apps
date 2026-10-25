@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { provisionFrozenNativeMemory } from './native-memory-config.mjs';
 import { spawnSync } from 'node:child_process';
 import { lstat, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -126,6 +127,10 @@ export async function uploadVerifiedArtifacts({ artifactDir, manifestDigest, con
   }
   // No real upload happens before this exclusive, fsynced marker. Never remove it on failure.
   await markUploadAttempt(attemptMarker, { apiVersion: 1, manifestDigest, workers: targets.map(value => value.key), startedAt: new Date().toISOString() });
+  if (targets.some(worker => worker.key === 'workshop')) {
+    await provisionFrozenNativeMemory({ bytes: await readFile(configFile),
+      expectedDigest: manifest.inputs.deployment.sha256, accountId: configs[0].account_id, fetchImpl });
+  }
   const workerVersions = {};
   for (const worker of targets) {
     await verifyArtifactManifest({ artifactDir, manifestDigest });
