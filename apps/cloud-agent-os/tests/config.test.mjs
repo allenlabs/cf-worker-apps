@@ -469,6 +469,13 @@ test('Access and public OAuth JWT checks and deployments need no OIDC secret fil
     const parser = join(dir, 'node_modules/jsonc-parser');
     await mkdir(parser, { recursive: true });
     await writeFile(join(parser, 'index.js'), 'exports.parse = JSON.parse;');
+    // The build check resolves Wrangler's deployment bundler before invoking the external
+    // bundle regression command. These fixtures cover resolution; run() remains recorded below.
+    for (const dependency of ['wrangler', 'esbuild']) {
+      const module = join(dir, 'node_modules', dependency);
+      await mkdir(module, { recursive: true });
+      await writeFile(join(module, 'index.js'), 'module.exports = {};');
+    }
     for (const [key, pkg] of Object.entries(packages)) {
       await mkdir(join(dir, pkg), { recursive: true });
       await writeFile(join(dir, pkg, 'wrangler.jsonc'), JSON.stringify(bases[key]));
@@ -500,6 +507,8 @@ test('Access and public OAuth JWT checks and deployments need no OIDC secret fil
       assert(deployments.every(command => !command.args.includes('--secrets-file')));
       assert(deployments.every(command => command.args.includes('--dry-run') === (mode === '--check')));
       if (mode === '--check') {
+        assert(commands.some(command => command.args.includes(join(dir, 'tests/code-output-bundle.test.mjs'))),
+          'Missing production bundle regression');
         assert.equal(commands.some(command => command.args.includes('__tests__/access.test.ts')), access);
         for (const file of ['src/useAuth.test.tsx', 'src/redirectLogin.test.tsx',
           'src/ConnectHandoffPage.test.tsx', 'src/components/auth/OAuthButtons.test.tsx', '__tests__/redirect-login.test.ts',

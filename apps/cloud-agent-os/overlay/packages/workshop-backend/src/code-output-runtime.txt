@@ -1,0 +1,263 @@
+// Canonical JavaScript for the isolated Worker. Import as text so host bundling cannot
+// inject helpers into the child module. Keep all runtime dependencies inside this module.
+function createCodeOutputCollector(options = {}) {
+  const hardLimit = 4 * 1024 * 1024;
+  const maxBytes = options.maxBytes ?? hardLimit;
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > hardLimit) throw new Error("Code output limit must be 1\u20134194304 bytes");
+  const encoder = new TextEncoder();
+  const events = [];
+  const errors = [];
+  const reported = /* @__PURE__ */ new Set();
+  const pending = /* @__PURE__ */ new Set();
+  const contexts = /* @__PURE__ */ new WeakMap();
+  let bytes = 0, errorBytes = 0;
+  let errorLimitReached = false;
+  let blocked;
+  let closed = false;
+  let installed;
+  let completion;
+  const validUnicode = (text) => {
+    for (let i = 0; i < text.length; i++) {
+      const code = text.charCodeAt(i);
+      if (code >= 55296 && code <= 56319) {
+        const next = text.charCodeAt(++i);
+        if (!(next >= 56320 && next <= 57343)) return false;
+      } else if (code >= 56320 && code <= 57343) return false;
+    }
+    return true;
+  };
+  // Diagnostics describe malformed strings with JSON escapes rather than replacement bytes.
+  const report = (error) => {
+    if (reported.has(error) || errorLimitReached) return;
+    reported.add(error);
+    let text;
+    try {
+      text = error instanceof Error ? error.stack ?? `${error.name}: ${error.message}` : String(error);
+      if (!validUnicode(text)) text = JSON.stringify(text);
+    } catch {
+      text = "Execution failed with an unreadable error value.";
+    }
+    const size = encoder.encode(text).byteLength;
+    if (errorBytes + size > hardLimit) {
+      errors.push("Additional exception details exceeded the error reporting limit and were not accepted.");
+      errorLimitReached = true;
+    } else {
+      errors.push(text);
+      errorBytes += size;
+    }
+  };
+  const reject = (message) => {
+    blocked ??= new Error(message);
+    report(blocked);
+    throw blocked;
+  };
+  // Snapshot arguments before the executed code can mutate them. This is a readable log
+  // representation with explicit cycle/accessor markers, not arbitrary object round-tripping.
+  const snapshot = (args, budget) => {
+    const parts = [];
+    const ancestors = /* @__PURE__ */ new Set();
+    let size = 0;
+    const append = (text) => {
+      if (!validUnicode(text)) reject("Code output contains invalid Unicode; the event was not accepted.");
+      size += encoder.encode(text).byteLength;
+      if (size > budget) reject(`Code output limit of ${maxBytes} bytes exceeded; the event was not accepted.`);
+      parts.push(text);
+    };
+    const value = (item, nested = true) => {
+      if (item === null) {
+        append("null");
+        return;
+      }
+      if (typeof item === "string") {
+        append(nested ? JSON.stringify(item) : item);
+        return;
+      }
+      if (typeof item === "bigint") {
+        append(`${item}n`);
+        return;
+      }
+      if (typeof item !== "object") {
+        append(String(item));
+        return;
+      }
+      if (ancestors.has(item)) {
+        append('"[Circular]"');
+        return;
+      }
+      ancestors.add(item);
+      try {
+        if (item instanceof Error) {
+          value(item.stack ?? `${item.name}: ${item.message}`, nested);
+          return;
+        }
+        if (item instanceof Date) {
+          append(JSON.stringify(Number.isNaN(item.valueOf()) ? "Invalid Date" : item.toISOString()));
+          return;
+        }
+        if (item instanceof RegExp) {
+          append(String(item));
+          return;
+        }
+        if (item instanceof Map) {
+          append("Map([");
+          let first = true;
+          for (const [key, entry] of item) {
+            if (!first) append(",");
+            first = false;
+            append("[");
+            value(key);
+            append(",");
+            value(entry);
+            append("]");
+          }
+          append("])");
+          return;
+        }
+        if (item instanceof Set) {
+          append("Set([");
+          let first = true;
+          for (const entry of item) {
+            if (!first) append(",");
+            first = false;
+            value(entry);
+          }
+          append("])");
+          return;
+        }
+        if (ArrayBuffer.isView(item)) {
+          const name = Object.prototype.toString.call(item).slice(8, -1);
+          append(`${name}(`);
+          value(Array.from(item instanceof DataView ? new Uint8Array(item.buffer, item.byteOffset, item.byteLength) : item));
+          append(")");
+          return;
+        }
+        const descriptors = Object.getOwnPropertyDescriptors(item);
+        if (Array.isArray(item)) {
+          append("[");
+          for (let i = 0; i < item.length; i++) {
+            if (i) append(",");
+            const descriptor = descriptors[String(i)];
+            if (!descriptor) append('"[Empty]"');
+            else if ("value" in descriptor) value(descriptor.value);
+            else append('"[Getter]"');
+          }
+          append("]");
+          return;
+        }
+        append("{");
+        const keys = Reflect.ownKeys(descriptors).filter((key) => descriptors[key].enumerable).sort((a, b) => String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0);
+        for (let i = 0; i < keys.length; i++) {
+          if (i) append(",");
+          const key = keys[i], descriptor = descriptors[key];
+          append(`${JSON.stringify(String(key))}:`);
+          if ("value" in descriptor) value(descriptor.value);
+          else append(descriptor.get ? '"[Getter]"' : '"[Setter]"');
+        }
+        append("}");
+      } finally {
+        ancestors.delete(item);
+      }
+    };
+    for (let i = 0; i < args.length; i++) {
+      if (i) append(" ");
+      value(args[i], false);
+    }
+    return parts.join("");
+  };
+  const write = (args) => {
+    if (closed) throw new Error("Code output capture is complete; late output was not accepted.");
+    if (blocked) throw blocked;
+    const separator = events.length ? 1 : 0;
+    if (bytes + separator > maxBytes) reject(`Code output limit of ${maxBytes} bytes exceeded; the event was not accepted.`);
+    const text = snapshot(args, maxBytes - bytes - separator);
+    // Accept only complete events after formatting, Unicode validation, and budget checks.
+    events.push(text);
+    bytes += encoder.encode(text).byteLength + separator;
+  };
+  return {
+    install(target) {
+      if (installed) {
+        if (installed !== target) throw new Error("Code output collector is already installed");
+        return;
+      }
+      installed = target;
+      for (const method of [
+        "log",
+        "info",
+        "warn",
+        "error",
+        "debug"
+      ]) {
+        const original = target[method].bind(target);
+        target[method] = (...args) => {
+          write(args);
+          if (options.mirror !== false) {
+            // UI tails may fail or truncate; their state cannot affect canonical acceptance.
+            try {
+              original(...args);
+            } catch {
+            }
+          }
+        };
+      }
+    },
+    context(ctx) {
+      const cached = contexts.get(ctx);
+      if (cached) return cached;
+      const proxy = new Proxy(ctx, {
+        get(target, property) {
+          // Native execution-context methods require the original context as their receiver.
+          const original = Reflect.get(target, property, target);
+          if (property === "waitUntil" && typeof original === "function") {
+            return (promise) => {
+              if (closed) throw new Error("Code output capture is complete; late background work was not accepted.");
+              let tracked;
+              tracked = Promise.resolve(promise).then(() => {
+                pending.delete(tracked);
+              }, (error) => {
+                report(error);
+                pending.delete(tracked);
+              });
+              pending.add(tracked);
+              original.call(target, tracked);
+            };
+          }
+          return typeof original === "function" ? original.bind(target) : original;
+        }
+      });
+      contexts.set(ctx, proxy);
+      return proxy;
+    },
+    run(callback) {
+      // One loaded Worker represents one execution. Repeated RPC calls return the same result
+      // without repeating effects. Hard isolate loss before this result arrives is not durable.
+      return completion ??= Promise.resolve().then(async () => {
+        try {
+          const returned = await callback();
+          if (returned !== void 0) write([
+            "Return value:",
+            returned
+          ]);
+        } catch (error) {
+          report(error);
+        }
+        // A background task can register further waitUntil work before it settles.
+        while (pending.size) await Promise.all([
+          ...pending
+        ]);
+        closed = true;
+        return {
+          output: events.join("\n"),
+          ...errors.length ? {
+            error: `${errors.join("\n\n")}
+
+Effects may already have occurred; do not automatically repeat this execution.`
+          } : {}
+        };
+      });
+    }
+  };
+}
+export {
+  createCodeOutputCollector
+};

@@ -6,7 +6,7 @@ export const REDIRECT_LOGIN_RECEIVED_KEY = 'gadgets.redirect-login-received'
 export const MANUAL_SIGN_IN_KEY = 'gadgets.manual-sign-in'
 const LIFETIME_MS = 30 * 60 * 1000
 const HEX_SECRET = /^[0-9a-f]{64}$/
-const NATIVE_PATH = /^\/(?:$|(?:admin|blueprints|context|explore|gatekeepers|outputs|profile|providers|workspaces)$|(?:workspace|gadget|gatekeepers)\/[^/]+$|launch$)/
+const NATIVE_PATH = /^\/(?:$|(?:admin|blueprints|bots|context|explore|gatekeepers|outputs|profile|providers|workspaces)$|(?:workspace|gadget|gatekeepers)\/[^/]+$|launch$)/
 
 type RedirectLogin = {
   nonce: string

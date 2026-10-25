@@ -1,0 +1,170 @@
+--- a/packages/workshop-backend/src/web-fetch.ts
++++ b/packages/workshop-backend/src/web-fetch.ts
+@@ -32,12 +32,12 @@
+ export type WebFetchInput = {
+   url: string;
+   /**
+-   * If true, return the exact response bytes (decoded as UTF-8) without any document
+-   * conversion. If false or omitted, supported document formats (HTML, PDF, DOCX, ...) are
++   * If true, decode complete UTF-8 text verbatim, including its BOM, without document
++   * conversion. Malformed UTF-8 is rejected. If false or omitted, supported formats (HTML, PDF, DOCX, ...) are
+    * converted to Markdown via env.WORKERS_AI.toMarkdown().
+    */
+   raw?: boolean;
+-  /** Caller-requested cap on body length (characters). Server enforces its own hard cap on top. */
++  /** Caller-requested response byte limit. Exceeding the server-capped limit rejects the fetch. */
+   maxBytes?: number;
+ };
+ 
+@@ -50,7 +50,7 @@
+ };
+ 
+ // Hard server-side limits.
+-const HARD_MAX_BYTES = 5 * 1024 * 1024;     // 5 MiB after which we always truncate
++const HARD_MAX_BYTES = 5 * 1024 * 1024;     // 5 MiB maximum complete response
+ const DEFAULT_MAX_BYTES = 1 * 1024 * 1024;  // 1 MiB default cap when caller didn't specify
+ const FETCH_TIMEOUT_MS = 30_000;
+ const USER_AGENT = "GadgetsWebFetch/1.0";
+@@ -86,8 +86,8 @@
+ }
+ 
+ // Read up to `maxBytes` from the body of a response. Returns the raw bytes (so callers can
+-// hand them to either a text decoder or a Blob) and a flag indicating whether the stream
+-// was truncated.
++// hand them to either a text decoder or a Blob). Oversized responses fail explicitly: a
++// truncated prefix is not a successful fetch and must never become its canonical record.
+ async function readBodyCapped(
+   response: Response,
+   maxBytes: number,
+@@ -108,14 +108,8 @@
+       if (!value) continue;
+ 
+       if (total + value.byteLength > maxBytes) {
+-        // Take a partial slice to fill the budget exactly, then stop.
+-        const remaining = maxBytes - total;
+-        if (remaining > 0) {
+-          chunks.push(value.subarray(0, remaining));
+-          total += remaining;
+-        }
+         truncated = true;
+-        break;
++        throw new Error(`Web response exceeds the limit of ${maxBytes} bytes; no complete response was returned.`);
+       }
+ 
+       chunks.push(value);
+@@ -143,7 +137,13 @@
+ }
+ 
+ function decodeUtf8(bytes: Uint8Array): string {
+-  return new TextDecoder("utf-8", { fatal: false, ignoreBOM: false }).decode(bytes);
++  try {
++    // A successful text fetch must round-trip the acquired bytes. Replacement characters or
++    // a stripped BOM would change the original before the chat can archive it.
++    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
++  } catch (error) {
++    throw new Error("Web response contains invalid UTF-8; refusing to replace or discard bytes.", { cause: error });
++  }
+ }
+ 
+ // Strip parameters from a Content-Type header (e.g. `text/html; charset=utf-8` -> `text/html`).
+@@ -272,6 +272,9 @@
+   const parsed = validateWebFetchUrl(input.url);
+ 
+   const requestedMax = input.maxBytes ?? DEFAULT_MAX_BYTES;
++  if (!Number.isFinite(requestedMax) || requestedMax < 1) {
++    throw new Error('Web fetch byte limit must be a finite positive number.');
++  }
+   const maxBytes = Math.min(
+     Math.max(1, Math.floor(requestedMax)),
+     HARD_MAX_BYTES,
+--- a/packages/workshop-backend/__tests__/web-fetch.test.ts
++++ b/packages/workshop-backend/__tests__/web-fetch.test.ts
+@@ -264,11 +264,8 @@
+     const toMarkdown = vi.fn();
+     const env = makeEnv(toMarkdown as unknown as ToMarkdownStub);
+ 
+-    const result = await webFetch(env, { url: "https://example.com/x.jpg" });
++    await expect(webFetch(env, { url: "https://example.com/x.jpg" })).rejects.toThrow(/UTF-8/);
+     expect(toMarkdown).not.toHaveBeenCalled();
+-    // Body is decoded as UTF-8 (with replacement chars for invalid sequences); the test
+-    // only cares that the call didn't go through toMarkdown.
+-    expect(typeof result.body).toBe("string");
+   });
+ });
+ 
+@@ -315,3 +312,75 @@
+     expect(out).toContain("content-type: (unspecified)");
+   });
+ });
++
++describe("webFetch complete response limit", () => {
++  const originalFetch = globalThis.fetch;
++  afterEach(() => { globalThis.fetch = originalFetch; });
++
++  it("rejects an oversized response rather than returning its prefix as a successful fetch", async () => {
++    let cancelled = false;
++    let position = 0;
++    const chunks = [new TextEncoder().encode('kept'), new TextEncoder().encode(' omitted')];
++    globalThis.fetch = vi.fn(async () => new Response(new ReadableStream({
++      pull(controller) {
++        const chunk = chunks[position++];
++        if (chunk) controller.enqueue(chunk);
++      },
++      cancel() { cancelled = true; },
++    }), { headers: { 'content-type': 'text/plain' } })) as typeof fetch;
++    await expect(webFetch(makeEnv(), { url: 'https://example.com/large', maxBytes: 4 }))
++        .rejects.toThrow(/exceeds.*4.*bytes/i);
++    expect(cancelled).toBe(true);
++  });
++
++  it("retains every Unicode character for a response exactly at the byte limit", async () => {
++    globalThis.fetch = vi.fn(async () => new Response('🧭')) as typeof fetch;
++    const result = await webFetch(makeEnv(), { url: 'https://example.com/exact', maxBytes: 4 });
++    expect(result.body).toBe('🧭');
++    expect(result.truncated).toBe(false);
++  });
++
++  it("does not convert an incomplete document", async () => {
++    globalThis.fetch = vi.fn(async () => new Response('<html>long document</html>', {
++      headers: { 'content-type': 'text/html' },
++    })) as typeof fetch;
++    const toMarkdown = vi.fn(async () => { throw new Error('Incomplete document reached converter'); });
++    await expect(webFetch(makeEnv(toMarkdown), { url: 'https://example.com/document', maxBytes: 4 }))
++        .rejects.toThrow(/exceeds.*4.*bytes/i);
++  });
++
++  it.each([NaN, Infinity, -1, 0])("rejects an invalid byte limit (%s) before fetching", async maxBytes => {
++    globalThis.fetch = vi.fn(async () => { throw new Error('Invalid limit reached network'); }) as typeof fetch;
++    await expect(webFetch(makeEnv(), { url: 'https://example.com/invalid', maxBytes }))
++        .rejects.toThrow(/byte limit must/i);
++  });
++});
++
++describe("webFetch exact UTF-8 text", () => {
++  const originalFetch = globalThis.fetch;
++  afterEach(() => { globalThis.fetch = originalFetch; });
++
++  it.each([
++    { raw: true, contentType: 'text/html' },
++    { raw: false, contentType: 'text/plain' },
++    { raw: false, contentType: 'application/json' },
++  ])("rejects invalid UTF-8 instead of silently replacing bytes (%j)", async ({ raw, contentType }) => {
++    // The lead byte is followed by ASCII instead of a continuation byte.
++    globalThis.fetch = vi.fn(async () => new Response(new Uint8Array([0x61, 0xc3, 0x28]), {
++      headers: { 'content-type': contentType },
++    })) as typeof fetch;
++    await expect(webFetch(makeEnv(), { url: 'https://example.com/malformed', raw }))
++        .rejects.toThrow(/invalid UTF-8/i);
++  });
++
++  it.each([true, false])("preserves the UTF-8 BOM in a complete text passthrough (raw=%s)", async raw => {
++    const original = new Uint8Array([0xef, 0xbb, 0xbf, 0x41, 0xf0, 0x9f, 0xa7, 0xad]);
++    globalThis.fetch = vi.fn(async () => new Response(original, {
++      headers: { 'content-type': 'text/plain' },
++    })) as typeof fetch;
++    const result = await webFetch(makeEnv(), { url: 'https://example.com/bom', raw });
++    expect(result.body).toBe('\ufeffA🧭');
++    expect(new TextEncoder().encode(result.body)).toEqual(original);
++    expect(result.truncated).toBe(false);
++  });
++});

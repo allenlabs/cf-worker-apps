@@ -11,6 +11,22 @@ instructions live here. Customer identities, domains, resource IDs and runtime a
 belong in a private deployment repository. OAuth grants and client secrets belong only in the
 secret manager and Worker secret bindings.
 
+## Reusable bots and recoverable context
+
+The **Bots** page creates personal bot profiles with a name, role, instructions, icon, conversation
+starters, and an optional connected-memory preference. Choose a bot on the home page, then choose
+the provider and model explicitly. Each new chat saves the selected revision, so editing or
+archiving a bot leaves existing conversations intact. Bot instructions become part of the chat
+and are visible to its workspace collaborators.
+
+Large acquired text is saved before the model receives a bounded page. Explicit history and text
+retrieval tools recover the complete records, including messages before context compaction.
+Size limits fail visibly; malformed UTF-8, network overflow, incomplete summaries, and repeated
+tool calls cannot silently replace complete data with a shortened prefix.
+
+See [bot workspaces and context preservation](docs/BOT_WORKSPACES.md) for the UI, memory semantics,
+storage boundaries, limit behavior, verification commands, and the bdots/Grok design references.
+
 ## Boundaries
 
 | Worker | Public route | State or dependency |

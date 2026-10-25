@@ -21,6 +21,27 @@ const prefixPattern = /^os_native_[a-f0-9]{32}_$/;
 const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
 const gate = <T>() => Promise.withResolvers<T>();
 
+/** Count exact JSON calls in the current user turn, including across canonical-history reloads. */
+function repeatedToolCallGuard(messages: readonly Message[]) {
+  let previous: string | undefined;
+  let consecutive = 0;
+  const repeated = (call: Extract<AssistantMessage['content'][number], { type: 'toolCall' }>) => {
+    const signature = JSON.stringify([call.name, call.arguments], (_key, value: unknown) =>
+      value !== null && typeof value === 'object' && !Array.isArray(value)
+        ? Object.fromEntries(Object.keys(value).sort().map(key => [key, (value as Record<string, unknown>)[key]]))
+        : value);
+    consecutive = signature === previous ? consecutive + 1 : 1;
+    previous = signature;
+    return consecutive > 5;
+  };
+  // Reading previous calls never re-executes them; a new user message starts a fresh streak.
+  for (let index = messages.findLastIndex(message => message.role === 'user') + 1; index < messages.length; index++) {
+    const message = messages[index];
+    if (message.role === 'assistant') for (const part of message.content) if (part.type === 'toolCall') repeated(part);
+  }
+  return repeated;
+}
+
 // OS owns persistence. Native session tables are disposable, never reused on restart.
 async function cleanOwned(storage: DurableObjectStorage, key: string) {
   const prefixes = await storage.get<string[]>(key) ?? [];
@@ -89,6 +110,7 @@ export async function runOpenCodeLoop(args: {
     },
   });
   const context: AgentContext = { ...args.context, messages: transportMessages, tools: scoped.tools };
+  const repeatedToolCall = repeatedToolCallGuard(transportMessages);
   const tools = new Map(scoped.tools.map(tool => [tool.name, tool]));
   for (let index = 0; index < transportMessages.length; index++) {
     const message = transportMessages[index];
@@ -118,10 +140,11 @@ export async function runOpenCodeLoop(args: {
   let committed = false;
   let stopped = false;
   let fatal: unknown;
+  let repeatedCallError: Error | undefined;
   let requests = 0;
   let results: ToolResultMessage[] = [];
   let tail = Promise.resolve();
-  const slots = new Map<string, { previous: Promise<void>; done: ReturnType<typeof gate<void>> }>();
+  const slots = new Map<string, { previous: Promise<void>; done: ReturnType<typeof gate<void>>; blocked?: string }>();
   const never = gate<void>();
   const fail = (error: unknown) => { fatal ??= error; };
   const publish = async (event: AgentEvent) => { try { await emit(event); } catch (error) { fail(error); throw error; } };
@@ -136,7 +159,8 @@ export async function runOpenCodeLoop(args: {
     for (const block of current.content) {
       if (block.type === 'toolCall' && !results.some(result => result.toolCallId === block.id)) {
         const part = assistant.content.find(part => part.type === 'tool' && part.id === block.id);
-        const error = part?.type === 'tool' && part.state.status === 'error' ? part.state.error.message : 'Operation aborted';
+        const error = slots.get(block.id)?.blocked ??
+          (part?.type === 'tool' && part.state.status === 'error' ? part.state.error.message : 'Operation aborted');
         results.push({ role: 'toolResult', toolCallId: block.id, toolName: block.name,
           content: [{ type: 'text', text: error }], isError: true, timestamp: Date.now() });
         await publish({ type: 'tool_execution_end', toolCallId: block.id, toolName: block.name,
@@ -150,7 +174,7 @@ export async function runOpenCodeLoop(args: {
     await publish({ type: 'turn_end', message: current, toolResults: results });
     committed = true;
     transportMessages.push(current, ...results);
-    return decision?.action === 'end';
+    return repeatedCallError !== undefined || decision?.action === 'end';
   };
 
   const language: LanguageModelV3 = {
@@ -191,9 +215,11 @@ export async function runOpenCodeLoop(args: {
                 for (const part of current.content) {
                   if (part.type !== 'toolCall') continue;
                   if (slots.has(part.id)) throw new Error('Provider reused a tool call ID');
+                  if (!repeatedCallError && repeatedToolCall(part)) repeatedCallError = new Error(
+                    'Agent stopped after five consecutive identical tool calls. The next call and remaining calls in this response were not executed.');
                   const done = gate<void>();
                   const previous = tail;
-                  slots.set(part.id, { previous, done }); tail = done.promise;
+                  slots.set(part.id, { previous, done, blocked: repeatedCallError?.message }); tail = done.promise;
                   if (!tools.has(part.name)) void previous.then(() => done.resolve());
                   pending.push({ type: 'tool-call', toolCallId: part.id, toolName: part.name, input: JSON.stringify(part.arguments) });
                 }
@@ -289,6 +315,7 @@ export async function runOpenCodeLoop(args: {
             let result: ToolResultMessage;
             try {
               if (!active || signal.aborted || nativeContext.signal.aborted) throw new Error('Operation aborted');
+              if (slot.blocked) throw new Error(slot.blocked);
               const call = current.content.find(part => part.type === 'toolCall' && part.id === nativeContext.id);
               if (!call || call.type !== 'toolCall' || call.name !== tool.name) throw new Error('Tool call identity mismatch');
               const params = validateToolArguments(tool, call);
@@ -337,6 +364,9 @@ export async function runOpenCodeLoop(args: {
     }
     if (!stopped && providerComplete && !committed && assistant) await commit(assistant);
     // Transport failures were delivered to the existing OS retry/error policy above.
+    // The completed provider step must keep its stop reason so the OS persists all paired results
+    // and prior effects. Surface the guard failure only after that durable turn_end barrier.
+    if (repeatedCallError && !signal.aborted) throw repeatedCallError;
 
   } finally {
     signal.removeEventListener('abort', abort);

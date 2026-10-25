@@ -46,6 +46,15 @@ describe('safe same-tab login return', () => {
     expect(takeRedirectLogin()?.returnTo).toBe('/providers')
     expect(window.open).not.toHaveBeenCalled()
   })
+  it.each(['/bots', '/?bot=11111111-1111-4111-8111-111111111111'])(
+    'preserves the bot destination through same-tab sign-in (%s)', async (returnTo) => {
+      window.history.replaceState(null, '', returnTo)
+      await mount(<RpcContext.Provider value={{ stub: api, connectionLost: false }}><LoginPage rpcStub={api} automaticOidc /></RpcContext.Provider>)
+      expect(startGatekeeperLogin).toHaveBeenCalledExactlyOnceWith('oidc', 'redirect')
+      expect(takeRedirectLogin()?.returnTo).toBe(returnTo)
+      expect(window.open).not.toHaveBeenCalled()
+    },
+  )
   it('keeps inline sign-in as a manual popup flow', async () => {
     await mount(<RpcContext.Provider value={{ stub: api, connectionLost: false }}><LoginPage rpcStub={api} /></RpcContext.Provider>)
     expect(startGatekeeperLogin).not.toHaveBeenCalled()
@@ -59,10 +68,11 @@ describe('safe same-tab login return', () => {
     expect(container.textContent).toContain('Continue with Example alternate')
   })
   it('allows normalized native routes and bounded subscription fragments only', () => {
-    for (const value of ['/', '/providers', '/workspace/42?chat=3#message', RETURN, '/gatekeeper/subscription#add']) expect(safeReturnPath(value)).toBe(value)
+    for (const value of ['/', '/bots', '/?bot=11111111-1111-4111-8111-111111111111', '/providers', '/workspace/42?chat=3#message', RETURN, '/gatekeeper/subscription#add']) expect(safeReturnPath(value)).toBe(value)
     for (const value of ['https://external.invalid/', '//external.invalid/', '/\\external.invalid/', '/workspace/../connect/handoff', '/connect/handoff',
       '/gatekeeper/oidc/oauth', '/api', '/auth/callback', '/signup', '/cdn-cgi/access/logout', '/%2fexternal.invalid', '/workspace/%2fexternal',
       '/workspace/%5cexternal', '/providers\n', '/providers#%00', '/providers#%7f', '/?sign_in=oidc', '/?return_to=%2f',
+      '/bots/../connect/handoff', '/bots%2fextra', '/bots?return_to=%2f',
       '/gatekeeper/subscription?token=x', '/gatekeeper/subscription#connection=unknown', '/providers#' + 'a'.repeat(2048)]) expect(safeReturnPath(value), value).toBeNull()
     expect(requestedSignInReturn(`?sign_in=oidc&return_to=${encodeURIComponent(RETURN)}`)).toBe(RETURN)
     expect(requestedSignInReturn('?sign_in=oidc&return_to=https%3A%2F%2Fexternal.invalid')).toBe('/')

@@ -57,6 +57,16 @@ try {
     // the disposable lockfile; upstream's tracked lockfile is never changed.
     run('pnpm', ['install', '--no-frozen-lockfile'], { cwd: checkout });
     const requireUpstream = createRequire(join(checkout, 'scripts/package.json'));
+    if (values.check) {
+      // Exercise the emitted child module with the actual deployment bundler. A function's
+      // toString() can otherwise capture keepNames/minification helpers from its host bundle.
+      run(process.execPath, ['--test', '--test-isolation=none',
+        join(wrapperRoot, 'tests/code-output-bundle.test.mjs')], {
+        cwd: wrapperRoot,
+        env: { ...process.env,
+          CLOUD_AGENT_OS_ESBUILD_MODULE: createRequire(requireUpstream.resolve('wrangler')).resolve('esbuild') },
+      });
+    }
     const { parse, printParseErrorCode } = requireUpstream('jsonc-parser');
     const bases = {};
     for (const key of order) {
@@ -91,6 +101,9 @@ try {
           cwd: join(checkout, 'packages/mcp-shared'),
         });
         run('pnpm', ['exec', 'vitest', 'run',
+          // The native Worker test pool loads the complete backend per file. Serialize files
+          // so verification remains reproducible on small build machines without dropping tests.
+          '--maxWorkers=1', '--no-file-parallelism',
           ...(config.auth.mode === 'access' ? ['__tests__/access.test.ts', '__tests__/client-errors.test.ts'] : []),
           '__tests__/subscription-models.test.ts', '__tests__/subscription-setup-session.test.ts',
           '__tests__/subscription-fast.test.ts', '__tests__/chat-fast-mode.test.ts',
@@ -99,6 +112,11 @@ try {
           '__tests__/user-models.test.ts', '__tests__/admin-settings-models.test.ts',
           '__tests__/site-launch.test.ts', '__tests__/site-launch-agent.test.ts',
           '__tests__/opencode-loop.test.ts', '__tests__/agent-retry.test.ts',
+          '__tests__/bot-profiles.test.ts', '__tests__/bot-chat.test.ts',
+          '__tests__/lossless-context.test.ts', '__tests__/context-preservation.test.ts',
+          '__tests__/recoverable-tools.test.ts', '__tests__/archived-replay.test.ts',
+          '__tests__/code-output.test.ts', '__tests__/web-fetch.test.ts',
+          '__tests__/git-binding.test.ts',
           '__tests__/agent-settings.test.ts', '__tests__/scoped-models.test.ts',
           '__tests__/scoped-agent-resources.test.ts', '__tests__/agent-principal.test.ts',
           '__tests__/agent-plugin-artifacts.test.ts', '__tests__/agent-plugin-runtime.test.ts',
@@ -119,6 +137,9 @@ try {
           'src/features/ai-models/SubscriptionDashboard.test.tsx',
           'src/routes/-providers.test.tsx', 'src/OnboardingWizard.test.tsx',
           'src/features/agent-settings/AgentSettingsPanel.test.tsx',
+          'src/features/bots/BotLibrary.test.tsx', 'src/features/bots/BotPicker.test.tsx',
+          'src/features/bots/HomeBotFlow.test.tsx',
+          'src/features/bots/BotsRoute.test.tsx',
           'src/ChatInterface.actions.test.tsx', 'src/ChatInterface.compaction.test.ts',
           'src/BlueprintLandingPage.test.tsx',
           'src/features/chat/composer/ComposerModelSelector.test.tsx',

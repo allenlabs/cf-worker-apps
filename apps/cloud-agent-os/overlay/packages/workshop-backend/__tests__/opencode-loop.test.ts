@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { createFauxCore, fauxAssistantMessage, fauxText, fauxToolCall, Type, getSystemMessageText } from '@earendil-works/pi-ai';
-import type { Message } from '@earendil-works/pi-ai';
+import type { Message, ToolResultMessage } from '@earendil-works/pi-ai';
 import { describe, expect, it } from 'vitest';
 import { runOpenCodeLoop } from '../src/opencode-loop';
 import './test-worker';
@@ -184,12 +184,12 @@ it('surfaces the native step limit after preserving the previous committed steps
     const storage = (instance as unknown as { impl: { ctx: DurableObjectState } }).impl.ctx.storage;
     const faux = createFauxCore({ models: [{ id: 'faux-model' }] });
     faux.setResponses(Array.from({ length: 64 }, (_, index) => fauxAssistantMessage(
-      fauxToolCall('read', {}, { id: `read-${index}` }), { stopReason: 'toolUse' })));
+      fauxToolCall('read', { index }, { id: `read-${index}` }), { stopReason: 'toolUse' })));
     let commits = 0;
     await expect(runOpenCodeLoop({ storage, chatId: 1, maxTokens: 1024, signal: new AbortController().signal,
       handle: { model: faux.getModel(), stream: faux.stream },
       context: { messages: [{ role: 'user', content: 'Synthetic task', timestamp: 0 }], tools: [{
-        name: 'read', label: 'Read', description: 'Synthetic read', parameters: Type.Object({}),
+        name: 'read', label: 'Read', description: 'Synthetic read', parameters: Type.Object({ index: Type.Number() }),
         async execute() { return { content: [{ type: 'text', text: 'Read' }], details: {} }; },
       }] }, finishTurn: () => undefined,
       async emit(event) { if (event.type === 'turn_end') commits++; },
@@ -197,3 +197,135 @@ it('surfaces the native step limit after preserving the previous committed steps
     expect(commits).toBe(64);
   });
 }, 30_000);
+
+it.each(['batch', 'steps'] as const)(
+  'blocks the sixth identical call before its effect and durably pairs every result in %s', async mode => {
+    await runInDurableObject(env.TEST_OVERSEER.getByName(`native-repeat-${mode}-${++count}`), async instance => {
+      const storage = (instance as unknown as { impl: { ctx: DurableObjectState } }).impl.ctx.storage;
+      const faux = createFauxCore({ models: [{ id: 'faux-model' }] });
+      const calls = Array.from({ length: 6 }, (_, index) => fauxToolCall('mutate', index % 2 === 0
+        ? { value: 1, nested: { first: 'kept', second: [1, 2] } }
+        : { nested: { second: [1, 2], first: 'kept' }, value: 1 }, { id: `same-${index + 1}` }));
+      const later = fauxToolCall('mutate', { value: 99, nested: { first: 'later', second: [] } }, { id: 'later' });
+      const responses = mode === 'batch'
+        ? [fauxAssistantMessage([...calls, later], { stopReason: 'toolUse' })]
+        : calls.map((call, index) => fauxAssistantMessage(index === 5 ? [call, later] : [call], { stopReason: 'toolUse' }));
+      const output = 'Complete tool output '.repeat(1024);
+      let requests = 0;
+      faux.setResponses([...responses.map(response => () => { requests++; return response; }),
+        () => { requests++; return fauxAssistantMessage(fauxText('Unexpected continuation')); }]);
+      const executions: string[] = [];
+      const ended: ToolResultMessage[] = [];
+      let caught = '';
+      try {
+        await runOpenCodeLoop({ storage, chatId: 1, maxTokens: 1024, signal: new AbortController().signal,
+          handle: { model: faux.getModel(), stream: faux.stream },
+          context: { messages: [{ role: 'user', content: 'Synthetic task', timestamp: 0 }], tools: [{
+            name: 'mutate', label: 'Mutation', description: 'Synthetic mutation',
+            parameters: Type.Object({ value: Type.Number(), nested: Type.Object({ first: Type.String(), second: Type.Array(Type.Number()) }) }),
+            async execute(id) {
+              executions.push(id);
+              return { content: [{ type: 'text', text: output }], details: { execution: id, output } };
+            },
+          }] },
+          finishTurn: () => undefined,
+          async emit(event) {
+            if (event.type === 'tool_execution_end') ended.push(event.result as ToolResultMessage);
+            if (event.type !== 'turn_end') return;
+            // Mirror the OS barrier: a provider failure cannot commit tool effects or results.
+            if (event.message.role !== 'assistant' || event.message.stopReason === 'error' || event.message.stopReason === 'aborted') return;
+            await scheduler.wait(1);
+            const transcript = await storage.get<Message[]>('guard-transcript') ?? [];
+            await storage.put('guard-transcript', [...transcript, event.message, ...event.toolResults]);
+            await storage.put('guard-effects', executions);
+          },
+        });
+      } catch (error) { caught = String(error); }
+      expect(executions).toEqual(['same-1', 'same-2', 'same-3', 'same-4', 'same-5']);
+      expect(await storage.get('guard-effects')).toEqual(executions);
+      expect(caught).toContain('consecutive identical tool calls');
+      expect(requests).toBe(mode === 'batch' ? 1 : 6);
+      const persisted = await storage.get<Message[]>('guard-transcript') ?? [];
+      const persistedCalls = persisted.flatMap(message => message.role === 'assistant'
+        ? message.content.filter(part => part.type === 'toolCall') : []);
+      expect(persistedCalls).toEqual([...calls, later]);
+      const results = persisted.filter((message): message is ToolResultMessage => message.role === 'toolResult');
+      expect(results.map(result => result.toolCallId)).toEqual(['same-1', 'same-2', 'same-3', 'same-4', 'same-5', 'same-6', 'later']);
+      expect(results.filter(result => !result.isError).map(result => result.content)).toEqual(
+        Array.from({ length: 5 }, () => [{ type: 'text', text: output }]));
+      expect(results.filter(result => !result.isError).map(result => result.details)).toEqual(
+        executions.map(id => ({ execution: id, output })));
+      expect(results.filter(result => result.isError).map(result => result.toolCallId)).toEqual(['same-6', 'later']);
+      expect(results[5].content).toEqual([{ type: 'text', text: expect.stringContaining('consecutive identical tool calls') }]);
+      expect(ended).toEqual(results);
+      expect(storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE name LIKE 'os_native_%'").toArray()).toEqual([]);
+    });
+  });
+
+it.each(['arguments', 'tool', 'array-order', 'value-type'] as const)(
+  'resets the consecutive call streak when %s changes', async change => {
+    await runInDurableObject(env.TEST_OVERSEER.getByName(`native-repeat-reset-${change}-${++count}`), async instance => {
+      const storage = (instance as unknown as { impl: { ctx: DurableObjectState } }).impl.ctx.storage;
+      const faux = createFauxCore({ models: [{ id: 'faux-model' }] });
+      const original = { value: 1, items: [1, 2] };
+      const changed = change === 'arguments' ? { value: 2, items: [1, 2] }
+        : change === 'array-order' ? { value: 1, items: [2, 1] }
+          : change === 'value-type' ? { value: '1', items: [1, 2] } : original;
+      const calls = [
+        ...Array.from({ length: 5 }, (_, index) => fauxToolCall('read', original, { id: `before-${index}` })),
+        fauxToolCall(change === 'tool' ? 'inspect' : 'read', changed, { id: 'changed' }),
+        ...Array.from({ length: 5 }, (_, index) => fauxToolCall('read', original, { id: `after-${index}` })),
+      ];
+      faux.setResponses([fauxAssistantMessage(calls, { stopReason: 'toolUse' }), fauxAssistantMessage(fauxText('Done'))]);
+      const executed: string[] = [];
+      const results: ToolResultMessage[] = [];
+      await runOpenCodeLoop({ storage, chatId: 1, maxTokens: 1024, signal: new AbortController().signal,
+        handle: { model: faux.getModel(), stream: faux.stream },
+        context: { messages: [{ role: 'user', content: 'Synthetic task', timestamp: 0 }],
+          tools: ['read', 'inspect'].map(name => ({ name, label: name, description: 'Synthetic read',
+            parameters: Type.Object({ value: Type.Union([Type.Number(), Type.String()]), items: Type.Array(Type.Number()) }),
+            async execute(id: string) { executed.push(id); return { content: [{ type: 'text' as const, text: id }], details: {} }; },
+          })) },
+        finishTurn: () => undefined,
+        async emit(event) { if (event.type === 'turn_end') results.push(...event.toolResults); },
+      });
+      expect(executed).toEqual(['before-0', 'before-1', 'before-2', 'before-3', 'before-4', 'changed',
+        'after-0', 'after-1', 'after-2', 'after-3', 'after-4']);
+      expect(results).toHaveLength(11);
+      expect(results.every(result => !result.isError)).toBe(true);
+    });
+  });
+
+it.each([false, true])('restores the streak from canonical history with a new user turn = %s', async newTurn => {
+  await runInDurableObject(env.TEST_OVERSEER.getByName(`native-repeat-resume-${newTurn}-${++count}`), async instance => {
+    const storage = (instance as unknown as { impl: { ctx: DurableObjectState } }).impl.ctx.storage;
+    const faux = createFauxCore({ models: [{ id: 'faux-model' }] });
+    const history: Message[] = [{ role: 'user', content: 'Original task', timestamp: 0 }];
+    for (let index = 0; index < 5; index++) {
+      const id = `committed-${index}`;
+      history.push(fauxAssistantMessage(fauxToolCall('mutate', { value: 1 }, { id }), { stopReason: 'toolUse' }),
+        { role: 'toolResult', toolCallId: id, toolName: 'mutate', content: [{ type: 'text', text: 'Already committed' }], isError: false, timestamp: 0 });
+    }
+    if (newTurn) history.push({ role: 'user', content: 'New task', timestamp: 1 });
+    faux.setResponses([fauxAssistantMessage(fauxToolCall('mutate', { value: 1 }, { id: 'current' }), { stopReason: 'toolUse' }),
+      fauxAssistantMessage(fauxText('Done'))]);
+    const executed: string[] = [];
+    const results: ToolResultMessage[] = [];
+    let caught = '';
+    try {
+      await runOpenCodeLoop({ storage, chatId: 1, maxTokens: 1024, signal: new AbortController().signal,
+        handle: { model: faux.getModel(), stream: faux.stream },
+        context: { messages: history, tools: [{ name: 'mutate', label: 'Mutation', description: 'Synthetic mutation',
+          parameters: Type.Object({ value: Type.Number() }),
+          async execute(id) { executed.push(id); return { content: [{ type: 'text', text: 'Current effect' }], details: {} }; },
+        }] },
+        finishTurn: () => undefined,
+        async emit(event) { if (event.type === 'turn_end') results.push(...event.toolResults); },
+      });
+    } catch (error) { caught = String(error); }
+    expect(executed).toEqual(newTurn ? ['current'] : []);
+    expect(caught).toEqual(newTurn ? '' : expect.stringContaining('consecutive identical tool calls'));
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ toolCallId: 'current', isError: !newTurn });
+  });
+});
