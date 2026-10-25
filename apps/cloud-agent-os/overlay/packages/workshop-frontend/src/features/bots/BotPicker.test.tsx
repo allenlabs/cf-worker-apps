@@ -4,7 +4,7 @@ import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { BotProfile } from '@gadgets/workshop-shared/api'
-import { BotPicker, BotSnapshotBadge, botSelectionFromProfiles, botIdFromSearch } from './BotPicker'
+import { BotPicker, BotSnapshotBadge, botSelectionFromProfiles, botIdFromSearch, preferredBotId } from './BotPicker'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 const profile: BotProfile = { id: '11111111-1111-4111-8111-111111111111', revision: 3, name: 'Research partner',
@@ -45,5 +45,22 @@ describe('bot selection', () => {
     await act(async () => root!.render(<BotSnapshotBadge bot={{ id: profile.id, revision: 2, name: 'Original research role', icon: 'search', instructions: 'Old instructions.', memory: 'off' }} />))
     expect(document.body.textContent).toContain('Original research role')
     expect(document.body.textContent).toContain('v2')
+  })
+})
+
+
+describe('main bot selection', () => {
+  it('defaults to the main bot without changing an explicitly selected Standard assistant', () => {
+    expect(preferredBotId(undefined,profile.id,false)).toBe(profile.id)
+    expect(preferredBotId(undefined,profile.id,true)).toBeUndefined()
+    expect(preferredBotId('22222222-2222-4222-8222-222222222222',profile.id,false)).toBe('22222222-2222-4222-8222-222222222222')
+    expect(preferredBotId(undefined,null,false)).toBeUndefined()
+  })
+  it('visually distinguishes a main bot in the picker', async () => {
+    const root = createRoot(document.body.appendChild(document.createElement('div')))
+    await act(async () => root.render(<BotPicker profiles={[profile]} status="ready" selectedId={profile.id}
+      mainBotId={profile.id} onChange={() => {}} onRetry={() => {}} />))
+    expect(document.body.querySelector('option[value="'+profile.id+'"]')?.textContent).toContain('Main')
+    await act(async () => root.unmount())
   })
 })

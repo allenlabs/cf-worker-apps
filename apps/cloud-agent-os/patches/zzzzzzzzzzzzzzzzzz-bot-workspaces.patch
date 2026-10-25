@@ -3,18 +3,20 @@
 @@ -1,3 +1,7 @@
 +import type { TextArtifactRef, TextArtifactPage } from './chat-archive';
 +export type { TextArtifactRef, TextArtifactPage, ChatRecordPage } from './chat-archive';
-+import type { BotProfile, BotProfileInput, BotProfileSnapshot, BotSelection } from './bot-profiles';
-+export type { BotProfile, BotProfileInput, BotProfileSnapshot, BotSelection } from './bot-profiles';
++import type { BotProfile, BotProfileInput, BotProfileSnapshot, BotSelection, MainBotSelection } from './bot-profiles';
++export type { BotProfile, BotProfileInput, BotProfileSnapshot, BotSelection, MainBotSelection } from './bot-profiles';
  import type { AgentJson, AgentSettingsView, AgentSettingsCommand, AgentProviderCatalog } from './agent-settings';
  export * from './agent-settings';
  
-@@ -513,6 +517,9 @@
+@@ -513,6 +517,11 @@
     * which case the change-password UI should be hidden.
     */
    hasPasswordLogin(): Promise<boolean>;
 +
 +  listBotProfiles(): Promise<BotProfile[]>;
 +  saveBotProfile(input: BotProfileInput, expectedRevision: number): Promise<BotProfile>;
++  getMainBot(): Promise<MainBotSelection>;
++  setMainBot(botId: string | null, expectedRevision: number): Promise<MainBotSelection>;
  
    getAgentSettings(): Promise<AgentSettingsView>;
    updateAgentSettings(command: AgentSettingsCommand): Promise<AgentSettingsView>;
@@ -73,16 +75,17 @@
  } | {
 --- a/packages/workshop-backend/src/user.ts
 +++ b/packages/workshop-backend/src/user.ts
-@@ -1,6 +1,8 @@
+@@ -1,6 +1,9 @@
  import { createScopedModelCatalog, parseScopedModelId } from './scoped-models';
  import type { AgentProviderCatalog } from '@gadgets/workshop-shared/api';
  import { RpcStub } from "capnweb";
 +import { sameBotInput, selectBotSnapshot, validateBotInput, validateBotRevision } from './bot-profiles';
-+import type { BotProfile, BotProfileInput, BotProfileSnapshot, BotSelection } from '@gadgets/workshop-shared/api';
++import { readMainBot, setMainBot, clearArchivedMainBot } from './main-bot';
++import type { BotProfile, BotProfileInput, BotProfileSnapshot, BotSelection, MainBotSelection } from '@gadgets/workshop-shared/api';
  import type { AgentSettingsView, AgentSettingsCommand } from '@gadgets/workshop-shared/api';
  import { GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, RedactedAiModelConfig, CollaboratorRole, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, GadgetMetadata, BlueprintMetadata, BlueprintLibrarySummary, BlueprintSource, BlueprintUserSummary, BLUEPRINT_SCREENSHOT_R2_PREFIX, GatekeeperVendorInfo, OutputSummary, ListOutputsResult, AUTH_ERROR_CODES, createAuthError, ConnectFlowStart, validateCommitEmail, validateDisplayName, AI_MODEL_PROVIDER_LABELS } from '@gadgets/workshop-shared/api';
  import { Gatekeeper, GatekeeperUser, GatekeeperUserVerifier, GatekeeperVendor, AccountDescription, VendorDescription, GatekeeperConnectCallback, ConnectHandoff, SupportedResource, ResourceConfiguratorFrame, AppUiContext, GatekeeperUiFrame } from "@gadgets/workshop-shared/gatekeeper";
-@@ -555,6 +557,35 @@
+@@ -555,6 +557,47 @@
      const userId = this.#modelUserId();
      if (!userId) throw new Error('Verified user required.');
      return userId;
@@ -91,6 +94,17 @@
 +  async listBotProfiles(): Promise<BotProfile[]> {
 +    this.#agentUserId();
 +    return [...this.storage.botProfiles.list()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));
++  }
++
++  async getMainBot(): Promise<MainBotSelection> {
++    this.#agentUserId();
++    return readMainBot(this.storage.mainBot);
++  }
++
++  async setMainBot(botId: string | null, expectedRevision: number): Promise<MainBotSelection> {
++    this.#agentUserId();
++    return this.ctx.storage.transactionSync(() => setMainBot(this.storage.mainBot,
++      new Map([...this.storage.botProfiles.list()].map(bot => [bot.id, bot])), botId, expectedRevision));
 +  }
 +
 +  async saveBotProfile(input: BotProfileInput, expectedRevision: number): Promise<BotProfile> {
@@ -108,6 +122,7 @@
 +      const profile: BotProfile = { ...draft, revision: expectedRevision + 1,
 +        createdAt: previous?.createdAt ?? now, updatedAt: now };
 +      this.storage.botProfiles.put(profile);
++      if (draft.archived) clearArchivedMainBot(this.storage.mainBot, draft.id);
 +      return profile;
 +    });
 +  }
@@ -123,11 +138,11 @@
 @@ -1,5 +1,6 @@
  import { RpcStub, RpcTarget, newHttpBatchRpcResponse, newWebSocketRpcSession, RpcSessionOptions } from "capnweb";
  import { validateRpc } from "capnweb-validate";
-+import type { BotProfile, BotProfileInput } from '@gadgets/workshop-shared/api';
++import type { BotProfile, BotProfileInput, MainBotSelection } from '@gadgets/workshop-shared/api';
  import type { AgentSettingsView, AgentSettingsCommand, AgentProviderCatalog } from '@gadgets/workshop-shared/api';
  import type { JWTPayload } from "jose";
  import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, RedactedAiModelConfig, AiGatewayInfo, AiModelProvider, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, UserDirectoryRecord, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES, AUTH_ERROR_CODES, createAuthError, ConnectFlowStart, GatekeeperLoginStart } from '@gadgets/workshop-shared/api';
-@@ -169,6 +170,12 @@
+@@ -169,6 +170,18 @@
    }
    hasPasswordLogin(): Promise<boolean> {
      return retryOnDoReset(() => this.#user.hasPasswordLogin());
@@ -137,21 +152,28 @@
 +  }
 +  saveBotProfile(input: BotProfileInput, expectedRevision: number): Promise<BotProfile> {
 +    return this.#user.saveBotProfile(input, expectedRevision);
++  }
++  getMainBot(): Promise<MainBotSelection> {
++    return retryOnDoReset(() => this.#user.getMainBot());
++  }
++  setMainBot(botId: string | null, expectedRevision: number): Promise<MainBotSelection> {
++    return this.#user.setMainBot(botId, expectedRevision);
    }
    getAgentSettings(): Promise<AgentSettingsView> {
      return retryOnDoReset(() => this.#user.getAgentSettings());
 --- a/packages/workshop-backend/src/storage-schema/user-storage.ts
 +++ b/packages/workshop-backend/src/storage-schema/user-storage.ts
 @@ -1,3 +1,4 @@
-+import type { BotProfile } from '@gadgets/workshop-shared/api';
++import type { BotProfile, MainBotSelection } from '@gadgets/workshop-shared/api';
  // The User Durable Object's storage schema: `makeUserStorage()` and the record types it stores.
  //
  // Everything a user's Durable Object persists is declared in this one file, so that a change to
-@@ -132,6 +133,7 @@
+@@ -132,6 +133,8 @@
  export function makeUserStorage(storage: DurableObjectStorage) {
    return createTypedStorage(storage, {
      collections: {
 +      botProfiles: collection<BotProfile>()({ primaryKey: "id" }),
++      mainBot: collection<MainBotSelection>()({ primaryKey: "key" }),
        aiModels: collection<UserAiModelRecord>()({
          primaryKey: record => record.profile.id,
        }),
@@ -792,7 +814,7 @@
 -
 -type HomeSearch = { prompt?: string };
 +import { composerDraftStorageKey, readComposerDraft } from "../features/chat/composer/draft/composerDraft";
-+import { BotPicker, botIdFromSearch, botSelectionFromProfiles } from "../features/bots/BotPicker";
++import { BotPicker, botIdFromSearch, botSelectionFromProfiles, preferredBotId } from "../features/bots/BotPicker";
 +import { useBotProfiles } from "../features/bots/botProfiles";
 +
 +type HomeSearch = { prompt?: string; bot?: string };
@@ -818,20 +840,25 @@
    useDocumentTitle("Home");
  
    const { authenticatedApi, currentUser } = useAuthenticatedApi();
-@@ -51,12 +54,40 @@
+@@ -51,12 +54,45 @@
    const [selectedModel, setSelectedModel] = useState<string | null | undefined>(undefined);
    // Bumped each time a task suggestion is picked; the composer re-seeds its text off the nonce.
    const [seed, setSeed] = useState<{ text: string; nonce: number } | null>(null);
 +  const botCatalog = useBotProfiles(authenticatedApi);
 +  const [selectedBotId, setSelectedBotId] = useState(bot);
++  const [botTouched, setBotTouched] = useState(false);
 +  const [promptNotice, setPromptNotice] = useState<string | null>(null);
 +  const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
 +  const composerHost = useRef<HTMLDivElement>(null);
 +  useEffect(() => { setSelectedBotId(bot); }, [bot]);
++  const effectiveBotId = preferredBotId(selectedBotId, botCatalog.mainBot?.botId, botTouched);
 +  const selectedBot = botCatalog.status === "ready"
-+    ? botCatalog.profiles.find(profile => profile.id === selectedBotId && !profile.archived) : undefined;
++    ? botCatalog.profiles.find(profile => profile.id === effectiveBotId && !profile.archived) : undefined;
 +  let botBlockedReason: string | undefined;
-+  try { botSelectionFromProfiles(selectedBotId, botCatalog.profiles, botCatalog.status); }
++  try {
++    if (botCatalog.status !== "ready" && !botTouched) throw new Error('Load your bot defaults before starting a chat.');
++    botSelectionFromProfiles(effectiveBotId, botCatalog.profiles, botCatalog.status);
++  }
 +  catch (error) { botBlockedReason = error instanceof Error ? error.message : "Choose an available bot before sending."; }
 +
 +  const pickPrompt = useCallback((text: string) => {
@@ -862,11 +889,12 @@
  
    useEffect(() => {
      let cancelled = false;
-@@ -116,12 +147,13 @@
+@@ -116,12 +147,14 @@
        if (selectedModel === undefined || (modelId !== null && (modelCatalogStatus !== "ready" || !models.some(model => model.id === modelId)))) {
          throw new Error("Choose a provider and model before starting a chat.");
        }
-+      const botSelection = botSelectionFromProfiles(selectedBotId, botCatalog.profiles, botCatalog.status);
++      if (botBlockedReason) throw new Error(botBlockedReason);
++      const botSelection = botSelectionFromProfiles(effectiveBotId, botCatalog.profiles, botCatalog.status);
        try {
          ensureProvisionalGadget();
          const overseer = provisionalOverseerRef.current!.stub;
@@ -882,7 +910,7 @@
        }
      },
 -    [ensureProvisionalGadget, navigate, toasts, selectedModel, models, modelCatalogStatus],
-+    [ensureProvisionalGadget, navigate, toasts, selectedModel, models, modelCatalogStatus, selectedBotId, botCatalog.profiles, botCatalog.status],
++    [ensureProvisionalGadget, navigate, toasts, selectedModel, models, modelCatalogStatus, effectiveBotId, botBlockedReason, botCatalog.profiles, botCatalog.status],
    );
  
    const getOverseer = useCallback((): RpcStub<Overseer> => {
@@ -898,9 +926,9 @@
            </p>
          </header>
  
-+        <BotPicker profiles={botCatalog.profiles} status={botCatalog.status} selectedId={selectedBotId}
++        <BotPicker profiles={botCatalog.profiles} status={botCatalog.status} selectedId={effectiveBotId} mainBotId={botCatalog.mainBot?.botId}
 +          onRetry={() => { void botCatalog.refresh(); }} onChange={id => {
-+            setSelectedBotId(id); setPromptNotice(null); setPendingPrompt(null);
++            setBotTouched(true); setSelectedBotId(id); setPromptNotice(null); setPendingPrompt(null);
 +            void navigate({ to: "/", search: id ? { bot: id } : {}, replace: true });
 +          }} />
 +
@@ -979,7 +1007,7 @@
  import type { ModelCatalogState } from "./features/chat/composer/ComposerModelSelector";
  import { ChatComposer } from "./features/chat/composer/ChatComposer";
  import { composerDraftStorageKey } from "./features/chat/composer/draft/composerDraft";
-+import { BotPicker, BotSnapshotBadge, botSelectionFromProfiles } from "./features/bots/BotPicker";
++import { BotPicker, BotSnapshotBadge, botSelectionFromProfiles, preferredBotId } from "./features/bots/BotPicker";
 +import { useBotProfiles } from "./features/bots/botProfiles";
  import {
    findUnresolvedConflicts, listConflictedFiles, type UnresolvedConflict,
@@ -1063,7 +1091,7 @@
      </div>
    );
  });
-@@ -2725,7 +2746,13 @@
+@@ -2725,7 +2746,18 @@
  }: ChatInterfaceProps) {
    // Persistent cache that survives reconnects
    const toasts = useKumoToastManager();
@@ -1071,18 +1099,24 @@
 +  const { currentUser, authenticatedApi } = useAuthenticatedApi();
 +  const botCatalog = useBotProfiles(authenticatedApi);
 +  const [newChatBotId, setNewChatBotId] = useState<string | undefined>();
-+  useEffect(() => { setNewChatBotId(undefined); }, [workspaceId]);
++  const [newChatBotTouched, setNewChatBotTouched] = useState(false);
++  useEffect(() => { setNewChatBotId(undefined); setNewChatBotTouched(false); }, [workspaceId]);
++  const effectiveNewChatBotId = preferredBotId(newChatBotId, botCatalog.mainBot?.botId, newChatBotTouched);
 +  let newChatBotBlockedReason: string | undefined;
-+  try { botSelectionFromProfiles(newChatBotId, botCatalog.profiles, botCatalog.status); }
++  try {
++    if (botCatalog.status !== "ready" && !newChatBotTouched) throw new Error('Load your bot defaults before starting a chat.');
++    botSelectionFromProfiles(effectiveNewChatBotId, botCatalog.profiles, botCatalog.status);
++  }
 +  catch (error) { newChatBotBlockedReason = error instanceof Error ? error.message : "Choose an available bot before sending."; }
    const getOverseer = useCallback(() => overseer, [overseer]);
    const cacheRef = useRef<ChatCache>({
      chats: new Map(),
-@@ -4067,9 +4094,11 @@
+@@ -4067,9 +4094,12 @@
      try {
        if (selectedChatId === null) {
          if (newChatModel === undefined) throw new Error("Choose a provider and model before starting a chat.");
-+        const botSelection = botSelectionFromProfiles(newChatBotId, botCatalog.profiles, botCatalog.status);
++        if (newChatBotBlockedReason) throw new Error(newChatBotBlockedReason);
++        const botSelection = botSelectionFromProfiles(effectiveNewChatBotId, botCatalog.profiles, botCatalog.status);
          // Create a new chat (with optional capsules).
 -        const newChatId = await overseer.newChat(
 -            message, model, capsules, attachments, formats, fastMode);
@@ -1092,13 +1126,14 @@
          setFastMode(newChatFastKey, false);
          setNewChatModel(undefined);
          onNavigateToChatRef.current(newChatId);
-@@ -4113,8 +4142,10 @@
+@@ -4113,8 +4142,11 @@
        throw new Error("Choose a provider and model before starting a chat.");
      }
      try {
 -      const newChatId = await overseer.newChat(
 -          message, model, capsules, attachments, formats, fastMode);
-+      const botSelection = botSelectionFromProfiles(newChatBotId, botCatalog.profiles, botCatalog.status);
++      if (newChatBotBlockedReason) throw new Error(newChatBotBlockedReason);
++      const botSelection = botSelectionFromProfiles(effectiveNewChatBotId, botCatalog.profiles, botCatalog.status);
 +      const newChatId = await (botSelection
 +        ? overseer.newChat(message, model, capsules, attachments, formats, fastMode, botSelection)
 +        : overseer.newChat(message, model, capsules, attachments, formats, fastMode));
@@ -1109,8 +1144,8 @@
        <div className="flex-shrink-0 border-t border-kumo-line">
          <div className={useConstrainedChatWidth ? "mx-auto w-full max-w-[920px]" : ""}>
            {/* Attachments and pending resource operations belong to this workspace's composer. */}
-+          <BotPicker profiles={botCatalog.profiles} status={botCatalog.status} selectedId={newChatBotId}
-+            onChange={setNewChatBotId} onRetry={() => { void botCatalog.refresh(); }} compact />
++          <BotPicker profiles={botCatalog.profiles} status={botCatalog.status} selectedId={effectiveNewChatBotId} mainBotId={botCatalog.mainBot?.botId}
++            onChange={id => { setNewChatBotTouched(true); setNewChatBotId(id); }} onRetry={() => { void botCatalog.refresh(); }} compact />
            <ChatComposer
              key={workspaceId}
              createCapsuleGatekeeper={(accountId, url) =>

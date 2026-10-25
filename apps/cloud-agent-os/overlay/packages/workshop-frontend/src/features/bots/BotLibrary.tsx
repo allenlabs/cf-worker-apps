@@ -14,6 +14,7 @@ export function BotLibrary({ api, onUseBot }: { api: BotProfilesApi; onUseBot: (
   const [archived, setArchived] = useState(false)
   const [editor, setEditor] = useState<Editor | null>(null)
   const [busy, setBusy] = useState(false)
+  const [changingMain, setChangingMain] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const actionLock = useRef(false)
@@ -22,7 +23,18 @@ export function BotLibrary({ api, onUseBot }: { api: BotProfilesApi; onUseBot: (
     return catalog.profiles.filter(profile => profile.archived === archived && (!search || `${profile.name}\n${profile.description}`.toLocaleLowerCase().includes(search)))
       .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt))
   }, [catalog.profiles, query, archived])
-  const disabled = busy || editor !== null || catalog.status !== 'ready'
+  const disabled = busy || changingMain || editor !== null || catalog.status !== 'ready'
+  const changeMain = async (id: string | null) => {
+    if (actionLock.current) return
+    actionLock.current = true; setChangingMain(true); setError(null); setNotice(null)
+    try {
+      await catalog.selectMain(id)
+      setNotice(id ? 'Main bot updated. New chats will use this bot by default.' : 'Main bot cleared. New chats will use Standard assistant.')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Main bot could not be updated.')
+      await catalog.refresh()
+    } finally { actionLock.current = false; setChangingMain(false) }
+  }
   const create = () => {
     setNotice(null); setError(null)
     setEditor({ expectedRevision: 0, initial: { id: crypto.randomUUID(), name: '', description: '', instructions: '', icon: 'spark', starterPrompts: [], memory: 'off', archived: false } })
@@ -61,13 +73,16 @@ export function BotLibrary({ api, onUseBot }: { api: BotProfilesApi; onUseBot: (
         </div>}
         {catalog.status === 'ready' && visible.length > 0 && <div className={`grid gap-4 ${editor ? 'md:grid-cols-2 xl:grid-cols-1' : 'md:grid-cols-2 2xl:grid-cols-3'}`}>
           {visible.map(profile => <article key={profile.id} aria-label={profile.name} className="flex min-w-0 flex-col rounded-2xl border border-kumo-line bg-kumo-base p-5 shadow-sm transition-shadow hover:shadow-md">
-            <div className="flex items-start gap-3"><BotIcon icon={profile.icon} /><div className="min-w-0 flex-1"><h2 className="break-words text-base font-semibold leading-6">{profile.name}</h2><p className="mt-0.5 text-xs text-kumo-subtle">Personal · v{profile.revision}{profile.archived ? ' · Archived' : ''}</p></div></div>
+            <div className="flex items-start gap-3"><BotIcon icon={profile.icon} /><div className="min-w-0 flex-1"><h2 className="break-words text-base font-semibold leading-6">{profile.name}</h2><p className="mt-0.5 text-xs text-kumo-subtle">{catalog.mainBot?.botId === profile.id ? 'Main bot · ' : ''}Personal · v{profile.revision}{profile.archived ? ' · Archived' : ''}</p></div></div>
             <p className="mt-4 whitespace-pre-wrap break-words text-sm leading-6 text-kumo-subtle">{profile.description || 'A saved role for your next conversation.'}</p>
             <div className="mt-4 flex flex-wrap gap-2 text-xs text-kumo-subtle"><span className="rounded-md bg-kumo-fill px-2 py-1">{profile.memory === 'connected' ? 'Connected memory' : 'Automatic recall off'}</span><span className="rounded-md bg-kumo-fill px-2 py-1">{profile.starterPrompts.length} starter {profile.starterPrompts.length === 1 ? 'prompt' : 'prompts'}</span></div>
             <div className="mt-auto flex flex-wrap items-center gap-2 pt-5">
               {profile.archived ? <Button disabled={disabled} aria-label={`Restore ${profile.name}`} onClick={() => void changeArchive(profile)}><ArrowCounterClockwise size={14} />Restore</Button>
                 : <Button variant="primary" disabled={disabled} aria-label={`Use ${profile.name}`} onClick={() => onUseBot(profile.id)}>Use bot<ArrowRight size={14} /></Button>}
               <Button disabled={disabled} aria-label={`Edit ${profile.name}`} onClick={() => setEditor({ initial: botProfileInput(profile), expectedRevision: profile.revision })}><PencilSimple size={14} />Edit</Button>
+              {!profile.archived && <Button disabled={disabled} aria-label={catalog.mainBot?.botId === profile.id ? `Clear main bot ${profile.name}` : `Make ${profile.name} main bot`}
+                onClick={() => void changeMain(catalog.mainBot?.botId === profile.id ? null : profile.id)}>
+                {catalog.mainBot?.botId === profile.id ? 'Unset main' : 'Make main'}</Button>}
               <Button disabled={disabled} aria-label={`Duplicate ${profile.name}`} onClick={() => setEditor({ initial: { ...botProfileInput(profile), id: crypto.randomUUID(), name: `${profile.name} copy`, archived: false }, expectedRevision: 0, duplicate: true })}><Copy size={14} />Duplicate</Button>
               {!profile.archived && <Button disabled={disabled} aria-label={`Archive ${profile.name}`} onClick={() => void changeArchive(profile)}><Archive size={14} />Archive</Button>}
             </div>

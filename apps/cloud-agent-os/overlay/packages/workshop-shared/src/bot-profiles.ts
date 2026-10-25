@@ -22,3 +22,6 @@ export type BotSelection = { id: string; revision: number };
 /** Immutable in a chat. Profile edits and archiving never rewrite prior conversations. */
 export type BotProfileSnapshot = Pick<BotProfile,
   'id' | 'revision' | 'name' | 'icon' | 'instructions' | 'memory'>;
+
+/** A single account-wide preference; changing it never mutates any conversation snapshot. */
+export type MainBotSelection = { key: 'main'; botId: string | null; revision: number };

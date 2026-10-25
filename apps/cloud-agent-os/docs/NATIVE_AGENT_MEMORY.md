@@ -1,5 +1,8 @@
 # Native Agent Memory for a private, single-user OS
 
+**Shared-memory extension:** [Shared memory and main bot](SHARED_BOT_MEMORY.md) supersedes
+single-profile search and single-destination ingest descriptions below in this branch.
+
 This mode adds automatic namespace/profile provisioning, checkpoint ingestion of complete saved
 text conversations, and per-bot memory to `feat/bdots-bot-workspaces`. It is opt-in deployment
 configuration. Without it, the existing connected-MCP preference and deployment behavior remain.

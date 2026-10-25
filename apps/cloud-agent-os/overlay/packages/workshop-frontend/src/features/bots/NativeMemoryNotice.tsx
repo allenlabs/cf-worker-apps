@@ -4,8 +4,8 @@ export function NativeMemoryNotice({ enabled = NATIVE_MEMORY_ENABLED }: { enable
   if (!enabled) return null
   return <div role="note" className="space-y-2 rounded-lg bg-kumo-fill p-3 text-xs leading-5 text-kumo-subtle">
     <p className="font-medium text-kumo-default">Automatic Cloudflare Agent Memory</p>
-    <p>This private deployment automatically sends complete saved text conversations to a separate profile for each bot. Profiles are created on first use. Names can change without losing memory.</p>
-    <p>The controls below affect recall only, not transcript capture. Original conversations stay in this workspace. Binary attachments remain here; their metadata and text attachments can be ingested.</p>
+    <p>This private deployment automatically sends complete saved text conversations to both a separate profile for each bot and a common profile for the owner. Profiles are created on first use; renaming a bot does not move its memory.</p>
+    <p>Default recall searches this bot and common memory. Selected or all-bot search is available when requested. The controls below affect recall only, not transcript capture. Original conversations stay in this workspace. Binary attachments remain here; their metadata and text attachments can be ingested.</p>
     <p>Ask for memory sync status to inspect pending records or retries. An accepted upload may still be indexing.</p>
   </div>
 }

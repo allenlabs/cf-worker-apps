@@ -9,6 +9,11 @@ export function botIdFromSearch(value: unknown): string | undefined {
   return value
 }
 
+/** A manually selected Standard assistant stays Standard even if a main bot exists. */
+export function preferredBotId(explicit: string | undefined, mainBotId: string | null | undefined, overridden: boolean): string | undefined {
+  return explicit ?? (overridden ? undefined : mainBotId ?? undefined)
+}
+
 export function botSelectionFromProfiles(id: string | undefined, profiles: BotProfile[], status: BotCatalogStatus): BotSelection | undefined {
   if (!id) return undefined
   if (status !== 'ready') throw new Error('Load your selected bot before starting a chat. Retry or explicitly choose Standard assistant.')
@@ -17,8 +22,8 @@ export function botSelectionFromProfiles(id: string | undefined, profiles: BotPr
   return { id: profile.id, revision: profile.revision }
 }
 
-export function BotPicker({ profiles, status, selectedId, onChange, onRetry, compact = false }: {
-  profiles: BotProfile[]; status: BotCatalogStatus; selectedId?: string
+export function BotPicker({ profiles, status, selectedId, mainBotId, onChange, onRetry, compact = false }: {
+  profiles: BotProfile[]; status: BotCatalogStatus; selectedId?: string; mainBotId?: string | null
   onChange: (id: string | undefined) => void; onRetry: () => void; compact?: boolean
 }) {
   const active = profiles.filter(profile => !profile.archived)
@@ -31,7 +36,7 @@ export function BotPicker({ profiles, status, selectedId, onChange, onRetry, com
           className="w-full min-w-0 rounded-md border border-kumo-line bg-kumo-base px-2 py-1.5 text-sm text-kumo-default outline-none focus:ring-2 focus:ring-kumo-brand/20">
           <option value="">Standard assistant</option>
           {selectedId && !selected && <option value={selectedId}>{status === 'loading' ? 'Selected bot · loading…' : 'Selected bot · unavailable'}</option>}
-          {active.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
+          {active.map(profile => <option key={profile.id} value={profile.id}>{profile.name}{mainBotId === profile.id ? ' · Main' : ''}</option>)}
         </select></div>
       <a href="/bots" className="text-xs font-medium text-kumo-subtle underline underline-offset-4 hover:text-kumo-default">Manage bots</a>
     </div>
