@@ -2,6 +2,7 @@
 /* eslint-disable react/react-in-jsx-scope */
 import { act, StrictMode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { RpcStub, RpcTarget } from 'capnweb'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BotProfile, BotProfileInput } from '@gadgets/workshop-shared/api'
 import { BotLibrary } from './BotLibrary'
@@ -56,6 +57,38 @@ describe('personal bot library', () => {
   })
   afterEach(async () => { await act(async () => root.unmount()); document.body.innerHTML = ''; vi.clearAllMocks() })
   const render = async () => { await act(async () => root.render(<BotLibrary api={api} onUseBot={onUseBot} />)) }
+
+  const rpcApi = (getMainBot = async () => ({ key: 'main' as const, botId: null, revision: 0 })) => new RpcStub(new class extends RpcTarget {
+    listBotProfiles() { return listBotProfiles() }
+    saveBotProfile(input: BotProfileInput, revision: number) { return saveBotProfile(input, revision) }
+    getMainBot() { return getMainBot() }
+  }())
+
+  it('enables creation when the callable RPC catalog has loaded', async () => {
+    using rpc = rpcApi()
+    profiles = []
+    await act(async () => root.render(<BotLibrary api={rpc} onUseBot={onUseBot} />))
+    expect(button('New bot').disabled).toBe(false)
+    await click('New bot')
+    expect(document.querySelector('form[aria-label="Bot profile"]')).not.toBeNull()
+  })
+
+  it.each(['profiles', 'main'] as const)('shows a retryable error when callable RPC %s lookup fails', async lookup => {
+    let failMain = lookup === 'main'
+    if (lookup === 'profiles') listBotProfiles.mockRejectedValueOnce(new Error('Catalog unavailable'))
+    using rpc = rpcApi(async () => {
+      if (failMain) throw new Error('Main bot unavailable')
+      return { key: 'main', botId: null, revision: 0 }
+    })
+    await act(async () => root.render(<BotLibrary api={rpc} onUseBot={onUseBot} />))
+    expect(document.body.textContent).toContain('Could not load your bots')
+    expect(document.body.textContent).not.toContain('Loading your bots')
+    expect(button('New bot').disabled).toBe(true)
+    failMain = false
+    await click('Retry loading bots')
+    expect(button('New bot').disabled).toBe(false)
+    expect(document.body.textContent).not.toContain('Could not load your bots')
+  })
 
   it('distinguishes loading, failure, retry and an empty library', async () => {
     let reject!: (error: Error) => void

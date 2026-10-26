@@ -35,10 +35,10 @@ export function useBotProfiles(api: Pick<BotProfilesApi, 'listBotProfiles' | 'ge
       if (request !== epoch.current) return
       setProfiles(next)
       setMainBotState(current => current && current.revision > main.revision ? current : main)
-      setLoadedFor(api); setStatus('ready')
+      setLoadedFor(() => api); setStatus('ready')
       return next
     } catch {
-      if (request === epoch.current) { setLoadedFor(api); setStatus('error') }
+      if (request === epoch.current) { setLoadedFor(() => api); setStatus('error') }
     }
   }, [api])
   useEffect(() => {
@@ -52,7 +52,7 @@ export function useBotProfiles(api: Pick<BotProfilesApi, 'listBotProfiles' | 'ge
     setProfiles(current => [...current.filter(item => item.id !== profile.id), profile])
     if (profile.archived) setMainBotState(current => current?.botId === profile.id
       ? { key: 'main', botId: null, revision: current.revision + 1 } : current)
-    setLoadedFor(api); setStatus('ready')
+    setLoadedFor(() => api); setStatus('ready')
   }, [api])
   const selectMain = useCallback(async (botId: string | null) => {
     if (currentApi.current !== api || !api.setMainBot || !mainBot || loadedFor !== api || status !== 'ready') {
