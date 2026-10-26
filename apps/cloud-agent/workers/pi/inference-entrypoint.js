@@ -8,6 +8,7 @@ const encoder = new TextEncoder();
 const INPUT_LIMIT = 1048576, FRAME_LIMIT = 524288, OUTPUT_LIMIT = 8388608;
 const DIAGNOSTIC_WIRE_LIMIT = 16777216; // Observation bound only; this does not limit provider transport.
 const SERVICE_TIERS = ["auto", "default", "flex", "scale", "priority", "fast", "ultrafast"];
+const CODEX_FAST_MODELS = new Set(["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]);
 const fail = code => { throw Error(code); };
 const text = z.string().max(262144);
 const jsonObject = z.record(z.string(), z.json());
@@ -177,8 +178,15 @@ export class CloudAgentInference extends WorkerEntrypoint {
   }
 
   async subscriptionModels() {
-    policy(this.env);
-    return this.env.Credentials.getByName("owner").subscriptionModels();
+    const configured = policy(this.env);
+    const catalog = await this.env.Credentials.getByName("owner").subscriptionModels();
+    return { ...catalog, connections: catalog.connections.map(connection => {
+      if (connection.provider !== "codex") return connection;
+      const supportsFast = configured.provider !== "siwc" && connection.ready === true && connection.source === "bundled-provider-catalog";
+      return { ...connection, models: connection.models.map(({ supportsFast: _upstreamFast, ...model }) => ({
+        ...model, ...(supportsFast && CODEX_FAST_MODELS.has(model.id) ? { supportsFast: true } : {}),
+      })) };
+    }) };
   }
 
   async infer(value) {
@@ -197,7 +205,9 @@ export class CloudAgentInference extends WorkerEntrypoint {
       if (!["siwc", "codex"].includes(status.provider)) fail("inference_bridge_account_unavailable");
       configured.provider = status.provider;
     }
-    if (input.options.serviceTier !== undefined && configured.provider !== "siwc") fail("inference_bridge_service_tier_unavailable");
+    if (input.options.serviceTier !== undefined && configured.provider === "codex" &&
+        !CODEX_FAST_MODELS.has(input.modelId ?? configured.modelId))
+      fail("inference_bridge_service_tier_unavailable");
     if (configured.provider === "codex" ? status.codexInferenceReady !== true : status.siwcInferenceReady !== true) fail("inference_bridge_account_unavailable");
     const models = createModels();
     const observed = { provider: configured.provider, credentialAccessFailed: false, fetchAttempted: false, responseReceived: false };
@@ -282,7 +292,7 @@ export class CloudAgentInference extends WorkerEntrypoint {
       },
       onPayload: body => {
         // streamSimple in the pinned SDK drops serviceTier before building the request.
-        if (configured.provider === "siwc" && input.options.serviceTier === "priority") body.service_tier = "priority";
+        if (input.options.serviceTier === "priority") body.service_tier = "priority";
         // Keep the exact provider JSON only for this call; native encoding forwards the original fetch arguments.
         if (configured.provider === "codex" && configured.requestEncoding === "identity") identityBody = JSON.stringify(body);
         try { observed.payload = codexPayloadShape(body); } catch { /* Observation cannot change payload. */ }

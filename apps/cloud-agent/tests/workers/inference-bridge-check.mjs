@@ -31,18 +31,20 @@ export class Probe extends WorkerEntrypoint {
  payload(){return globalThis.fixturePayload;}
  requestHeaders(){return globalThis.fixtureFetchHeaders;}
  credentialCalls(){return globalThis.fixtureCredentialCalls??0;}
+ catalogCalls(){return globalThis.fixtureCatalogCalls??0;}
  accessCalls(){return {codex:globalThis.fixtureCodexAccessCalls??0,siwc:globalThis.fixtureSiwcAccessCalls??0};}
  async native(context,siwc=false){const models=createModels();installSubscriptionModels(models,async()=>({async codexAccess(){return {access:${JSON.stringify(access)}};},async access(){return ${JSON.stringify(siwcAccess)};}}));const events=models.streamSimple(models.getModel(siwc?'openai':'openai-codex',${JSON.stringify(model)}),context,{...(siwc?{maxTokens:4096}:{reasoning:'low'}),signal:AbortSignal.timeout(3000)});for await(const event of events){}return events.result();}
  projectDiagnostic(value){return terminalDiagnostic(value);}
  checkExpiry(value){return credentialExpiry(value,1000000);}
  fetchAttempts(){return globalThis.fixtureFetchAttempts??0;}
- configure({mode='normal',observerThrows=false,responseMetadata={},retryLimit,status={}}={}){globalThis.fixtureCredentialMode=mode;globalThis.fixtureStatus=status;globalThis.fixtureObserverThrows=observerThrows;globalThis.fixtureResponseMetadata=responseMetadata;globalThis.fixtureRetryLimit=retryLimit;globalThis.fixtureFetchAttempts=0;globalThis.fixtureDiagnostics=[];globalThis.fixtureCodexAccessCalls=0;globalThis.fixtureSiwcAccessCalls=0;}
+ configure({mode='normal',observerThrows=false,responseMetadata={},retryLimit,status={},catalog}={}){globalThis.fixtureCredentialMode=mode;globalThis.fixtureStatus=status;globalThis.fixtureCatalog=catalog;globalThis.fixtureCatalogCalls=0;globalThis.fixtureObserverThrows=observerThrows;globalThis.fixtureResponseMetadata=responseMetadata;globalThis.fixtureRetryLimit=retryLimit;globalThis.fixtureFetchAttempts=0;globalThis.fixtureDiagnostics=[];globalThis.fixtureCodexAccessCalls=0;globalThis.fixtureSiwcAccessCalls=0;}
 }
 export default {fetch(){return new Response(null,{status:404});}};
 export class Faults extends WorkerEntrypoint {
  infer(input){const prompt=input.context.messages[0].content;return new ReadableStream({type:'bytes',start(c){c.enqueue(prompt==='invalid_utf8'?new Uint8Array([255]):new TextEncoder().encode(prompt==='oversized'?'x'.repeat(600000):'{"version":2}\\n'));c.close();}});}
 }
 export class Credentials extends DurableObject {
+ async subscriptionModels(){globalThis.fixtureCatalogCalls=(globalThis.fixtureCatalogCalls??0)+1;return globalThis.fixtureCatalog;}
  async status(){globalThis.fixtureCredentialCalls=(globalThis.fixtureCredentialCalls??0)+1;return {provider:'codex',inferenceReady:true,codexInferenceReady:true,siwcInferenceReady:true,connected:true,directUsageGranted:true,...globalThis.fixtureStatus};}
  async codexAccess(){globalThis.fixtureCodexAccessCalls=(globalThis.fixtureCodexAccessCalls??0)+1;if(globalThis.fixtureCredentialMode==='held_credential_failure'){await new Promise(resolve=>setTimeout(resolve,3500));throw Error('PRIVATE held credential failure');}if(globalThis.fixtureCredentialMode==='credential_failure')throw Error('PRIVATE credential failure');return {access:globalThis.fixtureCredentialMode==='setup_failure'?'PRIVATE invalid credential':${JSON.stringify(access)}};}
  async access(){globalThis.fixtureSiwcAccessCalls=(globalThis.fixtureSiwcAccessCalls??0)+1;if(globalThis.fixtureCredentialMode==='credential_failure')throw Error('PRIVATE legacy credential failure');return ${JSON.stringify(siwcAccess)};}
@@ -56,6 +58,8 @@ export default {async fetch(request,env){
   if(input.payload)return Response.json(await env.PROBE.payload());
   if(input.requestHeaders)return Response.json(await env.PROBE.requestHeaders());
   if(input.credentialCalls)return Response.json({count:await env.PROBE.credentialCalls()});
+  if(input.catalogCalls)return Response.json({count:await env.PROBE.catalogCalls()});
+  if(input.subscriptionModels)return Response.json(await env.CODEX_BRIDGE.subscriptionModels());
   if(input.accessCalls)return Response.json(await env.PROBE.accessCalls());
   if(input.nativeProvider)return Response.json(await env.PROBE.native(input.context,input.siwc));
   if(input.projectDiagnostic)return Response.json(await env.PROBE.projectDiagnostic(input.projectDiagnostic));
@@ -88,7 +92,7 @@ const bundle = async (file, piDirectory) => build({
 });
 await bundle("server.js", join(root, "node_modules/@earendil-works/pi-ai"));
 await bundle("client.ts", upstream ? join(upstream, "packages/workshop-backend/node_modules/@earendil-works/pi-ai") : join(root, "node_modules/@earendil-works/pi-ai"));
-let calls = 0, seenToolOutput = false, lastNative, lastWire, expectedProvider = "codex";
+let calls = 0, seenToolOutput = false, lastNative, lastWire, expectedProvider = "codex", expectedModel = model;
 let responseModelFixture, retryResponse = false;
 const sse = (events) => new Response(events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
 const outbound = async request => {
@@ -99,7 +103,7 @@ const outbound = async request => {
   lastWire = { encoding: request.headers.get("content-encoding") ?? "identity", byteLength: bytes.byteLength, headers: Object.fromEntries(request.headers), json: request.headers.get("content-encoding") === "zstd" ? zstdDecompressSync(bytes).toString() : bytes.toString() };
   const body = JSON.parse(lastWire.json);
   lastNative = body;
-  assert.equal(body.model, model);
+  assert.equal(body.model, expectedModel);
   if (retryResponse) { retryResponse = false; return new Response('Fixture temporary failure', { status: 503, headers: { 'content-type': 'application/json', 'retry-after-ms': '0' } }); }
   seenToolOutput ||= body.input.some(item => item.type === "function_call_output" && item.output.includes("READ_ONLY_OK"));
   if (JSON.stringify(body).includes("provider_denial")) return new Response("secret raw provider failure", { status: 403, headers: { "content-type": "application/json", "x-request-id": "PRIVATE-request-id", "cf-ray": "PRIVATE-ray-id-HKG", "server":"cloudflare" } });
@@ -156,13 +160,79 @@ const checkDiagnostic = async expected => {
   return record;
 };
 try {
+  const codexModels = [
+    { id: "gpt-6.1-sol", name: "Sol 6.1" },
+    { id: "gpt-6-astra", name: "Astra", supportsFast: false },
+    { id: "gpt-6-sol", name: "Sol", supportsFast: true },
+    { id: "gpt-6-luna", name: "Luna" },
+    { id: "future-unverified-model", name: "Future", supportsFast: true },
+    { id: "gpt-6.1-sol-future", name: "Dated future", supportsFast: false },
+  ];
+  const plainCodexModels = codexModels.map(({ supportsFast, ...entry }) => entry);
+  const capableCodexModels = [
+    { id: "gpt-6.1-sol", name: "Sol 6.1", supportsFast: true },
+    { id: "gpt-6-astra", name: "Astra", supportsFast: true },
+    { id: "gpt-6-sol", name: "Sol", supportsFast: true },
+    { id: "gpt-6-luna", name: "Luna", supportsFast: true },
+    { id: "future-unverified-model", name: "Future" },
+    { id: "gpt-6.1-sol-future", name: "Dated future" },
+  ];
+  const readyCodex = { id: "owner", label: "Fixture Codex", provider: "codex", ready: true,
+    source: "bundled-provider-catalog", entitlementVerified: false, models: codexModels };
+  const siwc = { id: "account-00000000-0000-4000-8000-000000000001", label: "Fixture SIWC", provider: "siwc", ready: true,
+    source: "provider-account-catalog", entitlementVerified: true,
+    models: [{ id: model, name: "Account Fast", supportsFast: true }, { id: "gpt-6-luna", name: "Account Standard", supportsFast: false }, { id: "gpt-6-sol", name: "No account tier" }] };
+  for (const provider of [undefined, "codex", "auto", "siwc"]) {
+    await mf.setOptions(convertV4MiniflareOptions({ workers: [client, { ...server, bindings: { ...server.bindings,
+      ...(provider === undefined ? {} : { INFERENCE_BRIDGE_PROVIDER: provider }) } }] }));
+    const unavailable = [
+      { ...readyCodex, id: "account-00000000-0000-4000-8000-000000000002", ready: false },
+      { ...readyCodex, id: "account-00000000-0000-4000-8000-000000000003", source: "provider-account-catalog" },
+      { ...readyCodex, id: "account-00000000-0000-4000-8000-000000000004", ready: "true" },
+      { ...readyCodex, id: "account-00000000-0000-4000-8000-000000000005", ready: null },
+    ];
+    const catalog = { source: "subscription-provider-catalog", connections: [readyCodex, siwc, ...unavailable] };
+    await invoke({ configure: { catalog } });
+    const before = calls, credentialsBefore = (await invoke({ credentialCalls: true })).data.count;
+    const advertised = await invoke({ subscriptionModels: true });
+    assert.equal(advertised.status, 200, JSON.stringify(advertised));
+    assert.deepEqual(advertised.data, { source: "subscription-provider-catalog", connections: [
+      { ...readyCodex, models: provider === "siwc" ? plainCodexModels : capableCodexModels },
+      siwc,
+      ...unavailable.map(row => ({ ...row, models: plainCodexModels })),
+    ] }, "only bridge-supported, ready bundled Codex models advertise Fast; existing catalog shape, ordering and SIWC flags survive");
+    assert.equal((await invoke({ catalogCalls: true })).data.count, 1, "one existing safe catalog lookup");
+    assert.equal((await invoke({ credentialCalls: true })).data.count, credentialsBefore, "capability projection adds no status lookup");
+    assert.deepEqual((await invoke({ accessCalls: true })).data, { codex: 0, siwc: 0 }, "capability projection never accesses a bearer");
+    assert.equal(calls, before, "capability projection adds no provider HTTP");
+  }
+  console.log("inference bridge Fast catalog checks passed: default/Codex/auto capability, SIWC policy refusal, readiness/provenance gates, unsupported/forged flag removal, unchanged SIWC metadata and existing catalog shape, one safe lookup and no extra auth/network");
   for (const provider of ["codex", "auto"]) {
     await mf.setOptions(convertV4MiniflareOptions({ workers: [client, { ...server, bindings: { ...server.bindings, INFERENCE_BRIDGE_PROVIDER: provider } }] }));
     await invoke({ configure: {} });
+    const standard = await invoke({ bridge: wire({}) });
+    assert.equal(standard.data.result.stopReason, "stop");
+    const ordinary = structuredClone(lastNative);
+    const priority = await invoke({ bridge: wire({ options: { serviceTier: "priority" } }) });
+    assert.equal(priority.status, 200, JSON.stringify(priority));
+    assert.equal(priority.data.result.stopReason, "stop");
+    assert.equal(lastNative.service_tier, "priority", "Codex Fast reaches the actual authenticated serializer");
+    const { service_tier, ...unchanged } = lastNative;
+    assert.deepEqual(unchanged, ordinary, "Codex Fast changes no reasoning or content fields");
+    for (const selectedModel of ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]) {
+      expectedModel = selectedModel;
+      const supported = await invoke({ bridge: wire({ modelId: selectedModel, options: { serviceTier: "priority" } }) });
+      assert.equal(supported.status, 200, JSON.stringify(supported));
+      assert.equal(supported.data.result.stopReason, "stop");
+      assert.equal(lastNative.model, selectedModel, "every advertised Codex model reaches its own installed provider model");
+      assert.equal(lastNative.service_tier, "priority", "every advertised Codex model admits and serializes Fast");
+    }
+    expectedModel = model;
+    await invoke({ configure: {} });
     const before = calls;
-    const rejected = await invoke({ admission: wire({ options: { serviceTier: "priority" } }) });
+    const rejected = await invoke({ admission: wire({ modelId: "future-unverified-model", options: { serviceTier: "priority" } }) });
     assert.equal(rejected.status, 400);
-    assert.equal(rejected.data.error, "inference_bridge_service_tier_unavailable", "priority is rejected for resolved Codex before bearer access");
+    assert.equal(rejected.data.error, "inference_bridge_service_tier_unavailable", "Codex rejects unverified models before bearer access");
     assert.equal(calls, before);
     assert.deepEqual((await invoke({ accessCalls: true })).data, { codex: 0, siwc: 0 });
   }
@@ -249,7 +319,7 @@ try {
     assert(lastNative.input.some(item => item.type === "function_call_output" && item.output.includes("READ_ONLY_OK")));
     assert.deepEqual((await invoke({ diagnostics: true })).data, [], "tier metadata adds no success diagnostics");
   }
-  console.log("inference bridge Fast checks passed: strict priority and SIWC-only transport, exact installed SDK serialization, Standard parity, terminal tier allowlist, requested/actual separation, model independence, spoof/malformed/conflict refusal, tool results and retry isolation");
+  console.log("inference bridge Fast checks passed: strict priority and allowlisted Codex/SIWC transport, exact installed SDK serialization, Standard parity, terminal tier allowlist, requested/actual separation, model independence, spoof/malformed/conflict refusal, tool results and retry isolation");
   expectedProvider = "codex";
   for (const provider of ["", "unknown", "openai", "Codex"]) {
     await mf.setOptions(convertV4MiniflareOptions({ workers: [client, { ...server, bindings: { ...server.bindings, INFERENCE_BRIDGE_PROVIDER: provider } }] }));

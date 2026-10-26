@@ -1,0 +1,1069 @@
+diff --git a/packages/workshop-backend/__tests__/ai-gateway.test.ts b/packages/workshop-backend/__tests__/ai-gateway.test.ts
+index e53e078..09e5f46 100644
+--- a/packages/workshop-backend/__tests__/ai-gateway.test.ts
++++ b/packages/workshop-backend/__tests__/ai-gateway.test.ts
+@@ -31,7 +31,7 @@ describe("Gateway model display names", () => {
+     const id = "claude-fable-5-1";
+     const models = new GatewayModels(gateway, { ...DEFAULT_ADMIN_CONFIG,
+       providerDisplayNames: { anthropic: "Research" }, modelDisplayNames: { [id]: "Writing" } });
+-    const profile = { type: "agent", id, name: "Writing", providerDisplayName: "Research", provider: { id: "gateway:anthropic", name: "Research", source: "Organization" } };
++    const profile = { type: "agent", fastModeDescription: "Fast is not available. The provider does not document Fast support for this model.", id, name: "Writing", providerDisplayName: "Research", provider: { id: "gateway:anthropic", name: "Research", source: "Organization" } };
+     expect(models.get(id)?.name).toBe("Writing");
+     expect(models.list().find(model => model.id === id)).toEqual(profile);
+     expect(models.resolve(id)?.profile).toEqual(profile);
+@@ -40,6 +40,20 @@ describe("Gateway model display names", () => {
+   });
+ });
+ 
++describe("legacy bridge Gateway presentation", () => {
++  it("does not advertise native Fast when the deployment routes through a legacy bridge", async () => {
++    for (const management of ["user", undefined]) {
++      const legacy = { ...env({ CF_AI_GATEWAY_ACCOUNT_ID: "fixture-account", CF_AI_GATEWAY_API_TOKEN: "synthetic",
++        BLUEPRINTS: { get: async () => serializeAdminConfig(DEFAULT_ADMIN_CONFIG) } as unknown as KVNamespace }),
++        CODEX_BRIDGE: {}, CODEX_BRIDGE_MANAGEMENT: management, CODEX_BRIDGE_MODEL: "gpt-6.1-sol" };
++      const models = await getGatewayModels(legacy);
++      const profile = models!.list().find(row => row.id === "gpt-6.1-sol")!;
++      expect(profile.supportsFast).not.toBe(true);
++      expect(profile.fastModeDescription).toMatch(/Legacy.*account|legacy.*account/);
++    }
++  });
++});
++
+ describe("AiGatewayConfig transport selection", () => {
+   const binding = { gateway: () => ({}) } as unknown as Ai;
+   // google needs the HTTPS+token transport, so token-less configs must not enable it.
+@@ -219,7 +233,8 @@ describe("GatewayModels", () => {
+   it("still resolves a hidden model that it doesn't list", () => {
+     const record = gatewayModels().resolve("gpt-6-sol");
+     expect(record).toStrictEqual({
+-      profile: { type: "agent", id: "gpt-6-sol", name: "GPT-6 Sol", provider: { id: "gateway:openai", name: "OpenAI", source: "Organization" } },
++      profile: { type: "agent", supportsFast: true,
++        fastModeDescription: "OpenAI Priority has premium per-token prices and requires eligible API access. GPT-5.4/5.5 require context below 272K tokens. Delivered speed is provider-dependent.", id: "gpt-6-sol", name: "GPT-6 Sol", provider: { id: "gateway:openai", name: "OpenAI", source: "Organization" } },
+       config: { provider: "openai", model: "gpt-6-sol", apiToken: "" },
+     });
+     expect(getModel(gatewayEnv(), record!.config, USER).model.id).toBe("gpt-6-sol");
+@@ -295,7 +310,7 @@ describe("GatewayModels", () => {
+     const models = gatewayModels({ addedModels: ADDED });
+     const record = models.resolve("@cf/test/added");
+     expect(record).toStrictEqual({
+-      profile: { type: "agent", id: "@cf/test/added", name: "Added (Workers AI)", provider: { id: "gateway:cloudflare", name: "Cloudflare Workers AI", source: "Organization" } },
++      profile: { type: "agent", fastModeDescription: "Fast is not available. Workers AI does not expose a documented Fast processing tier.", id: "@cf/test/added", name: "Added (Workers AI)", provider: { id: "gateway:cloudflare", name: "Cloudflare Workers AI", source: "Organization" } },
+       config: {
+         provider: "cloudflare", model: "@cf/test/added", apiToken: "",
+         contextWindow: 100000, outputLimit: 8000,
+@@ -364,7 +379,7 @@ describe("GatewayModels", () => {
+     const added = gatewayModels(
+         { addedModels: [{ provider: "anthropic", id, name: "Odd", contextWindow: 1000 }] });
+     expect(added.get(id)).toMatchObject({ mode: "enabled", defaultMode: "enabled", added: true });
+-    expect(added.resolve(id)?.profile).toEqual({ type: "agent", id, name: "Odd", provider: { id: "gateway:anthropic", name: "Anthropic", source: "Organization" } });
++    expect(added.resolve(id)?.profile).toEqual({ type: "agent", fastModeDescription: "Fast is not available. The provider does not document Fast support for this model.", id, name: "Odd", provider: { id: "gateway:anthropic", name: "Anthropic", source: "Organization" } });
+   });
+ 
+   describe("settings", () => {
+diff --git a/packages/workshop-backend/__tests__/chat-fast-mode.test.ts b/packages/workshop-backend/__tests__/chat-fast-mode.test.ts
+index 60a3d30..19b8149 100644
+--- a/packages/workshop-backend/__tests__/chat-fast-mode.test.ts
++++ b/packages/workshop-backend/__tests__/chat-fast-mode.test.ts
+@@ -35,7 +35,7 @@ async function withChat(action: (impl: ChatImpl, state: DurableObjectState,
+   await runInDurableObject(user, async instance => {
+     await instance.loginOrCreateViaGatekeeper(author.id, true);
+     await instance.addModel({ type: 'agent', id: 'personal', name: 'Personal' },
+-      { provider: 'openai', model: 'gpt-6.1-sol', apiToken: '' });
++      { provider: 'openai', model: 'gpt-6.1-sol', apiToken: '', apiUrl: 'https://proxy.example.invalid/v1' });
+   });
+   await runInDurableObject(env.TEST_OVERSEER.getByName(`fast-chat-${serial}`), async (instance: OverseerDurableObject, state) => {
+     await action(Reflect.get(instance, 'impl') as ChatImpl, state, user);
+@@ -51,26 +51,102 @@ function seed(impl: ChatImpl, id = 1): AiChatMetadata {
+ describe('per-chat Fast acceptance and durable turn snapshot', () => {
+   it('strips forged Fast capability from personal model writes and historical reads', async () => {
+     await runInDurableObject(env.TEST_USER.getByName(`fast-personal-${++serial}`), async (user, state) => {
+-      const profile = { type: 'agent' as const, id: 'personal', name: 'Personal', supportsFast: true };
+-      const config = { provider: 'openai' as const, model: 'gpt-6.1-sol', apiToken: '' };
++      const profile = { type: 'agent' as const, id: 'personal', name: 'Personal', supportsFast: true, fastModeDescription: 'FORGED Free Fast' };
++      const config = { provider: 'openai' as const, model: 'future-unverified-model', apiToken: '' };
+       await user.addModel(profile, config);
+       expect(makeUserStorage(state.storage).aiModels.get('personal')?.profile).not.toHaveProperty('supportsFast');
+       await user.updateModel(profile, config);
+       expect(makeUserStorage(state.storage).aiModels.get('personal')?.profile).not.toHaveProperty('supportsFast');
+       makeUserStorage(state.storage).aiModels.put({ profile, config });
+       expect((await user.listModels())[0]).not.toHaveProperty('supportsFast');
++      expect((await user.listModels())[0].fastModeDescription).not.toContain('FORGED');
+       expect((await user.getModelConfig('personal')).profile).not.toHaveProperty('supportsFast');
+       expect((await user.getChatContext('personal')).aiModel?.profile).not.toHaveProperty('supportsFast');
+     });
+   });
+ 
++  it('projects supported personal API capability from configuration', async () => {
++    await runInDurableObject(env.TEST_USER.getByName(`native-fast-${++serial}`), async instance => {
++      await instance.loginOrCreateViaGatekeeper(author.id, true);
++      await instance.addModel({ type: 'agent', id: 'native', name: 'Synthetic native', supportsFast: false },
++        { provider: 'openai', model: 'gpt-6.1-sol', apiToken: '' });
++      const profile = (await instance.listModels()).find(model => model.id === 'native')!;
++      expect(profile.supportsFast).toBe(true);
++      expect(profile.fastModeDescription).toContain('premium');
++      expect((await instance.getChatContext('native', true)).aiModel?.profile.supportsFast).toBe(true);
++    });
++  });
++
++  for (const management of ['user', undefined]) {
++    it(`disables legacy bridge ${management ?? 'default'} profiles and chat context`, async () => {
++      await runInDurableObject(env.TEST_USER.getByName(`legacy-fast-profile-${++serial}`), async instance => {
++        const original = instance.env;
++        instance.env = { ...original, CODEX_BRIDGE_MANAGEMENT: management, CODEX_BRIDGE: {},
++          CODEX_BRIDGE_MODEL: 'gpt-6.1-sol', CODEX_BRIDGE_ALLOWED_USER_IDS: JSON.stringify([author.id]) } as unknown as Cloudflare.Env;
++        try {
++          await instance.loginOrCreateViaGatekeeper(author.id, true);
++          await instance.addModel({ type: 'agent', id: 'native', name: 'Synthetic native', supportsFast: true },
++            { provider: 'openai', model: 'gpt-6.1-sol', apiToken: '' });
++          for (const profile of [(await instance.listModels()).find(row => row.id === 'native')!,
++            (await instance.getModelConfig('native')).profile, (await instance.getChatContext('native')).aiModel!.profile]) {
++            expect(profile.supportsFast).not.toBe(true);
++            expect(profile.fastModeDescription).toMatch(/Legacy.*account|legacy.*account/);
++          }
++          await expect(instance.getChatContext('native', true)).rejects.toThrow(/Legacy.*account|legacy.*account/);
++        } finally { instance.env = original; }
++      });
++    });
++
++    for (const operation of ['new', 'send', 'retry']) it(`rejects legacy bridge ${management ?? 'default'} ${operation} before writes`, () => withChat(async (impl, _state, user) => {
++      const record: UserAiModelRecord = { profile: { type: 'agent', id: 'native', name: 'Synthetic native', supportsFast: true },
++        config: { provider: 'openai', model: 'gpt-6.1-sol', apiToken: '' } };
++      const legacy = { ...impl.env, CODEX_BRIDGE_MANAGEMENT: management, CODEX_BRIDGE: {},
++        CODEX_BRIDGE_MODEL: record.config.model, CODEX_BRIDGE_ALLOWED_USER_IDS: JSON.stringify([author.id]) } as unknown as Cloudflare.Env;
++      const originalEnv = impl.env, originalStart = impl.startAgent;
++      impl.env = legacy;
++      impl.startAgent = () => {};
++      try {
++        const before = operation === 'new' ? undefined : seed(impl);
++        const delegates = Object.fromEntries(['assertChatNotActive', 'materializeChatChanges', 'getChatTimestamp']
++          .map(method => [method, Reflect.get(impl, method).bind(impl)]));
++        using client = await openFakeOverseer(impl.storage, { impl: { ...delegates, env: legacy, logger: Reflect.get(impl, 'logger'),
++          users: { idFromString: (id: string) => id, get: () => ({ id: { toString: () => 'synthetic-user' },
++            whoami: async () => author, getChatContext: async () => context(record) }) }, startAgent: () => {},
++        } });
++        const request = operation === 'new'
++          ? impl.newChat(user, context(record), 'Rejected', undefined, undefined, undefined, undefined, undefined, true)
++          : operation === 'send'
++            ? impl.sendChatMessage(user, context(record), before!.id, 'Rejected', undefined, undefined, undefined, undefined, true)
++            : client.retryAgent(before!.id, record.profile.id, true);
++        await expect(request).rejects.toThrow(/Legacy.*account|legacy.*account/);
++        expect([...impl.storage.chatMeta.list()]).toEqual(before ? [before] : []);
++        expect([...impl.storage.chats.list()]).toEqual([]);
++        if (operation === 'new') {
++          const accepted = await impl.newChat(user, context(record), 'Standard request');
++          expect(impl.storage.chatMeta.get(accepted)?.fastMode).toBe(false);
++        }
++      } finally { impl.env = originalEnv; impl.startAgent = originalStart; }
++    }));
++  }
++
++  it('persists accepted native Fast independently of client capability labels', () => withChat(async (impl, _state, user) => {
++    const record = { profile: { type: 'agent' as const, id: 'native', name: 'Synthetic native', supportsFast: false },
++      config: { provider: 'openai' as const, model: 'gpt-6.1-sol', apiToken: '' } };
++    const original = impl.startAgent;
++    impl.startAgent = () => {};
++    try {
++      const id = await impl.newChat(user, context(record), 'Native Fast', undefined, undefined, undefined, undefined, undefined, true);
++      expect(impl.storage.chatMeta.get(id)?.fastMode).toBe(true);
++    } finally { impl.startAgent = original; }
++  }));
++
+   it('rejects unsupported Fast before creating a chat or committing a user message', () => withChat(async (impl, _state, user) => {
+     const original = impl.startAgent;
+     impl.startAgent = () => {};
+     try {
+       for (const aiModel of [undefined, { ...supported, profile: { ...supported.profile, supportsFast: undefined } },
+-        { ...supported, config: { ...supported.config, subscriptionProvider: 'codex' as const } },
+-        { ...supported, config: { provider: 'openai' as const, model: 'gpt-6.1-sol', apiToken: '' } }]) {
++        { ...supported, config: { ...supported.config, model: 'future-unverified-model', subscriptionProvider: 'codex' as const } },
++        { ...supported, config: { provider: 'openai' as const, model: 'gpt-6.1-sol', apiToken: '', apiUrl: 'https://proxy.example.invalid/v1' } }]) {
+         await expect(impl.newChat(user, { profile: author, aiModel }, 'Rejected', undefined, undefined, undefined,
+           undefined, undefined, true)).rejects.toThrow(/Fast.*not available/);
+       }
+diff --git a/packages/workshop-backend/__tests__/subscription-fast.test.ts b/packages/workshop-backend/__tests__/subscription-fast.test.ts
+index 23f09e4..3d7a491 100644
+--- a/packages/workshop-backend/__tests__/subscription-fast.test.ts
++++ b/packages/workshop-backend/__tests__/subscription-fast.test.ts
+@@ -49,13 +49,17 @@ describe('per-model subscription Fast capability', () => {
+     expect(reversed.resolve(extraId)?.profile.supportsFast).not.toBe(true);
+   });
+ 
+-  it('leaves old metadata, legacy and Codex catalogs unsupported', async () => {
++  it('keeps unverified SIWC metadata disabled and derives Codex support with account caveats', async () => {
+     const plain = [{ id: defaultModel, name: 'Default' }];
+     expect((await catalog(plain)).resolve(defaultModel)?.profile.supportsFast).not.toBe(true);
+-    for (const [provider, legacy] of [['siwc', true], ['codex', false]] as const) {
++    for (const [provider, legacy] of [['siwc', true]] as const) {
+       expect((await catalog([{ ...plain[0], supportsFast: true }], provider, legacy))
+         .resolve(defaultModel)?.profile.supportsFast).not.toBe(true);
+     }
++    const codex = await catalog(plain, 'codex');
++    expect(codex.resolve(defaultModel)?.profile.supportsFast).toBe(true);
++    expect(codex.resolve(defaultModel)?.profile.fastModeDescription).toContain('Account entitlement is unverified');
++    expect(codex.resolve(defaultModel)?.config.subscriptionProvider).toBe('codex');
+     const selected = deployment(plain);
+     delete (selected.CODEX_BRIDGE as Partial<typeof selected.CODEX_BRIDGE>).subscriptionModels;
+     const noMetadata = new SubscriptionModels(selected, DEFAULT_ADMIN_CONFIG, userId,
+diff --git a/packages/workshop-backend/__tests__/subscription-models.test.ts b/packages/workshop-backend/__tests__/subscription-models.test.ts
+index b925218..0e1fa26 100644
+--- a/packages/workshop-backend/__tests__/subscription-models.test.ts
++++ b/packages/workshop-backend/__tests__/subscription-models.test.ts
+@@ -30,7 +30,7 @@ declare module "cloudflare:workers" {
+ const MODEL = "gpt-6.1-sol",
+   USER = "one@example.invalid",
+   OTHER = "two@example.invalid";
+-const PROFILE = { type: "agent" as const, id: MODEL, name: OPENAI_CODEX_MODELS[MODEL].name, isDefault: true as const, providerDisplayName: "Codex subscription", provider: { id: "subscription:owner", name: "Codex subscription", source: "Subscription" } };
++const PROFILE = { type: "agent" as const, fastModeDescription: "Fast is not available. This SIWC account does not advertise Fast for this model. Refresh its model catalog.", id: MODEL, name: OPENAI_CODEX_MODELS[MODEL].name, isDefault: true as const, providerDisplayName: "Codex subscription", provider: { id: "subscription:owner", name: "Codex subscription", source: "Subscription" } };
+ const CONFIG: AiModelConfig = { provider: "openai", model: MODEL, apiToken: "", transport: "subscription", subscriptionAccountId: "owner" };
+ const PERSONAL = { provider: "anthropic", model: "personal-model", apiToken: "fixture-api-token",
+   apiUrl: "https://personal.example.invalid", extraHeaders: { "X-Personal-Key": "fixture-header" } } satisfies AiModelConfig;
+@@ -148,8 +148,9 @@ describe("admin-managed subscription models", () => {
+       });
+       await admin.setSubscriptionModelEnabled(true, ACCOUNT_A);
+       const active = new SubscriptionModels(fixture.deployment, admin.getAdminConfig(), USER, CONNECTIONS);
+-      expect(active.resolve(A)?.profile).toEqual({ type: "agent", id: A, name: "Research writer", isDefault: true, providerDisplayName: "Research", provider: { id: `subscription:${ACCOUNT_A}`, name: "Research", source: "Subscription" } });
+-      expect(active.resolve(A)?.config).toEqual({ ...CONFIG, subscriptionAccountId: ACCOUNT_A });
++      expect(active.resolve(A)?.profile).toEqual({ type: "agent", supportsFast: true,
++        fastModeDescription: "Codex Fast uses 2.5× included allowance or 2× purchased credits/PAYG. Account entitlement is unverified; your plan or administrator must allow Fast.", id: A, name: "Research writer", isDefault: true, providerDisplayName: "Research", provider: { id: `subscription:${ACCOUNT_A}`, name: "Research", source: "Subscription" } });
++      expect(active.resolve(A)?.config).toEqual({ ...CONFIG, subscriptionAccountId: ACCOUNT_A, subscriptionProvider: "codex" });
+       await expect(admin.setModelDisplayName("unknown-model", "Other")).rejects.toThrow("No such");
+       await admin.setModelDisplayName(A, null);
+       expect(new SubscriptionModels(fixture.deployment, admin.getAdminConfig(), USER, CONNECTIONS).get(A)?.name).toBe(OPENAI_CODEX_MODELS[MODEL].name);
+@@ -165,7 +166,7 @@ describe("admin-managed subscription models", () => {
+       async infer(input: unknown) { calls.push(input); throw Error("Fixture stream stopped"); },
+     } };
+     const models = await getGatewayModels(deployment, USER);
+-    expect(models?.list()).toEqual([PROFILE]);
++    expect(models?.list()).toEqual([{ ...PROFILE, fastModeDescription: "Fast is not available. This subscription connection has no verified Fast support for this model." }]);
+     const record = models!.resolve(MODEL)!;
+     expect(record.config).toEqual({ provider: "openai", model: MODEL, apiToken: "", transport: "subscription" });
+     const handle = getModel(deployment, record.config, { type: "user", id: USER, name: "One" });
+@@ -211,7 +212,7 @@ describe("admin-managed subscription models", () => {
+     expect(models?.list().map(profile => [profile.id, profile.name, profile.provider?.name])).toEqual([
+       [MODEL, PROFILE.name, "Codex subscription"], [A, PROFILE.name, "Research"], [B, PROFILE.name, "Writing"],
+     ]);
+-    expect(models?.resolve(A)?.config).toEqual({ ...CONFIG, subscriptionAccountId: ACCOUNT_A });
++    expect(models?.resolve(A)?.config).toEqual({ ...CONFIG, subscriptionAccountId: ACCOUNT_A, subscriptionProvider: "codex" });
+     expect(models?.resolve(B)?.config).toEqual({ ...CONFIG, subscriptionAccountId: ACCOUNT_B });
+     expect(models?.resolve(`subscription-account-33333333-3333-4333-8333-333333333333`)).toBeUndefined();
+     await inUser(USER, async user => {
+diff --git a/packages/workshop-backend/__tests__/user-models.test.ts b/packages/workshop-backend/__tests__/user-models.test.ts
+index b85c17d..72d43c0 100644
+--- a/packages/workshop-backend/__tests__/user-models.test.ts
++++ b/packages/workshop-backend/__tests__/user-models.test.ts
+@@ -15,6 +15,7 @@ declare module "cloudflare:workers" {
+ 
+ const PROFILE = { type: "agent" as const, id: "my-model", name: "My Model" };
+ const PERSONAL_PROVIDER = { id: `personal:${PROFILE.id}`, name: "OpenAI", source: `Personal · ${PROFILE.name}` };
++const FAST_UNAVAILABLE = { fastModeDescription: "Fast is not available. Custom endpoints require a verified provider Fast adapter." };
+ const CONFIG: AiModelConfig = {
+   provider: "openai",
+   model: "my-model",
+@@ -48,7 +49,7 @@ describe("UserDurableObject model editing", () => {
+     const { config } = await user.getModelConfig(PROFILE.id);
+     await user.updateModel({ ...PROFILE, name: "  My renamed model  ", providerDisplayName: "Untrusted", provider: { id: "forged", name: "Forged", source: "Organization" } },
+       { ...config, providerDisplayName: "  Research provider  " });
+-    const canonical = { ...PROFILE, name: "My renamed model", providerDisplayName: "Research provider",
++    const canonical = { ...PROFILE, ...FAST_UNAVAILABLE, name: "My renamed model", providerDisplayName: "Research provider",
+       provider: { ...PERSONAL_PROVIDER, name: "Research provider", source: "Personal · My renamed model" } };
+     expect((await user.getModelConfig(PROFILE.id)).profile).toEqual(canonical);
+     expect(await inDo(u => u.listModels())).toEqual([canonical]);
+@@ -57,7 +58,7 @@ describe("UserDurableObject model editing", () => {
+     const other = env.TEST_USER.getByName(`user-models-other-${++userCounter}`);
+     await expect(runInDurableObject(other, u => u.getModelConfig(PROFILE.id))).rejects.toThrow("No such");
+     await user.updateModel({ ...canonical, providerDisplayName: "Forged" }, config);
+-    expect((await user.getModelConfig(PROFILE.id)).profile).toEqual({ ...PROFILE, name: canonical.name, provider: { ...PERSONAL_PROVIDER, source: `Personal · ${canonical.name}` } });
++    expect((await user.getModelConfig(PROFILE.id)).profile).toEqual({ ...PROFILE, ...FAST_UNAVAILABLE, name: canonical.name, provider: { ...PERSONAL_PROVIDER, source: `Personal · ${canonical.name}` } });
+     expect((await inDo(u => u.listModels()))[0]).not.toHaveProperty("providerDisplayName");
+   });
+ 
+@@ -95,6 +96,7 @@ describe("UserDurableObject model editing", () => {
+           name: "Physical model", providerName: "Team models", scope, source: "openai-compatible" }],
+       }] }) });
+       expect(await user.listModels()).toEqual([{ type: "agent", id: "logical-model", name: "Physical model",
++        fastModeDescription: "Fast is not available. This compatible connection has no verified Fast adapter.",
+         providerDisplayName: "Team models", provider: { id: "scoped:synthetic-provider", name: "Team models", source: "Team backend" } }]);
+     });
+   });
+@@ -258,10 +260,10 @@ describe("UserDurableObject model editing", () => {
+   it("lists and resolves models without the admin config outside AI Gateway mode", async () => {
+     const { inDo } = await userWithModel();
+     await inDo(async user => {
+-      expect(await user.listModels()).toEqual([{ ...PROFILE, provider: PERSONAL_PROVIDER }]);
++      expect(await user.listModels()).toEqual([{ ...PROFILE, ...FAST_UNAVAILABLE, provider: PERSONAL_PROVIDER }]);
+       await user.setPreferredModel(PROFILE.id);
+       expect((await user.getChatContext(PROFILE.id)).aiModel?.config).toEqual(CONFIG);
+-      expect((await user.getExternalMessageChatContext(null)).aiModel?.profile).toEqual({ ...PROFILE, provider: PERSONAL_PROVIDER });
++      expect((await user.getExternalMessageChatContext(null)).aiModel?.profile).toEqual({ ...PROFILE, ...FAST_UNAVAILABLE, provider: PERSONAL_PROVIDER });
+       await user.deleteModel(PROFILE.id);
+       expect(await user.listModels()).toEqual([]);
+     });
+@@ -519,7 +521,7 @@ describe("UserDurableObject gateway model modes", () => {
+     it("keeps a stored model, which still reads, until its user deletes it",
+         () => withStoredModel(async user => {
+       expect(storedModel(user, MINE.id)).toEqual({ profile: MINE, config: MINE_CONFIG });
+-      expect((await user.getModelConfig(MINE.id)).profile).toEqual({ ...MINE, provider: { id: `personal:${MINE.id}`, name: "Anthropic", source: `Personal · ${MINE.name}` } });
++      expect((await user.getModelConfig(MINE.id)).profile).toEqual({ ...MINE, ...FAST_UNAVAILABLE, provider: { id: `personal:${MINE.id}`, name: "Anthropic", source: `Personal · ${MINE.name}` } });
+       await expect(user.deleteModel(ENABLED_ID))
+           .rejects.toThrow(new Error('Cannot delete built-in model "Claude Opus 5.5".'));
+ 
+@@ -535,9 +537,9 @@ describe("UserDurableObject gateway model modes", () => {
+       admin.userModelsEnabled = true;
+       expect(await listedIds(user)).toEqual([...offered, MINE.id]);
+       expect((await user.getChatContext(MINE.id)).aiModel)
+-          .toEqual({ profile: { ...MINE, provider: { id: `personal:${MINE.id}`, name: "Anthropic", source: `Personal · ${MINE.name}` } }, config: MINE_CONFIG });
++          .toEqual({ profile: { ...MINE, ...FAST_UNAVAILABLE, provider: { id: `personal:${MINE.id}`, name: "Anthropic", source: `Personal · ${MINE.name}` } }, config: MINE_CONFIG });
+       expect(await user.getPreferredModel()).toBe(MINE.id);
+-      expect((await user.getExternalMessageChatContext(null)).aiModel?.profile).toEqual({ ...MINE, provider: { id: `personal:${MINE.id}`, name: "Anthropic", source: `Personal · ${MINE.name}` } });
++      expect((await user.getExternalMessageChatContext(null)).aiModel?.profile).toEqual({ ...MINE, ...FAST_UNAVAILABLE, provider: { id: `personal:${MINE.id}`, name: "Anthropic", source: `Personal · ${MINE.name}` } });
+       await user.updateModel({ ...MINE, name: "Renamed" }, MINE_CONFIG);
+       expect(storedModel(user, MINE.id)).toMatchObject({ profile: { name: "Renamed" } });
+     }));
+diff --git a/packages/workshop-backend/src/ai-gateway.ts b/packages/workshop-backend/src/ai-gateway.ts
+index 42ddc98..8147b6f 100644
+--- a/packages/workshop-backend/src/ai-gateway.ts
++++ b/packages/workshop-backend/src/ai-gateway.ts
+@@ -1,3 +1,4 @@
++import { fastModeInfo, type FastModeEnvironment } from './fast-mode';
+ import {
+   AdminGatewayProvider, AdminModel, AiChatAuthorInfo, AiModelConfig, AiModelProvider, GatewayModel,
+   GatewayModelMode, HTTPS_ONLY_PROVIDERS, ReasoningLevel, SUGGESTED_MODELS, AI_MODEL_PROVIDER_LABELS,
+@@ -193,11 +194,15 @@ export class GatewayModels {
+   /** The reasoning level of a model whose settings give none. */
+   readonly #defaultReasoning: ReasoningLevel | null;
+   readonly #providerDisplayNames: AdminConfig["providerDisplayNames"];
++  readonly #fastModeEnvironment: FastModeEnvironment;
+ 
+   constructor(readonly gateway: AiGatewayConfig,
+               config: Pick<AdminConfig, "modelModes" | "addedProviders" | "addedModels" |
+                   "userModelsEnabled" | "modelSettings" | "defaultReasoning"> &
+-                  Partial<Pick<AdminConfig, "providerDisplayNames" | "modelDisplayNames">>) {
++                  Partial<Pick<AdminConfig, "providerDisplayNames" | "modelDisplayNames">>,
++              env: FastModeEnvironment = {}) {
++    this.#fastModeEnvironment = { CODEX_BRIDGE: Boolean(env.CODEX_BRIDGE),
++      CODEX_BRIDGE_MANAGEMENT: env.CODEX_BRIDGE_MANAGEMENT };
+     this.providers = new Set([
+       ...gateway.providers,
+       ...config.addedProviders.filter(provider => GATEWAY_PROVIDERS.has(provider)),
+@@ -260,6 +265,7 @@ export class GatewayModels {
+     const label = Object.hasOwn(this.#providerDisplayNames, model.provider)
+         ? this.#providerDisplayNames[model.provider] : undefined;
+     return { type: "agent", id: model.id, name: model.name,
++      ...fastModeInfo({ provider: model.provider, model: model.id, apiToken: "" }, false, this.#fastModeEnvironment),
+       provider: { id: `gateway:${model.provider}`, name: label ?? AI_MODEL_PROVIDER_LABELS[model.provider], source: "Organization" },
+       ...(label !== undefined && { providerDisplayName: label }) };
+   }
+@@ -347,7 +353,7 @@ export async function getGatewayModels(env: Cloudflare.Env, userId?: string,
+   }
+   let gateway = getAiGatewayConfig(env);
+   if (!gateway) return null;
+-  return new GatewayModels(gateway, await readAdminConfig(env));
++  return new GatewayModels(gateway, await readAdminConfig(env), env);
+ }
+ 
+ /** Identifies the Gateway and credentials needed to retrieve an inference log. */
+diff --git a/packages/workshop-backend/src/ai-models.ts b/packages/workshop-backend/src/ai-models.ts
+index 329de51..c9f2ac1 100644
+--- a/packages/workshop-backend/src/ai-models.ts
++++ b/packages/workshop-backend/src/ai-models.ts
+@@ -1,3 +1,4 @@
++import { fastModeInfo, nativeFastRequest, fastPayload, type FastRequest } from './fast-mode';
+ import { accountIdForTrustedAgentAuthor } from './agent-principal';
+ import { createScopedModelHandle, scopedModelId, scopedModelResolver, type ScopedModelResolution } from './scoped-models';
+ import { DurableObject, RpcStub, RpcTarget } from "cloudflare:workers";
+@@ -444,6 +445,7 @@ function getHeader(headers: Record<string, string>, name: string): string | unde
+ }
+ 
+ type HandleArgs = {
++  fastRequest?: FastRequest;
+   model: Model<Api>;
+   // Provider auth: a plain API key (pi turns it into the SDK's native auth) and/or headers.
+   // A null header value suppresses a default header ({Authorization: null, "x-api-key": null}
+@@ -532,7 +534,8 @@ function makeHandle(args: HandleArgs): ModelHandle {
+         // pi's per-chat prompt cache key (see withoutPromptCacheKey).
+         onPayload: async (payload, payloadModel) => {
+           const replaced = await options.onPayload?.(payload, payloadModel);
+-          const bridged = bridgePdfAttachments(args.model.api, replaced ?? payload) ?? replaced;
++          const tiered = args.fastRequest ? fastPayload(args.fastRequest, replaced ?? payload) : replaced;
++          const bridged = bridgePdfAttachments(args.model.api, tiered ?? payload) ?? tiered;
+           if (options.cacheRetention === "none") return bridged;
+           const split = splitSystemPrompt(args.model, transcript, bridged ?? payload);
+           if (split === undefined) return bridged;
+@@ -570,6 +573,10 @@ function withoutPromptCacheKey(model: Model<Api>, payload: unknown): object | un
+ export function getModel(env: Cloudflare.Env, config: AiModelConfig,
+                          initiator: AiChatAuthorInfo,
+                          options: ModelRoutingOptions = {}): ModelHandle {
++  const fastRequest = options.fastMode === true ? nativeFastRequest(config, env) : undefined;
++  if (options.fastMode === true && config.transport !== 'subscription' && !fastRequest)
++    throw new Error(fastModeInfo(config, false, env).fastModeDescription);
++
+   if (config.transport === 'scoped') {
+     const resolveScopedModel = options.resolveScopedModel;
+     if (!config.scopedProviderId || !resolveScopedModel)
+@@ -584,24 +591,24 @@ export function getModel(env: Cloudflare.Env, config: AiModelConfig,
+     ? { ...initiator, type: 'user' } : initiator;
+   const bound = cloudAgentModel(env, config, bridgeAuthor, { fastMode: options.fastMode });
+   if (bound) return bound;
+-  if (isAdminManagedSubscription(env)) return getModelDirect(config, options.sessionAffinity);
++  if (isAdminManagedSubscription(env)) return getModelDirect(config, options.sessionAffinity, fastRequest);
+   // BYOK: a connected user's own Cloudflare account pays for everything (all providers, including
+   // Workers AI), routed through the user's own AI Gateway with unified billing. Honored regardless
+   // of whether a platform AI Gateway is configured, so connected users are always billed correctly.
+   if (options.userGateway) {
+     return getModelViaUserGateway(
+         config, buildMetadata(initiator, options.metadata), options.userGateway,
+-        options.sessionAffinity);
++        options.sessionAffinity, fastRequest);
+   }
+ 
+   // Otherwise: when a platform AI Gateway is configured, route through it (platform-funded free
+   // tier). The config's apiToken/apiUrl/extraHeaders are ignored in that mode.
+   let gwConfig = getAiGatewayConfig(env);
+   if (gwConfig) {
+-    return getModelViaGateway(gwConfig, config, initiator, options);
++    return getModelViaGateway(gwConfig, config, initiator, options, fastRequest);
+   }
+ 
+-  return getModelDirect(config, options.sessionAffinity);
++  return getModelDirect(config, options.sessionAffinity, fastRequest);
+ }
+ 
+ // Route inference through the user's own account (unified billing) via their account's default AI
+@@ -612,6 +619,7 @@ function getModelViaUserGateway(
+   metadata: GatewayMetadata,
+   userGateway: UserGatewayRouting,
+   sessionAffinity?: string,
++  fastRequest?: FastRequest,
+ ): ModelHandle {
+   // Route through the user's AI Gateway data plane, speaking each provider's native API (see
+   // gatewayNativeModel; unified *billing* has no API requirements). Auth is the connected user's
+@@ -637,6 +645,7 @@ function getModelViaUserGateway(
+     gatewayMetadata: metadata,
+     sessionAffinity,
+     reasoning: config.reasoning,
++    fastRequest,
+     formatId: gatewayCatalogModel(config)?.id,
+     aiGatewayLogRoute: {
+       gateway: "default",
+@@ -675,6 +684,7 @@ function getModelViaGateway(
+   config: AiModelConfig,
+   initiator: AiChatAuthorInfo,
+   options: ModelRoutingOptions,
++  fastRequest?: FastRequest,
+ ): ModelHandle {
+   const metadata = buildMetadata(initiator, options.metadata);
+   const binding = gwConfig.bindingFor(config.provider);
+@@ -729,6 +739,7 @@ function getModelViaGateway(
+     gatewayMetadata: metadata,
+     sessionAffinity: options.sessionAffinity,
+     reasoning: config.reasoning,
++    fastRequest,
+     formatId: gatewayCatalogModel(config)?.id,
+     aiGatewayLogRoute: logRoute(gateway),
+   });
+@@ -746,12 +757,13 @@ function directAuth(config: AiModelConfig, keyHeader: string): Pick<HandleArgs,
+ }
+ 
+ // Direct provider access using the credentials in the model config itself (no AI Gateway).
+-function getModelDirect(config: AiModelConfig, sessionAffinity?: string): ModelHandle {
++function getModelDirect(config: AiModelConfig, sessionAffinity?: string, fastRequest?: FastRequest): ModelHandle {
+   const catalog = catalogModel(config.provider, config.model);
+   const window = modelTokenWindow(config, catalog);
+   switch (config.provider) {
+     case "anthropic":
+       return makeHandle({
++        fastRequest,
+         model: {
+           id: config.model,
+           name: catalog?.name ?? config.model,
+@@ -779,6 +791,7 @@ function getModelDirect(config: AiModelConfig, sessionAffinity?: string): ModelH
+             "Cloudflare account ID and an API token that permits Workers AI.");
+       }
+       return makeHandle({
++        fastRequest,
+         model: {
+           id: config.model,
+           name: catalog?.name ?? config.model,
+@@ -798,6 +811,7 @@ function getModelDirect(config: AiModelConfig, sessionAffinity?: string): ModelH
+     }
+     case "google":
+       return makeHandle({
++        fastRequest,
+         model: {
+           id: config.model,
+           name: catalog?.name ?? config.model,
+@@ -824,6 +838,7 @@ function getModelDirect(config: AiModelConfig, sessionAffinity?: string): ModelH
+       // local auth and send no Authorization header at all (as before the pi migration; a strict
+       // local proxy may reject an unexpected bearer token).
+       return makeHandle({
++        fastRequest,
+         model: {
+           id: config.model,
+           name: config.model,
+@@ -864,6 +879,7 @@ function getModelDirect(config: AiModelConfig, sessionAffinity?: string): ModelH
+       });
+     case "openai":
+       return makeHandle({
++        fastRequest,
+         model: {
+           id: config.model,
+           name: catalog?.name ?? config.model,
+diff --git a/packages/workshop-backend/src/overseer.ts b/packages/workshop-backend/src/overseer.ts
+index 502d001..e7de44d 100644
+--- a/packages/workshop-backend/src/overseer.ts
++++ b/packages/workshop-backend/src/overseer.ts
+@@ -6181,7 +6181,7 @@ class OverseerImpl implements AgentHooks {
+     fastMode?: boolean,
+     bot?: BotProfileSnapshot,
+   ): Promise<number> {
+-    const normalizedFastMode = normalizeChatFastMode(userMeta.aiModel, fastMode);
++    const normalizedFastMode = normalizeChatFastMode(userMeta.aiModel, fastMode, this.env);
+     if (responseTargetRegistration) {
+       let decision = this.#prepareExternalMessageResponseTargetRegistration(responseTargetRegistration);
+       if (decision.reuseExisting) return decision.record.chatId;
+@@ -6267,7 +6267,7 @@ class OverseerImpl implements AgentHooks {
+     formats?: MessageFormatRef[],
+     fastMode?: boolean,
+   ): Promise<void> {
+-    const normalizedFastMode = normalizeChatFastMode(userMeta.aiModel, fastMode);
++    const normalizedFastMode = normalizeChatFastMode(userMeta.aiModel, fastMode, this.env);
+     if (responseTargetRegistration) {
+       let decision = this.#prepareExternalMessageResponseTargetRegistration(responseTargetRegistration);
+       if (decision.reuseExisting) return;
+@@ -6719,7 +6719,7 @@ class OverseerImpl implements AgentHooks {
+              callbackInitiated: boolean = false,
+              keepAlive: boolean = false,
+              fastMode: boolean = false): void {
+-    const normalizedFastMode = normalizeChatFastMode(aiModel, fastMode);
++    const normalizedFastMode = normalizeChatFastMode(aiModel, fastMode, this.env);
+     // Register before starting the turn so registration always precedes the turn's teardown
+     // (`#unregisterRunningAgent`, in `#runAgentTurn`'s finally).
+     this.#registerRunningAgent(chatId);
+@@ -11744,7 +11744,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
+   async retryAgent(chatId: number, modelId: string, fastMode?: boolean): Promise<void> {
+     let userMeta = await retryOnDoReset(
+         () => this.#clientUser.getChatContext(modelId, fastMode), this.impl.logger);
+-    const normalizedFastMode = normalizeChatFastMode(userMeta.aiModel, fastMode);
++    const normalizedFastMode = normalizeChatFastMode(userMeta.aiModel, fastMode, this.impl.env);
+ 
+     let meta = this.impl.assertChatNotActive(chatId);
+     if (!userMeta.aiModel) {
+diff --git a/packages/workshop-backend/src/subscription-models.ts b/packages/workshop-backend/src/subscription-models.ts
+index ca268d0..34e66a2 100644
+--- a/packages/workshop-backend/src/subscription-models.ts
++++ b/packages/workshop-backend/src/subscription-models.ts
+@@ -1,3 +1,4 @@
++import { fastModeInfo } from './fast-mode';
+ import { OPENAI_MODELS } from "@earendil-works/pi-ai/providers/openai.models";
+ import { OPENAI_CODEX_MODELS } from "@earendil-works/pi-ai/providers/openai-codex.models";
+ import type {
+@@ -100,6 +101,7 @@ export class SubscriptionModels {
+   readonly catalog: readonly (SubscriptionModels["all"][number] & {
+     modelId: string; catalogSource?: NonNullable<SubscriptionConnections[number]["catalog"]>["source"]; entitlementVerified?: boolean;
+     supportsFast?: boolean;
++    fastModeDescription?: string;
+   })[];
+   readonly #selectable: boolean;
+   readonly #authorized: boolean;
+@@ -172,7 +174,8 @@ export class SubscriptionModels {
+           catalogSource: metadata.source, entitlementVerified: metadata.entitlementVerified });
+       }
+       return choices;
+-    });
++    }).map(model => ({ ...model, ...fastModeInfo({ provider: 'openai', model: model.modelId, apiToken: '',
++      transport: 'subscription', ...(model.subscriptionProvider ? { subscriptionProvider: model.subscriptionProvider } : {}) }, model.supportsFast === true) }));
+   }
+ 
+   get(id: string) {
+@@ -183,8 +186,8 @@ export class SubscriptionModels {
+     if (!this.#authorized) return [];
+     return this.catalog
+       .filter((model) => model.mode === "enabled")
+-      .map(({ id, name, providerDisplayName, accountId, isDefault, supportsFast }) => ({ type: "agent", id, name, providerDisplayName,
+-        ...(supportsFast && { supportsFast }),
++      .map(({ id, name, providerDisplayName, accountId, isDefault, supportsFast, fastModeDescription }) => ({ type: "agent", id, name, providerDisplayName,
++        ...(supportsFast && { supportsFast }), fastModeDescription,
+         ...(isDefault && { isDefault }),
+         provider: { id: `subscription:${accountId}`, name: providerDisplayName, source: "Subscription" } }));
+   }
+@@ -199,7 +202,7 @@ export class SubscriptionModels {
+         refreshedAt: null, error: connection.ready === false ? "This subscription is not connected." : null,
+         models: models.map(model => ({ id: model.id, providerId: `subscription:${connection.accountId}`,
+           modelId: model.modelId, name: model.name, providerName: model.providerDisplayName, scope,
+-          ...(model.supportsFast && { supportsFast: model.supportsFast }),
++          ...(model.supportsFast && { supportsFast: model.supportsFast }), fastModeDescription: model.fastModeDescription,
+           source: "subscription" as const, ...(model.isDefault && { isDefault: model.isDefault }) })) }];
+     }) };
+   }
+@@ -209,11 +212,11 @@ export class SubscriptionModels {
+     if (!this.#authorized || !model || model.mode === "disabled") return undefined;
+     return {
+       profile: { type: "agent", id: model.id, name: model.name, providerDisplayName: model.providerDisplayName,
+-        ...(model.supportsFast && { supportsFast: model.supportsFast }),
++        ...(model.supportsFast && { supportsFast: model.supportsFast }), fastModeDescription: model.fastModeDescription,
+         ...(model.isDefault && { isDefault: model.isDefault }),
+         provider: { id: `subscription:${model.accountId}`, name: model.providerDisplayName, source: "Subscription" } },
+       config: { provider: "openai", model: model.modelId, apiToken: "", transport: "subscription",
+-        ...(model.catalogSource && model.subscriptionProvider
++        ...((model.catalogSource || this.#selectable && model.subscriptionProvider === "codex") && model.subscriptionProvider
+           ? { subscriptionProvider: model.subscriptionProvider } : {}),
+         ...(this.#selectable ? { subscriptionAccountId: model.accountId } : {}) },
+     };
+@@ -225,7 +228,7 @@ export class SubscriptionModels {
+         config.apiUrl !== undefined || Object.keys(config.extraHeaders ?? {}).length) return undefined;
+     const model = this.catalog.find(model => model.accountId === (config.subscriptionAccountId ?? "owner") &&
+       model.modelId === config.model && (config.subscriptionProvider === undefined
+-        ? !model.id.startsWith("subscription-model:") : model.catalogSource !== undefined &&
++        ? !model.id.startsWith("subscription-model:") : (model.catalogSource !== undefined || this.#selectable && config.subscriptionProvider === "codex") &&
+           model.subscriptionProvider === config.subscriptionProvider));
+     if (!model) return undefined;
+     this.refuseDisabled(model.id);
+diff --git a/packages/workshop-backend/src/user.ts b/packages/workshop-backend/src/user.ts
+index 5d12311..c759373 100644
+--- a/packages/workshop-backend/src/user.ts
++++ b/packages/workshop-backend/src/user.ts
+@@ -1,3 +1,4 @@
++import { fastModeInfo, type FastModeEnvironment } from './fast-mode';
+ import { createScopedModelCatalog, parseScopedModelId } from './scoped-models';
+ import type { AgentProviderCatalog } from '@gadgets/workshop-shared/api';
+ import { RpcStub } from "capnweb";
+@@ -71,10 +72,10 @@ function areCredentialsValid(record: ConnectedAccountRecord): boolean {
+ export const CLOUDFLARE_VENDOR_ID = "cloudflare";
+ 
+ /** Project every personal-model read from its owner's config, never a supplied author label. */
+-function personalModelRecord(record: UserAiModelRecord): UserAiModelRecord {
++function personalModelRecord(record: UserAiModelRecord, env: FastModeEnvironment): UserAiModelRecord {
+   const { transport, subscriptionAccountId, subscriptionProvider, scopedProviderId, ...config } = record.config;
+-  const { providerDisplayName, provider, isDefault, supportsFast, ...profile } = record.profile;
+-  return { config, profile: { ...profile,
++  const { providerDisplayName, provider, isDefault, supportsFast, fastModeDescription, ...profile } = record.profile;
++  return { config, profile: { ...profile, ...fastModeInfo(config, false, env),
+     provider: { id: `personal:${profile.id}`, name: config.providerDisplayName ?? AI_MODEL_PROVIDER_LABELS[config.provider],
+       source: `Personal · ${profile.name}` },
+     ...(config.providerDisplayName !== undefined && { providerDisplayName: config.providerDisplayName }) } };
+@@ -130,11 +131,11 @@ function resolveWithheldSecrets(
+ }
+ 
+ /** Validate a chat preference against the freshly resolved server-owned model profile. */
+-export function normalizeChatFastMode(aiModel: UserAiModelRecord | undefined, fastMode?: boolean): boolean {
++export function normalizeChatFastMode(aiModel: UserAiModelRecord | undefined, fastMode?: boolean, env: FastModeEnvironment = {}): boolean {
+   if (fastMode !== undefined && typeof fastMode !== "boolean") throw new Error("Invalid Fast preference.");
+-  if (fastMode === true && (aiModel?.profile.supportsFast !== true ||
+-      aiModel.config.transport !== "subscription" || aiModel.config.subscriptionProvider !== "siwc")) {
+-    throw new Error("Fast is not available for the selected model. Choose a supported SIWC subscription model or turn Fast off.");
++  if (fastMode === true) {
++    const capability = aiModel && fastModeInfo(aiModel.config, aiModel.profile.supportsFast === true, env);
++    if (!capability?.supportsFast) throw new Error(capability?.fastModeDescription ?? 'Fast is not available without a selected model.');
+   }
+   return fastMode === true;
+ }
+@@ -627,6 +628,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
+     if (!catalog) return deployment;
+     const result = [...deployment, ...catalog.providers.flatMap(provider => provider.models.map(model => ({
+       type: 'agent' as const, id: model.id, name: model.name, providerDisplayName: model.providerName,
++      ...fastModeInfo({ provider: 'openai', model: model.modelId, apiToken: '', transport: 'scoped', scopedProviderId: provider.id }),
+       provider: { id: `scoped:${provider.id}`, name: provider.name,
+         source: provider.scope.kind === 'organization' ? 'Organization backend'
+           : provider.scope.kind === 'team' ? 'Team backend' : 'Personal backend' },
+@@ -649,7 +651,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
+     if (models && !models.userModels) return result;
+     for (let model of this.storage.aiModels.list()) {
+       if (!models?.get(model.profile.id)) {
+-        result.push(personalModelRecord(model).profile);
++        result.push(personalModelRecord(model, this.env).profile);
+       }
+     }
+     return result;
+@@ -697,7 +699,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
+     if (!record || models?.get(id)) {
+       throw new Error(`No such hand-added model: ${id}`);
+     }
+-    return personalModelRecord(record);
++    return personalModelRecord(record, this.env);
+   }
+ 
+   #putModel(profile: AiChatAuthorInfo, config: AiModelConfig, models: DeploymentModels | null) {
+@@ -714,7 +716,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
+     // deployment's to set on its own models.
+     let {reasoning, compactionInputBudget, behavesLike, capabilities, transport, subscriptionAccountId, subscriptionProvider, scopedProviderId, ...own} = config;
+ 
+-    const { providerDisplayName, provider, isDefault, supportsFast, ...author } = profile;
++    const { providerDisplayName, provider, isDefault, supportsFast, fastModeDescription, ...author } = profile;
+     const { providerDisplayName: label, ...connection } = own;
+     this.storage.aiModels.put({
+       profile: { ...author, type: "agent", name: validateDisplayName(author.name) },
+@@ -868,7 +870,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
+   async getChatContext(modelId: string | null, fastMode?: boolean): Promise<UserChatContext> {
+     const result = this.#getChatContext(modelId, await getGatewayModels(this.env, this.#modelUserId(),
+         () => this.adminSettings.getByName("").getAdminConfig()));
+-    normalizeChatFastMode(result.aiModel, fastMode);
++    normalizeChatFastMode(result.aiModel, fastMode, this.env);
+     return result;
+   }
+ 
+@@ -931,13 +933,14 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
+   #resolveModel(id: string, models: DeploymentModels | null): UserAiModelRecord | undefined {
+     const scoped = parseScopedModelId(id);
+     if (scoped) return {
+-      profile: { type: 'agent', id, name: scoped.modelId },
++      profile: { type: 'agent', id, name: scoped.modelId,
++        ...fastModeInfo({ provider: 'openai', model: scoped.modelId, apiToken: '', transport: 'scoped', scopedProviderId: scoped.providerId }) },
+       config: { provider: 'openai', model: scoped.modelId, apiToken: '', transport: 'scoped', scopedProviderId: scoped.providerId },
+     };
+     if (models?.get(id)) return models.resolve(id);
+     let record = models && !models.userModels ? undefined : this.storage.aiModels.get(id);
+     if (!record) return undefined;
+-    return personalModelRecord(record);
++    return personalModelRecord(record, this.env);
+   }
+ 
+   async listGadgets(): Promise<GadgetMetadataWithTimestamps[]> {
+diff --git a/packages/workshop-frontend/src/ChatInterface.actions.test.tsx b/packages/workshop-frontend/src/ChatInterface.actions.test.tsx
+index 9323cd0..77f5b26 100644
+--- a/packages/workshop-frontend/src/ChatInterface.actions.test.tsx
++++ b/packages/workshop-frontend/src/ChatInterface.actions.test.tsx
+@@ -409,7 +409,7 @@ describe('per-chat Fast requests', () => {
+     await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Select model"]')!.click());
+     const standard = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent?.includes('Standard model'))!;
+     await act(async () => standard.click());
+-    expect(toggle()).toBeNull();
++    expect(toggle().disabled).toBe(true);
+     await sendFromComposer('Use standard');
+     expect(server.sendChatMessage).toHaveBeenCalledWith(1, 'Use standard', slowModel.id, undefined, undefined, undefined, false);
+     await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Select model"]')!.click());
+@@ -418,7 +418,7 @@ describe('per-chat Fast requests', () => {
+     await act(async () => toggle().click());
+     await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Select provider"]')!.click());
+     await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent === 'No agent')!.click());
+-    expect(toggle()).toBeNull();
++    expect(toggle().disabled).toBe(true);
+     await sendFromComposer('Human note');
+     expect(server.sendChatMessage).toHaveBeenLastCalledWith(1, 'Human note', null, undefined, undefined, undefined, false);
+     await renderChat(server.overseer);
+@@ -430,7 +430,7 @@ describe('per-chat Fast requests', () => {
+     await act(async () => toggle().click());
+     await sendFromComposer('New request');
+     expect(server.newChat).toHaveBeenCalledWith('New request', fastModel.id, undefined, undefined, undefined, true);
+-    expect(toggle()).toBeNull();
++    expect(toggle().disabled).toBe(true);
+   });
+ 
+   it('clears Fast when a refreshed model loses capability and does not reactivate it on a later refresh', async () => {
+@@ -439,13 +439,13 @@ describe('per-chat Fast requests', () => {
+     expect(toggle().getAttribute('aria-pressed')).toBe('true');
+     const refreshed = { ...server.overseer, listModels: async () => [{ ...fastModel, supportsFast: false }, slowModel] } as unknown as RpcStub<Overseer>;
+     await renderChat(refreshed, { selectedChatId: 1 });
+-    expect(toggle()).toBeNull();
++    expect(toggle().disabled).toBe(true);
+     await renderChat({ ...refreshed, listModels: async () => [fastModel, slowModel] } as unknown as RpcStub<Overseer>, { selectedChatId: 1 });
+     expect(toggle().getAttribute('aria-pressed')).toBe('false');
+     await act(async () => toggle().click());
+     const emptyCatalog = { ...refreshed, listModels: async () => [] } as unknown as RpcStub<Overseer>;
+     await renderChat(emptyCatalog, { selectedChatId: 1 });
+-    expect(toggle()).toBeNull();
++    expect(toggle().disabled).toBe(true);
+     await renderChat({ ...emptyCatalog, listModels: async () => [fastModel, slowModel] } as unknown as RpcStub<Overseer>, { selectedChatId: 1 });
+     expect(toggle().getAttribute('aria-pressed')).toBe('false');
+   });
+@@ -465,9 +465,9 @@ describe('per-chat Fast requests', () => {
+       expect(toggle().getAttribute('aria-pressed')).toBe('true');
+       const changed = { ...server.overseer, listModels: async () => models } as unknown as RpcStub<Overseer>;
+       await renderChat(changed);
+-      expect(toggle()).toBeNull();
++      expect(toggle().disabled).toBe(true);
+       await renderChat({ ...changed, listModels: async () => [fastModel, slowModel] } as unknown as RpcStub<Overseer>);
+-      if (!toggle()) await chooseFast();
++      if (toggle().disabled) await chooseFast();
+       expect(toggle().getAttribute('aria-pressed')).toBe('false');
+     }
+   });
+@@ -497,7 +497,7 @@ describe('per-chat Fast requests', () => {
+         type: 'message', message: 'Synthetic previous turn' },
+     ] }) });
+     await renderChat(server.overseer, { selectedChatId: 2 });
+-    expect(toggle()).toBeNull();
++    expect(toggle().disabled).toBe(true);
+     await renderChat(server.overseer, { selectedChatId: 1 });
+     expect(toggle().getAttribute('aria-pressed')).toBe('true');
+   });
+diff --git a/packages/workshop-frontend/src/ChatInterface.tsx b/packages/workshop-frontend/src/ChatInterface.tsx
+index ce50d4d..d90d1c9 100644
+--- a/packages/workshop-frontend/src/ChatInterface.tsx
++++ b/packages/workshop-frontend/src/ChatInterface.tsx
+@@ -2889,6 +2889,7 @@ function ChatInterface({
+   const setFastMode = (key: string, enabled: boolean) => {
+     setFastModes(current => new Map(current).set(key, enabled));
+   };
++  useEffect(() => { setFastModes(current => new Map(current).set(newChatFastKey, false)); }, [effectiveNewChatBotId, newChatFastKey]);
+   useEffect(() => { setNewChatModel(undefined); }, [workspaceId]);
+   const [sidebarActiveTab, setSidebarActiveTab] = useState<
+     "chat" | "connections"
+@@ -4193,9 +4194,7 @@ function ChatInterface({
+   // Handle model change
+   const handleModelChange = (modelId: string | null | undefined) => {
+     setSelectedModel(modelId);
+-    if (!availableModels.some(model => model.id === modelId && model.supportsFast === true)) {
+-      setFastMode(selectedFastKey, false);
+-    }
++    setFastMode(selectedFastKey, false);
+     if (modelId !== undefined) persistSelectedModel(modelId);
+   };
+ 
+@@ -5615,9 +5614,7 @@ function ChatInterface({
+             onFastModeChange={enabled => setFastMode(newChatFastKey, enabled)}
+             onModelChange={modelId => {
+               setNewChatModel(modelId);
+-              if (!availableModels.some(model => model.id === modelId && model.supportsFast === true)) {
+-                setFastMode(newChatFastKey, false);
+-              }
++              setFastMode(newChatFastKey, false);
+               if (modelId !== undefined) persistSelectedModel(modelId);
+             }}
+             showThinkingTraces={showThinkingTraces}
+diff --git a/packages/workshop-frontend/src/features/bots/HomeBotFlow.test.tsx b/packages/workshop-frontend/src/features/bots/HomeBotFlow.test.tsx
+index 258ebdf..e25e56e 100644
+--- a/packages/workshop-frontend/src/features/bots/HomeBotFlow.test.tsx
++++ b/packages/workshop-frontend/src/features/bots/HomeBotFlow.test.tsx
+@@ -24,7 +24,7 @@ vi.mock('../../components/MeshBackground', () => ({ default: () => null }))
+ vi.mock('../../components/AppShell/HomeTaskSuggestions', () => ({ default: () => null }))
+ vi.mock('../chat/composer/ChatComposer', () => ({ ChatComposer: (props: {
+   seedText?: string; seedNonce?: number; draftStorageKey?: string; onModelChange: (id: string) => void;
+-  onSend: (message: string, model: string) => Promise<void>; blockedReason?: string;
++  onSend: (message: string, model: string, capsules?: undefined, attachments?: undefined, formats?: undefined, fastMode?: boolean) => Promise<void>; blockedReason?: string; fastMode?: boolean; onFastModeChange?: (value: boolean) => void;
+ }) => {
+   // Keep the real storage and restore behavior: account identity can arrive after Home renders.
+   const draft = useComposerDraft({ storageKey: props.draftStorageKey, logoSlot: '' })
+@@ -39,7 +39,8 @@ vi.mock('../chat/composer/ChatComposer', () => ({ ChatComposer: (props: {
+   useEffect(() => { if (props.seedNonce !== undefined) setTextRef.current(props.seedText ?? '') }, [props.seedNonce, props.seedText])
+   return <div><textarea aria-label="Prompt" value={text} onChange={event => setText(event.target.value)} />
+     <button onClick={() => props.onModelChange('model-one')}>Choose test model</button>
+-    <button onClick={() => { void props.onSend(text || 'First task', 'model-one').catch(cause => setError(cause.message)) }}>Send test message</button>
++    <button onClick={() => props.onFastModeChange?.(!props.fastMode)}>Toggle Fast</button>
++    <button onClick={() => { void props.onSend(text || 'First task', 'model-one', undefined, undefined, undefined, props.fastMode).catch(cause => setError(cause.message)) }}>Send test message</button>
+     {props.blockedReason && <p>{props.blockedReason}</p>}{error && <p role="alert">{error}</p>}</div>
+ } }))
+ import { HomePageContent } from '../../routes/index'
+@@ -71,7 +72,15 @@ describe('Home bot entry', () => {
+     expect(state.newGadget).not.toHaveBeenCalled()
+     expect(document.body.textContent).toContain('Choose a provider and model')
+     await click('Choose test model'); await click('Send test message')
+-    expect(state.newChat).toHaveBeenCalledWith('First task', 'model-one', undefined, undefined, undefined, undefined, { id: profile.id, revision: 3 })
++    expect(state.newChat).toHaveBeenCalledWith('First task', 'model-one', undefined, undefined, undefined, false, { id: profile.id, revision: 3 })
++  })
++
++  it('sends explicit Fast with the selected bot and resets it after switching assistants', async () => {
++    state.listModels.mockResolvedValue([{ type: 'agent', id: 'model-one', name: 'Model one', supportsFast: true }])
++    await render(); await click('Choose test model'); await click('Toggle Fast'); await click('Send test message')
++    expect(state.newChat).toHaveBeenLastCalledWith('First task', 'model-one', undefined, undefined, undefined, true, { id: profile.id, revision: 3 })
++    await render({}); await click('Send test message')
++    expect(state.newChat).toHaveBeenLastCalledWith('First task', 'model-one', undefined, undefined, undefined, false, undefined)
+   })
+ 
+   it('keeps a selected bot load failure visible and prevents a standard-agent fallback', async () => {
+@@ -81,7 +90,7 @@ describe('Home bot entry', () => {
+     expect(document.body.textContent).toContain('Could not load bots')
+     expect(document.querySelector<HTMLSelectElement>('[aria-label="Choose bot"]')?.value).toBe(profile.id)
+     await click('Retry bots'); await click('Send test message')
+-    expect(state.newChat).toHaveBeenCalledWith('First task', 'model-one', undefined, undefined, undefined, undefined, { id: profile.id, revision: 3 })
++    expect(state.newChat).toHaveBeenCalledWith('First task', 'model-one', undefined, undefined, undefined, false, { id: profile.id, revision: 3 })
+   })
+ 
+   it('keeps an archived bot deep link explicit and requires choosing another assistant before sending', async () => {
+@@ -93,7 +102,7 @@ describe('Home bot entry', () => {
+     expect(select.value).toBe(profile.id)
+     await act(async () => { select.value = ''; select.dispatchEvent(new Event('change', { bubbles: true })) })
+     await click('Send test message')
+-    expect(state.newChat).toHaveBeenCalledWith('First task', 'model-one', undefined, undefined, undefined, undefined, undefined)
++    expect(state.newChat).toHaveBeenCalledWith('First task', 'model-one', undefined, undefined, undefined, false, undefined)
+   })
+ 
+   it('inserts a starter into an empty composer while retaining a dirty draft on the next click', async () => {
+diff --git a/packages/workshop-frontend/src/features/chat/composer/ChatComposer.test.tsx b/packages/workshop-frontend/src/features/chat/composer/ChatComposer.test.tsx
+index ceaf3cc..2e6e4b3 100644
+--- a/packages/workshop-frontend/src/features/chat/composer/ChatComposer.test.tsx
++++ b/packages/workshop-frontend/src/features/chat/composer/ChatComposer.test.tsx
+@@ -60,20 +60,20 @@ describe("ChatComposer", () => {
+   });
+ 
+   it("offers Fast only for the current capable profile and sends the requested preference", async () => {
+-    const model = { type: "agent" as const, id: "fast-model", name: "Fast model", supportsFast: true };
++    const model = { type: "agent" as const, id: "fast-model", name: "Fast model", supportsFast: true, fastModeDescription: "Premium tier requires paid account access." };
+     const onSend = vi.fn(), onFastModeChange = vi.fn();
+     container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+     const render = async (fastMode = false, active = false, supported = true) => {
+       await act(async () => root!.render(<ChatComposer createCapsuleGatekeeper={async () => null}
+         getOverseer={() => ({} as RpcStub<Overseer>)} onSend={onSend} isAgentActive={active}
+-        models={[{ ...model, supportsFast: supported }]} selectedModel={{ id: model.id }} onModelChange={() => {}}
++        models={[{ ...model, supportsFast: supported, fastModeDescription: supported ? model.fastModeDescription : "Fast is not available for this model." }]} selectedModel={{ id: model.id }} onModelChange={() => {}}
+         fastMode={fastMode} onFastModeChange={onFastModeChange} seedText="Keep reasoning" seedNonce={1} />));
+     };
+     await render();
+     const toggle = container.querySelector<HTMLButtonElement>('[aria-label="Fast"]')!;
+     expect(toggle).not.toBeNull();
+     expect(toggle.getAttribute("aria-pressed")).toBe("false");
+-    expect(toggle.getAttribute("title")).toBe("May use more credits. Availability and delivered speed depend on your provider.");
++    expect(container.textContent).toContain("Premium tier requires paid account access.");
+     await act(async () => toggle.click());
+     expect(onFastModeChange).toHaveBeenCalledWith(true);
+     await render(true);
+@@ -84,7 +84,8 @@ describe("ChatComposer", () => {
+     await render(true, true);
+     expect(toggle.disabled).toBe(true);
+     await render(true, false, false);
+-    expect(container.querySelector('[aria-label="Fast"]')).toBeNull();
++    expect(container.querySelector<HTMLButtonElement>('[aria-label="Fast"]')!.disabled).toBe(true);
++    expect(container.textContent).toContain('Fast is not available');
+   });
+ 
+   it("blocks click and Enter until provider and model are chosen, preserving the draft", async () => {
+diff --git a/packages/workshop-frontend/src/features/chat/composer/ChatComposer.tsx b/packages/workshop-frontend/src/features/chat/composer/ChatComposer.tsx
+index ae75c89..57d8738 100644
+--- a/packages/workshop-frontend/src/features/chat/composer/ChatComposer.tsx
++++ b/packages/workshop-frontend/src/features/chat/composer/ChatComposer.tsx
+@@ -1,5 +1,6 @@
+ import {
+   useState,
++  useId,
+   useEffect,
+   useRef,
+   useMemo,
+@@ -458,7 +459,12 @@ export const ChatComposer = ({
+ 
+   const modelChoiceReady = selectedModel !== undefined &&
+     (!newChat || selectedModel === null || (!modelCatalog && models.some(model => model.id === selectedModel.id && model.provider)));
+-  const supportsFast = models.find(model => model.id === selectedModel?.id)?.supportsFast === true;
++  const fastDescriptionId = useId();
++  const fastProfile = models.find(model => model.id === selectedModel?.id);
++  const supportsFast = fastProfile?.supportsFast === true;
++  const fastDescription = fastProfile?.fastModeDescription ?? (supportsFast
++    ? 'Fast may cost more allowance or credits. Availability and delivered speed depend on your provider.'
++    : 'Fast is not available for the selected model or connection.');
+   const handleSend = async () => {
+     if (sendInFlightRef.current || isSending || isBlocked || isAgentActive || !modelChoiceReady) return;
+     setSendHiccup(null);
+@@ -908,6 +914,8 @@ export const ChatComposer = ({
+           onRemove={removeAttachment}
+         />
+ 
++        {onFastModeChange && <p id={fastDescriptionId} role="note" className="px-3 pb-2 text-xs text-kumo-subtle">{fastDescription}</p>}
++
+         {/* Footer row: connection/options left, model + send right */}
+         <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-1.5 px-3 pb-1.5 sm:flex sm:items-center sm:justify-between">
+           <div className="row-start-2 flex min-w-0 items-center gap-1.5 sm:flex-1">
+@@ -971,15 +979,16 @@ export const ChatComposer = ({
+                 onModelChange={onModelChange}
+               />
+               <div className="col-start-2 row-start-2 flex items-center gap-1.5">
+-              {supportsFast && onFastModeChange && <button
++              {onFastModeChange && <button
+                 type="button"
+                 aria-label="Fast"
+-                aria-pressed={fastMode}
+-                title="May use more credits. Availability and delivered speed depend on your provider."
+-                disabled={isAgentActive || isSending}
++                aria-describedby={fastDescriptionId}
++                aria-pressed={supportsFast && fastMode}
++                title={fastDescription}
++                disabled={!supportsFast || isAgentActive || isSending || modelCatalog !== undefined}
+                 onClick={() => onFastModeChange?.(!fastMode)}
+-                className={`h-8 rounded-lg px-2 text-xs focus-visible:outline focus-visible:outline-2 disabled:cursor-default disabled:opacity-50 ${fastMode ? "bg-kumo-tint text-kumo-default" : "text-kumo-subtle hover:bg-kumo-tint"}`}
+-              >Fast</button>}
++                className={`h-8 whitespace-nowrap rounded-lg px-2 text-xs focus-visible:outline focus-visible:outline-2 disabled:cursor-default disabled:opacity-50 ${fastMode ? "bg-kumo-tint text-kumo-default" : "text-kumo-subtle hover:bg-kumo-tint"}`}
++              >Fast{supportsFast ? " · premium" : ""}</button>}
+               {isAgentActive && onStop ? (
+                 <WorkshopIconButton
+                   onClick={onStop}
+diff --git a/packages/workshop-frontend/src/routes/index.tsx b/packages/workshop-frontend/src/routes/index.tsx
+index 0d66c03..4cf5ed3 100644
+--- a/packages/workshop-frontend/src/routes/index.tsx
++++ b/packages/workshop-frontend/src/routes/index.tsx
+@@ -50,6 +50,7 @@ export function HomePageContent({ prompt, bot }: HomeSearch) {
+ 
+   const [modelCatalogStatus, setModelCatalogStatus] = useState<"loading" | "ready" | "error">("loading");
+   const [modelCatalogRetry, setModelCatalogRetry] = useState(0);
++  const [fastChoice, setFastChoice] = useState(false);
+   const [models, setModels] = useState<AiChatAuthorInfo[]>([]);
+   const [selectedModel, setSelectedModel] = useState<string | null | undefined>(undefined);
+   // Bumped each time a task suggestion is picked; the composer re-seeds its text off the nonce.
+@@ -62,6 +63,9 @@ export function HomePageContent({ prompt, bot }: HomeSearch) {
+   const composerHost = useRef<HTMLDivElement>(null);
+   useEffect(() => { setSelectedBotId(bot); }, [bot]);
+   const effectiveBotId = preferredBotId(selectedBotId, botCatalog.mainBot?.botId, botTouched);
++  const supportsFast = models.some(model => model.id === selectedModel && model.supportsFast === true);
++  const fastMode = fastChoice && supportsFast && modelCatalogStatus === 'ready';
++  useEffect(() => { setFastChoice(false); }, [effectiveBotId, supportsFast, currentUser?.id]);
+   const selectedBot = botCatalog.status === "ready"
+     ? botCatalog.profiles.find(profile => profile.id === effectiveBotId && !profile.archived) : undefined;
+   let botBlockedReason: string | undefined;
+@@ -120,6 +124,7 @@ export function HomePageContent({ prompt, bot }: HomeSearch) {
+ 
+   const handleModelChange = useCallback((value: string | null | undefined) => {
+     setSelectedModel(value);
++    setFastChoice(false);
+     if (value !== undefined) persistSelectedModel(value);
+   }, []);
+ 
+@@ -148,10 +153,12 @@ export function HomePageContent({ prompt, bot }: HomeSearch) {
+       capsules?: CapsuleSpecifier[],
+       attachments?: ChatAttachmentHandle[],
+       formats?: MessageFormatRef[],
++      requestedFastMode = false,
+     ) => {
+       if (selectedModel === undefined || (modelId !== null && (modelCatalogStatus !== "ready" || !models.some(model => model.id === modelId)))) {
+         throw new Error("Choose a provider and model before starting a chat.");
+       }
++      if (requestedFastMode && !supportsFast) throw new Error('Fast is not available for the selected model.');
+       if (botBlockedReason) throw new Error(botBlockedReason);
+       const botSelection = botSelectionFromProfiles(effectiveBotId, botCatalog.profiles, botCatalog.status);
+       try {
+@@ -159,7 +166,7 @@ export function HomePageContent({ prompt, bot }: HomeSearch) {
+         const overseer = provisionalOverseerRef.current!.stub;
+         // Pipeline both independent calls in one batch, but settle both before releasing the stub.
+         const [chat, {id}] = await Promise.all([
+-          overseer.newChat(message, modelId, capsules, attachments, formats, undefined, botSelection),
++          overseer.newChat(message, modelId, capsules, attachments, formats, requestedFastMode, botSelection),
+           overseer.getMetadata(),
+         ]);
+         provisionalOverseerRef.current?.stub[Symbol.dispose]();
+@@ -184,7 +191,7 @@ export function HomePageContent({ prompt, bot }: HomeSearch) {
+         throw err;
+       }
+     },
+-    [ensureProvisionalGadget, navigate, toasts, selectedModel, models, modelCatalogStatus, effectiveBotId, botBlockedReason, botCatalog.profiles, botCatalog.status],
++    [ensureProvisionalGadget, navigate, toasts, selectedModel, models, modelCatalogStatus, effectiveBotId, botBlockedReason, botCatalog.profiles, botCatalog.status, supportsFast],
+   );
+ 
+   const getOverseer = useCallback((): RpcStub<Overseer> => {
+@@ -247,6 +254,8 @@ export function HomePageContent({ prompt, bot }: HomeSearch) {
+             ? { kind: "loading" } : { kind: "error", onRetry: () => setModelCatalogRetry(value => value + 1) }}
+           selectedModel={selectedModel == null ? selectedModel : { id: selectedModel }}
+           onModelChange={handleModelChange}
++          fastMode={fastMode}
++          onFastModeChange={setFastChoice}
+           newChat
+           offerFormats
+           autoFocus
+diff --git a/packages/workshop-shared/src/agent-settings.ts b/packages/workshop-shared/src/agent-settings.ts
+index 8d64f72..099510b 100644
+--- a/packages/workshop-shared/src/agent-settings.ts
++++ b/packages/workshop-shared/src/agent-settings.ts
+@@ -68,6 +68,7 @@ export type AgentProviderModel = {
+   /** Server-derived marker for the subscription connection's configured physical default. */
+   isDefault?: true;
+   supportsFast?: boolean;
++  fastModeDescription?: string;
+ };
+ export type AgentProviderCatalog = {
+   providers: { id: string; name: string; scope: AgentScope; models: AgentProviderModel[]; refreshedAt: string | null; error: string | null }[];
+diff --git a/packages/workshop-shared/src/api.ts b/packages/workshop-shared/src/api.ts
+index 62d91cd..b510307 100644
+--- a/packages/workshop-shared/src/api.ts
++++ b/packages/workshop-shared/src/api.ts
+@@ -3545,6 +3545,7 @@ export type AiChatAuthorInfo = {
+ 
+   /** Server-derived capability for the current subscription physical model. */
+   supportsFast?: boolean;
++  fastModeDescription?: string;
+ 
+   /** Server-derived connection label, captured with new model authors. */
+   providerDisplayName?: string;

@@ -1,0 +1,106 @@
+--- a/packages/workshop-backend/src/subscription-models.ts
++++ b/packages/workshop-backend/src/subscription-models.ts
+@@ -149,8 +149,10 @@
+     this.catalog = this.all.flatMap(connection => {
+       const metadata = connections?.find(row => row.id === connection.accountId)?.catalog;
+       const accountCatalog = metadata?.source === "provider-account-catalog";
++      const acceptsFastAdvertisement = (accountCatalog && connection.subscriptionProvider === "siwc") ||
++        (connection.ready === true && metadata?.source === "bundled-provider-catalog" && connection.subscriptionProvider === "codex");
+       const defaultChoice = { ...connection, modelId: catalog.id,
+-        ...(accountCatalog && connection.subscriptionProvider === "siwc" && metadata.models.find(model => model.id === catalog.id)?.supportsFast === true
++        ...(acceptsFastAdvertisement && metadata?.models.find(model => model.id === catalog.id)?.supportsFast === true
+           ? { supportsFast: true } : {}),
+         ...(metadata ? { catalogSource: metadata.source, entitlementVerified: metadata.entitlementVerified } : {}) };
+       const choices: SubscriptionModels["catalog"][number][] = accountCatalog ? [] : [defaultChoice];
+@@ -167,15 +169,15 @@
+           ? config.modelModes[id] : connection.mode;
+         const { isDefault, ...profile } = connection;
+         choices.push({ ...profile, id, modelId: physical.id, mode,
+-          ...(accountCatalog && connection.subscriptionProvider === "siwc" && physical.supportsFast === true
++          ...(acceptsFastAdvertisement && physical.supportsFast === true
+             ? { supportsFast: true } : {}),
+           name: config.modelDisplayNames && Object.hasOwn(config.modelDisplayNames, id)
+             ? config.modelDisplayNames[id] : physical.name,
+           catalogSource: metadata.source, entitlementVerified: metadata.entitlementVerified });
+       }
+       return choices;
+-    }).map(model => ({ ...model, ...fastModeInfo({ provider: 'openai', model: model.modelId, apiToken: '',
+-      transport: 'subscription', ...(model.subscriptionProvider ? { subscriptionProvider: model.subscriptionProvider } : {}) }, model.supportsFast === true) }));
++    }).map(({ supportsFast, ...model }) => ({ ...model, ...fastModeInfo({ provider: 'openai', model: model.modelId, apiToken: '',
++      transport: 'subscription', ...(model.subscriptionProvider ? { subscriptionProvider: model.subscriptionProvider } : {}) }, supportsFast === true) }));
+   }
+ 
+   get(id: string) {
+--- a/packages/workshop-backend/__tests__/subscription-fast.test.ts
++++ b/packages/workshop-backend/__tests__/subscription-fast.test.ts
+@@ -4,6 +4,7 @@
+ import { SubscriptionModels, readSubscriptionConnections } from '../src/subscription-models';
+ import { DEFAULT_ADMIN_CONFIG } from '../src/storage-schema/admin-settings-storage';
+ import { cloudAgentModel } from '../src/cloud-agent-model';
++import { normalizeChatFastMode } from '../src/user';
+ 
+ const userId = 'fast-catalog@example.invalid', defaultModel = 'gpt-6.1-sol';
+ const extraModel = Object.values(OPENAI_MODELS).find(model => model.id !== defaultModel)!;
+@@ -49,15 +50,25 @@
+     expect(reversed.resolve(extraId)?.profile.supportsFast).not.toBe(true);
+   });
+ 
+-  it('keeps unverified SIWC metadata disabled and derives Codex support with account caveats', async () => {
++  it('requires explicit bridge advertisement before Codex Fast is available', async () => {
+     const plain = [{ id: defaultModel, name: 'Default' }];
+     expect((await catalog(plain)).resolve(defaultModel)?.profile.supportsFast).not.toBe(true);
+     for (const [provider, legacy] of [['siwc', true]] as const) {
+       expect((await catalog([{ ...plain[0], supportsFast: true }], provider, legacy))
+         .resolve(defaultModel)?.profile.supportsFast).not.toBe(true);
+     }
+-    const codex = await catalog(plain, 'codex');
++    for (const models of [plain, [{ ...plain[0], supportsFast: false }]]) {
++      const oldBridge = await catalog(models, 'codex');
++      const record = oldBridge.resolve(defaultModel)!;
++      expect(record.profile.supportsFast).not.toBe(true);
++      expect(oldBridge.list()[0].supportsFast).not.toBe(true);
++      expect(oldBridge.providerCatalog().providers[0].models[0].supportsFast).not.toBe(true);
++      expect(() => normalizeChatFastMode(record, true)).toThrow(/bridge.*advertise/i);
++      expect(normalizeChatFastMode(record, false)).toBe(false);
++    }
++    const codex = await catalog([{ ...plain[0], supportsFast: true }], 'codex');
+     expect(codex.resolve(defaultModel)?.profile.supportsFast).toBe(true);
++    expect(normalizeChatFastMode(codex.resolve(defaultModel)!, true)).toBe(true);
+     expect(codex.resolve(defaultModel)?.profile.fastModeDescription).toContain('Account entitlement is unverified');
+     expect(codex.resolve(defaultModel)?.config.subscriptionProvider).toBe('codex');
+     const selected = deployment(plain);
+@@ -65,6 +76,21 @@
+     const noMetadata = new SubscriptionModels(selected, DEFAULT_ADMIN_CONFIG, userId,
+       await readSubscriptionConnections(selected));
+     expect(noMetadata.resolve(defaultModel)?.profile.supportsFast).not.toBe(true);
++  });
++
++  it('keeps a connection without a catalog Standard and scopes Codex flags to each model', async () => {
++    const selected = deployment([], 'codex');
++    delete (selected.CODEX_BRIDGE as Partial<typeof selected.CODEX_BRIDGE>).subscriptionModels;
++    const oldBridge = new SubscriptionModels(selected, DEFAULT_ADMIN_CONFIG, userId,
++      await readSubscriptionConnections(selected));
++    expect(oldBridge.resolve(defaultModel)?.profile.supportsFast).not.toBe(true);
++    const secondModel = 'gpt-6-astra';
++    const supported = await catalog([{ id: defaultModel, name: 'Default', supportsFast: false },
++      { id: secondModel, name: 'Second', supportsFast: true }], 'codex');
++    expect(supported.resolve(defaultModel)?.profile.supportsFast).not.toBe(true);
++    expect(supported.resolve(`subscription-model:owner:codex:${secondModel}`)?.profile.supportsFast).toBe(true);
++    const unsupported = await catalog([{ id: 'future-unverified-model', name: 'Future', supportsFast: true }], 'codex');
++    expect(unsupported.resolve('subscription-model:owner:codex:future-unverified-model')?.profile.supportsFast).not.toBe(true);
+   });
+ 
+   it('rejects non-boolean Fast metadata at the private boundary', async () => {
+--- a/packages/workshop-backend/__tests__/subscription-models.test.ts
++++ b/packages/workshop-backend/__tests__/subscription-models.test.ts
+@@ -148,8 +148,8 @@
+       });
+       await admin.setSubscriptionModelEnabled(true, ACCOUNT_A);
+       const active = new SubscriptionModels(fixture.deployment, admin.getAdminConfig(), USER, CONNECTIONS);
+-      expect(active.resolve(A)?.profile).toEqual({ type: "agent", supportsFast: true,
+-        fastModeDescription: "Codex Fast uses 2.5× included allowance or 2× purchased credits/PAYG. Account entitlement is unverified; your plan or administrator must allow Fast.", id: A, name: "Research writer", isDefault: true, providerDisplayName: "Research", provider: { id: `subscription:${ACCOUNT_A}`, name: "Research", source: "Subscription" } });
++      expect(active.resolve(A)?.profile).toEqual({ type: "agent",
++        fastModeDescription: "Fast is not available. This inference bridge does not advertise Codex Fast. Update the bridge before enabling Fast.", id: A, name: "Research writer", isDefault: true, providerDisplayName: "Research", provider: { id: `subscription:${ACCOUNT_A}`, name: "Research", source: "Subscription" } });
+       expect(active.resolve(A)?.config).toEqual({ ...CONFIG, subscriptionAccountId: ACCOUNT_A, subscriptionProvider: "codex" });
+       await expect(admin.setModelDisplayName("unknown-model", "Other")).rejects.toThrow("No such");
+       await admin.setModelDisplayName(A, null);
