@@ -1,0 +1,35 @@
+--- a/packages/workshop-backend/src/overseer.ts
++++ b/packages/workshop-backend/src/overseer.ts
+@@ -11614,10 +11614,10 @@
+   async newChat(initialMessage: string | SlashCommandRequest, chosenModelId: string | null,
+                 capsules?: CapsuleSpecifier[], attachments?: ChatAttachmentHandle[],
+                 formats?: MessageFormatRef[], fastMode?: boolean, bot?: BotSelection): Promise<number> {
+-    let userMeta = await retryOnDoReset(
+-        () => this.#clientUser.getChatContext(chosenModelId, fastMode), this.impl.logger);
+-    const snapshot = bot ? await retryOnDoReset(
+-        () => this.#clientUser.getBotForChat(bot), this.impl.logger) : undefined;
++    const [userMeta, snapshot] = await Promise.all([
++      retryOnDoReset(() => this.#clientUser.getChatContext(chosenModelId, fastMode), this.impl.logger),
++      bot ? retryOnDoReset(() => this.#clientUser.getBotForChat(bot), this.impl.logger) : undefined,
++    ]);
+     return this.impl.newChat(this.#clientUser, userMeta, initialMessage, capsules, attachments,
+                              undefined, undefined, formats, fastMode, snapshot);
+   }
+--- a/packages/workshop-backend/src/agent.ts
++++ b/packages/workshop-backend/src/agent.ts
+@@ -3050,11 +3050,12 @@
+ 
+     // Named in the prompt because the request that should trigger them ("make me a doc") may
+     // not look trigger the agent to browse blueprints.
+-    let standardFormats = await hooks.describeStandardFormats();
+-
+     // Build connectable-vendors section. We only list vendor names here; the agent fetches a
+     // vendor's resource URL patterns on demand via listConnectableResources.
+-    let connectableVendors = await hooks.listConnectableVendors();
++    const [standardFormats, connectableVendors] = await Promise.all([
++      hooks.describeStandardFormats(),
++      hooks.listConnectableVendors(),
++    ]);
+     let systemPromptConnections: string;
+     if (connectableVendors.length == 0) {
+       systemPromptConnections = "";

@@ -114,6 +114,7 @@ try {
           '__tests__/site-launch.test.ts', '__tests__/site-launch-agent.test.ts',
           '__tests__/opencode-loop.test.ts', '__tests__/agent-retry.test.ts',
           '__tests__/bot-profiles.test.ts', '__tests__/bot-chat.test.ts',
+          '__tests__/startup-concurrency.test.ts',
           '__tests__/native-memory-contract.test.ts',
           '__tests__/shared-memory-profiles.test.ts', '__tests__/shared-memory-queue.test.ts',
           '__tests__/lossless-context.test.ts', '__tests__/context-preservation.test.ts',

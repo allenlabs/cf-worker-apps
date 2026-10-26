@@ -8,6 +8,7 @@ import server from '../src/server';
 import { SiteLaunchGateway } from '../src/site-launch';
 import { LoginConnectCallbackImpl } from '../src/auth/login-flow';
 import { hashPresentedSecret } from '../src/connect-handoff';
+import { openFakeOverseer } from './fixtures';
 import { DEFAULT_ADMIN_CONFIG } from '../src/storage-schema/admin-settings-storage';
 import { getSiteLaunchErrorCode, type PublicApi } from '@gadgets/workshop-shared/api';
 import { newWebSocketRpcSession } from 'capnweb';
@@ -29,6 +30,20 @@ async function issue(user: any, selected = site, actor = principal) {
   return user.issueSiteLaunch({ principal: actor, site: selected, parentOrigin });
 }
 describe('verified per-user site launch', () => {
+  it('preserves supplied site-context accessors and refuses use collaborators in fixtures', async () => {
+    await runInDurableObject(env.TEST_OVERSEER.getByName(`site-fixture-guard-${crypto.randomUUID()}`), async (_overseer, state) => {
+      const storage = makeOverseerStorage(state.storage);
+      storage.siteContext.put(site);
+      const accessor = storage.siteContext;
+      for (const supplied of [storage, Object.create({ siteContext: accessor }),
+        Object.defineProperty({}, 'siteContext', { get: () => accessor })]) {
+        await expect(openFakeOverseer(supplied, { role: 'use' })).rejects.toThrow('access');
+        expect(supplied.siteContext).toBe(accessor);
+        expect(supplied.siteContext.get()).toEqual(site);
+      }
+    });
+  });
+
   it('persists provenance per session without changing old sessions', async () => {
     await withUser(async user => {
       const old = await user.loginOrCreateViaGatekeeper(principal.email, true);
