@@ -1,0 +1,13 @@
+--- a/packages/workshop-backend/src/overseer.ts
++++ b/packages/workshop-backend/src/overseer.ts
+@@ -6598,8 +6598,8 @@
+     const store = this.chatTextStore(chatId);
+     const required = store.get(`chat-text:${chatId}:${artifactId}:permissions`);
+     if (required === undefined) throw new Error('Text artifact unavailable: access provenance is missing.');
+-    if (required !== undefined) {
+-      if (!Array.isArray(required) || required.some(id => typeof id !== 'string')) throw new Error('Text artifact access provenance is corrupt.');
++    if (!Array.isArray(required) || required.some(id => typeof id !== 'string')) throw new Error('Text artifact access provenance is corrupt.');
++    if (required.length > 0) {
+       const resources = initiator ? await this.getAgentResources(initiator) : [];
+       if (required.some(id => !resources.some(resource => resource.id === id && resource.enabled))) {
+         throw new Error('Access to this archived result is no longer available. The original remains stored.');

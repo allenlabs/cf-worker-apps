@@ -27,14 +27,16 @@ Gemini's [Priority inference guide](https://ai.google.dev/gemini-api/docs/genera
 
 No live inference latency, account entitlement, billing rate or hosted deployment is verified by synthetic tests. This change does not update subscriptions, permissions, credentials, accounts or running Workers.
 
+Codex Fast requires both the updated OS and the separately managed inference bridge from `apps/cloud-agent/workers/pi/inference-entrypoint.js`. An older SIWC-only bridge rejects Codex Priority. The OS wrapper does not deploy that bridge, so their adoption must be coordinated before enabling the feature in a running installation. The app never retries a rejected selection through a different provider or billing route.
+
 ## Verification
 
-The final reviewed overlay composes against pinned upstream `4358072f8cb1bc9ddfb6ee11122e194c76cd71e0`. Its prepared source fingerprint is `20563cc26a63`.
+The final reviewed overlay composes against pinned upstream `4358072f8cb1bc9ddfb6ee11122e194c76cd71e0`. Its prepared source fingerprint is `ef398ee25a2d`. The final check includes main `6f3a3e8bff8d69ac77239eb3023e878125ea570a`, preserving its archive-resource lookup change and testing both changes together.
 
 | Check | Result |
 | --- | --- |
 | OS wrapper tests with optional compiler and CLI checks enabled | 132 passed, 0 failed, 0 skipped |
-| Generated backend suites selected by `build --check` | 814 passed across 46 files |
+| Generated backend suites selected by `build --check` | 823 passed across 47 files |
 | Generated frontend suites selected by `build --check` | 516 passed across 33 files |
 | MCP account OAuth regression | 35 passed |
 | Backend and frontend `tsc --noEmit`; both wrapper/runtime package type checks | Passed |

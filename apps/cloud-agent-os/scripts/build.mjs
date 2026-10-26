@@ -118,6 +118,7 @@ try {
           '__tests__/native-memory-contract.test.ts',
           '__tests__/shared-memory-profiles.test.ts', '__tests__/shared-memory-queue.test.ts',
           '__tests__/lossless-context.test.ts', '__tests__/context-preservation.test.ts',
+          '__tests__/archive-access.test.ts',
           '__tests__/recoverable-tools.test.ts', '__tests__/archived-replay.test.ts',
           '__tests__/code-output.test.ts', '__tests__/web-fetch.test.ts',
           '__tests__/git-binding.test.ts',
