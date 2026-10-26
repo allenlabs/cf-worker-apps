@@ -159,10 +159,20 @@ try {
   for (const provider of ["codex", "auto"]) {
     await mf.setOptions(convertV4MiniflareOptions({ workers: [client, { ...server, bindings: { ...server.bindings, INFERENCE_BRIDGE_PROVIDER: provider } }] }));
     await invoke({ configure: {} });
+    const standard = await invoke({ bridge: wire({}) });
+    assert.equal(standard.data.result.stopReason, "stop");
+    const ordinary = structuredClone(lastNative);
+    const priority = await invoke({ bridge: wire({ options: { serviceTier: "priority" } }) });
+    assert.equal(priority.status, 200, JSON.stringify(priority));
+    assert.equal(priority.data.result.stopReason, "stop");
+    assert.equal(lastNative.service_tier, "priority", "Codex Fast reaches the actual authenticated serializer");
+    const { service_tier, ...unchanged } = lastNative;
+    assert.deepEqual(unchanged, ordinary, "Codex Fast changes no reasoning or content fields");
+    await invoke({ configure: {} });
     const before = calls;
-    const rejected = await invoke({ admission: wire({ options: { serviceTier: "priority" } }) });
+    const rejected = await invoke({ admission: wire({ modelId: "future-unverified-model", options: { serviceTier: "priority" } }) });
     assert.equal(rejected.status, 400);
-    assert.equal(rejected.data.error, "inference_bridge_service_tier_unavailable", "priority is rejected for resolved Codex before bearer access");
+    assert.equal(rejected.data.error, "inference_bridge_service_tier_unavailable", "Codex rejects unverified models before bearer access");
     assert.equal(calls, before);
     assert.deepEqual((await invoke({ accessCalls: true })).data, { codex: 0, siwc: 0 });
   }
@@ -249,7 +259,7 @@ try {
     assert(lastNative.input.some(item => item.type === "function_call_output" && item.output.includes("READ_ONLY_OK")));
     assert.deepEqual((await invoke({ diagnostics: true })).data, [], "tier metadata adds no success diagnostics");
   }
-  console.log("inference bridge Fast checks passed: strict priority and SIWC-only transport, exact installed SDK serialization, Standard parity, terminal tier allowlist, requested/actual separation, model independence, spoof/malformed/conflict refusal, tool results and retry isolation");
+  console.log("inference bridge Fast checks passed: strict priority and allowlisted Codex/SIWC transport, exact installed SDK serialization, Standard parity, terminal tier allowlist, requested/actual separation, model independence, spoof/malformed/conflict refusal, tool results and retry isolation");
   expectedProvider = "codex";
   for (const provider of ["", "unknown", "openai", "Codex"]) {
     await mf.setOptions(convertV4MiniflareOptions({ workers: [client, { ...server, bindings: { ...server.bindings, INFERENCE_BRIDGE_PROVIDER: provider } }] }));

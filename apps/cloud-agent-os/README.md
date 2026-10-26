@@ -172,12 +172,15 @@ models become available independently of chat history. Each subscription lists i
 default once under the actual model name, with a star labeled **Default model**; administrator model
 names still take precedence. The star does not choose a provider or model automatically.
 
-**Fast** is a per-chat choice and starts off. The control appears only when the selected SIWC
-account's model catalog advertises Fast support. Changing to an unsupported model clears the choice.
-The next accepted send or retry saves the choice; a running turn retains its own snapshot, including
-after a restart. Fast requests `service_tier: "priority"` without changing reasoning. The provider can
-serve another tier. Terminal `responseServiceTier` metadata records the provider's actual tier when
-reported. Fast can consume more allowance or credits; the rate depends on the plan.
+**Fast** is an explicit per-chat choice and starts off. Home, bot entry and workspace composers
+show the selected provider's support, premium pricing or usage, and account prerequisites.
+Supported native OpenAI, Anthropic and Gemini adapters request their documented priority/speed tier.
+SIWC uses current account model metadata; supported Codex subscription models show an account-entitlement caveat.
+Unsupported models and custom compatible endpoints show a disabled control with the reason.
+Accepted turns persist the choice for chat reopening and an immutable active snapshot for restart;
+model or bot changes clear draft opt-in. Fast never reduces reasoning effort. Omission retains the
+provider's normal project/account default; delivered latency and tier remain provider-controlled.
+See the [provider matrix and validation limits](docs/FAST_MODE.md).
 
 Opening the subscription panel reads saved state without querying every provider. Row refresh and
 bounded refresh-all reuse the existing account-scoped cache. A failed lookup retains the last

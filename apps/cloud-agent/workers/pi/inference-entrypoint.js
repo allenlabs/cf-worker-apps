@@ -197,7 +197,9 @@ export class CloudAgentInference extends WorkerEntrypoint {
       if (!["siwc", "codex"].includes(status.provider)) fail("inference_bridge_account_unavailable");
       configured.provider = status.provider;
     }
-    if (input.options.serviceTier !== undefined && configured.provider !== "siwc") fail("inference_bridge_service_tier_unavailable");
+    if (input.options.serviceTier !== undefined && configured.provider === "codex" &&
+        !["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"].includes(input.modelId ?? configured.modelId))
+      fail("inference_bridge_service_tier_unavailable");
     if (configured.provider === "codex" ? status.codexInferenceReady !== true : status.siwcInferenceReady !== true) fail("inference_bridge_account_unavailable");
     const models = createModels();
     const observed = { provider: configured.provider, credentialAccessFailed: false, fetchAttempted: false, responseReceived: false };
@@ -282,7 +284,7 @@ export class CloudAgentInference extends WorkerEntrypoint {
       },
       onPayload: body => {
         // streamSimple in the pinned SDK drops serviceTier before building the request.
-        if (configured.provider === "siwc" && input.options.serviceTier === "priority") body.service_tier = "priority";
+        if (input.options.serviceTier === "priority") body.service_tier = "priority";
         // Keep the exact provider JSON only for this call; native encoding forwards the original fetch arguments.
         if (configured.provider === "codex" && configured.requestEncoding === "identity") identityBody = JSON.stringify(body);
         try { observed.payload = codexPayloadShape(body); } catch { /* Observation cannot change payload. */ }
