@@ -1,0 +1,235 @@
+diff --git a/packages/workshop-frontend/src/features/chat/composer/ChatComposer.tsx b/packages/workshop-frontend/src/features/chat/composer/ChatComposer.tsx
+index 57d8738..3e8fdc7 100644
+--- a/packages/workshop-frontend/src/features/chat/composer/ChatComposer.tsx
++++ b/packages/workshop-frontend/src/features/chat/composer/ChatComposer.tsx
+@@ -9,7 +9,7 @@ import {
+   type ReactNode,
+   type SetStateAction,
+ } from "react";
+-import { DropdownMenu, useKumoToastManager } from "@cloudflare/kumo";
++import { DropdownMenu, Switch, useKumoToastManager } from "@cloudflare/kumo";
+ import { Brain, DotsThree, File as FileIcon } from "@phosphor-icons/react";
+ import { RpcStub } from "capnweb";
+ import type {
+@@ -979,16 +979,18 @@ export const ChatComposer = ({
+                 onModelChange={onModelChange}
+               />
+               <div className="col-start-2 row-start-2 flex items-center gap-1.5">
+-              {onFastModeChange && <button
+-                type="button"
++              {onFastModeChange && <Switch
++                size="sm"
++                label={<span className="whitespace-nowrap text-xs text-kumo-subtle">
++                  Fast<span aria-hidden="true"> · {supportsFast && fastMode ? "On" : "Off"}{supportsFast ? " · premium" : ""}</span>
++                </span>}
+                 aria-label="Fast"
+                 aria-describedby={fastDescriptionId}
+-                aria-pressed={supportsFast && fastMode}
++                checked={supportsFast && fastMode}
+                 title={fastDescription}
+                 disabled={!supportsFast || isAgentActive || isSending || modelCatalog !== undefined}
+-                onClick={() => onFastModeChange?.(!fastMode)}
+-                className={`h-8 whitespace-nowrap rounded-lg px-2 text-xs focus-visible:outline focus-visible:outline-2 disabled:cursor-default disabled:opacity-50 ${fastMode ? "bg-kumo-tint text-kumo-default" : "text-kumo-subtle hover:bg-kumo-tint"}`}
+-              >Fast{supportsFast ? " · premium" : ""}</button>}
++                onCheckedChange={enabled => onFastModeChange(enabled)}
++              />}
+               {isAgentActive && onStop ? (
+                 <WorkshopIconButton
+                   onClick={onStop}
+diff --git a/packages/workshop-frontend/src/features/chat/composer/ChatComposer.test.tsx b/packages/workshop-frontend/src/features/chat/composer/ChatComposer.test.tsx
+index 2e6e4b3..d68d23c 100644
+--- a/packages/workshop-frontend/src/features/chat/composer/ChatComposer.test.tsx
++++ b/packages/workshop-frontend/src/features/chat/composer/ChatComposer.test.tsx
+@@ -59,33 +59,46 @@ describe("ChatComposer", () => {
+     testState.gatekeeperModalProps = undefined;
+   });
+ 
+-  it("offers Fast only for the current capable profile and sends the requested preference", async () => {
++  it("shows an explicit Fast switch and sends the requested preference", async () => {
+     const model = { type: "agent" as const, id: "fast-model", name: "Fast model", supportsFast: true, fastModeDescription: "Premium tier requires paid account access." };
+     const onSend = vi.fn(), onFastModeChange = vi.fn();
+     container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+-    const render = async (fastMode = false, active = false, supported = true) => {
++    const render = async (fastMode = false, active = false, supported = true,
++      modelCatalog?: Parameters<typeof ChatComposer>[0]["modelCatalog"]) => {
+       await act(async () => root!.render(<ChatComposer createCapsuleGatekeeper={async () => null}
+         getOverseer={() => ({} as RpcStub<Overseer>)} onSend={onSend} isAgentActive={active}
+         models={[{ ...model, supportsFast: supported, fastModeDescription: supported ? model.fastModeDescription : "Fast is not available for this model." }]} selectedModel={{ id: model.id }} onModelChange={() => {}}
+-        fastMode={fastMode} onFastModeChange={onFastModeChange} seedText="Keep reasoning" seedNonce={1} />));
++        fastMode={fastMode} onFastModeChange={onFastModeChange} modelCatalog={modelCatalog} seedText="Keep reasoning" seedNonce={1} />));
+     };
+     await render();
+     const toggle = container.querySelector<HTMLButtonElement>('[aria-label="Fast"]')!;
+     expect(toggle).not.toBeNull();
+-    expect(toggle.getAttribute("aria-pressed")).toBe("false");
++    expect(toggle.getAttribute("role")).toBe("switch");
++    expect(toggle.getAttribute("aria-checked")).toBe("false");
++    expect(container.textContent).toContain("Fast · Off · premium");
++    expect(document.getElementById(toggle.getAttribute("aria-describedby")!)?.textContent).toBe(model.fastModeDescription);
+     expect(container.textContent).toContain("Premium tier requires paid account access.");
+-    await act(async () => toggle.click());
++    // Match existing Switch tests: jsdom lacks the PointerEvent used to activate its checkbox.
++    const input = toggle.nextElementSibling;
++    if (!(input instanceof HTMLInputElement)) throw new Error("No checkbox behind Fast switch");
++    await act(async () => input.click());
+     expect(onFastModeChange).toHaveBeenCalledWith(true);
+     await render(true);
+-    expect(toggle.getAttribute("aria-pressed")).toBe("true");
++    expect(toggle.getAttribute("aria-checked")).toBe("true");
++    expect(container.textContent).toContain("Fast · On · premium");
+     const textarea = container.querySelector<HTMLTextAreaElement>('[role="combobox"]')!;
+     await act(async () => textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+     expect(onSend).toHaveBeenCalledWith("Keep reasoning", model.id, undefined, undefined, undefined, true);
+     await render(true, true);
+     expect(toggle.disabled).toBe(true);
++    await render(true, false, true, { kind: "loading" });
++    expect(toggle.disabled).toBe(true);
++    expect(toggle.getAttribute("aria-checked")).toBe("true");
+     await render(true, false, false);
+     expect(container.querySelector<HTMLButtonElement>('[aria-label="Fast"]')!.disabled).toBe(true);
+     expect(container.textContent).toContain('Fast is not available');
++    expect(toggle.getAttribute("aria-checked")).toBe("false");
++    expect(container.textContent).toContain("Fast · Off");
+   });
+ 
+   it("blocks click and Enter until provider and model are chosen, preserving the draft", async () => {
+diff --git a/packages/workshop-frontend/src/ChatInterface.actions.test.tsx b/packages/workshop-frontend/src/ChatInterface.actions.test.tsx
+index 77f5b26..a0cfcb4 100644
+--- a/packages/workshop-frontend/src/ChatInterface.actions.test.tsx
++++ b/packages/workshop-frontend/src/ChatInterface.actions.test.tsx
+@@ -371,11 +371,17 @@ describe('per-chat Fast requests', () => {
+     return { ...server, ...events, sendChatMessage, retryAgent, newChat };
+   }
+   const toggle = () => document.querySelector<HTMLButtonElement>('[aria-label="Fast"]')!;
++  // Match existing Switch tests: jsdom lacks the PointerEvent used to activate its checkbox.
++  const clickFast = () => {
++    const input = toggle().nextElementSibling;
++    if (!(input instanceof HTMLInputElement)) throw new Error('No checkbox behind Fast switch');
++    input.click();
++  };
+ 
+   it('restores saved Fast metadata and passes it on send and retry', async () => {
+     const server = serverFor();
+     await renderChat(server.overseer, { selectedChatId: 1 });
+-    expect(toggle()?.getAttribute('aria-pressed')).toBe('true');
++    expect(toggle()?.getAttribute('aria-checked')).toBe('true');
+     await sendFromComposer('Continue this chat');
+     expect(server.sendChatMessage).toHaveBeenCalledWith(1, 'Continue this chat', fastModel.id, undefined, undefined, undefined, true);
+     server.emitMessage({ chatId: 1, sequence: 1, timestamp: new Date(), author: fastModel,
+@@ -389,18 +395,18 @@ describe('per-chat Fast requests', () => {
+   it('keeps local unsent preferences in their chat and workspace and restores metadata after remount', async () => {
+     const server = serverFor([fastChat, { ...fastChat, id: 2, fastMode: false }]);
+     await renderChat(server.overseer, { selectedChatId: 1 });
+-    await act(async () => toggle().click());
+-    expect(toggle().getAttribute('aria-pressed')).toBe('false');
++    await act(async () => clickFast());
++    expect(toggle().getAttribute('aria-checked')).toBe('false');
+     await renderChat(server.overseer, { selectedChatId: 2 });
+-    expect(toggle().getAttribute('aria-pressed')).toBe('false');
+-    await act(async () => toggle().click());
++    expect(toggle().getAttribute('aria-checked')).toBe('false');
++    await act(async () => clickFast());
+     await renderChat(server.overseer, { selectedChatId: 1 });
+-    expect(toggle().getAttribute('aria-pressed')).toBe('false');
++    expect(toggle().getAttribute('aria-checked')).toBe('false');
+     await renderChat(server.overseer, { selectedChatId: 1, workspaceId: 'other-workspace' });
+-    expect(toggle().getAttribute('aria-pressed')).toBe('true');
++    expect(toggle().getAttribute('aria-checked')).toBe('true');
+     testRoot.cleanup();
+     await renderChat(server.overseer, { selectedChatId: 1 });
+-    expect(toggle().getAttribute('aria-pressed')).toBe('true');
++    expect(toggle().getAttribute('aria-checked')).toBe('true');
+   });
+ 
+   it('defaults new chats off and clears Fast when selecting an unsupported model or no agent', async () => {
+@@ -414,8 +420,8 @@ describe('per-chat Fast requests', () => {
+     expect(server.sendChatMessage).toHaveBeenCalledWith(1, 'Use standard', slowModel.id, undefined, undefined, undefined, false);
+     await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Select model"]')!.click());
+     await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent?.includes('Fast model'))!.click());
+-    expect(toggle().getAttribute('aria-pressed')).toBe('false');
+-    await act(async () => toggle().click());
++    expect(toggle().getAttribute('aria-checked')).toBe('false');
++    await act(async () => clickFast());
+     await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Select provider"]')!.click());
+     await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent === 'No agent')!.click());
+     expect(toggle().disabled).toBe(true);
+@@ -426,8 +432,8 @@ describe('per-chat Fast requests', () => {
+     await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent?.includes('Subscription'))!.click());
+     await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Select model"]')!.click());
+     await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent?.includes('Fast model'))!.click());
+-    expect(toggle().getAttribute('aria-pressed')).toBe('false');
+-    await act(async () => toggle().click());
++    expect(toggle().getAttribute('aria-checked')).toBe('false');
++    await act(async () => clickFast());
+     await sendFromComposer('New request');
+     expect(server.newChat).toHaveBeenCalledWith('New request', fastModel.id, undefined, undefined, undefined, true);
+     expect(toggle().disabled).toBe(true);
+@@ -436,18 +442,18 @@ describe('per-chat Fast requests', () => {
+   it('clears Fast when a refreshed model loses capability and does not reactivate it on a later refresh', async () => {
+     const server = serverFor();
+     await renderChat(server.overseer, { selectedChatId: 1 });
+-    expect(toggle().getAttribute('aria-pressed')).toBe('true');
++    expect(toggle().getAttribute('aria-checked')).toBe('true');
+     const refreshed = { ...server.overseer, listModels: async () => [{ ...fastModel, supportsFast: false }, slowModel] } as unknown as RpcStub<Overseer>;
+     await renderChat(refreshed, { selectedChatId: 1 });
+     expect(toggle().disabled).toBe(true);
+     await renderChat({ ...refreshed, listModels: async () => [fastModel, slowModel] } as unknown as RpcStub<Overseer>, { selectedChatId: 1 });
+-    expect(toggle().getAttribute('aria-pressed')).toBe('false');
+-    await act(async () => toggle().click());
++    expect(toggle().getAttribute('aria-checked')).toBe('false');
++    await act(async () => clickFast());
+     const emptyCatalog = { ...refreshed, listModels: async () => [] } as unknown as RpcStub<Overseer>;
+     await renderChat(emptyCatalog, { selectedChatId: 1 });
+     expect(toggle().disabled).toBe(true);
+     await renderChat({ ...emptyCatalog, listModels: async () => [fastModel, slowModel] } as unknown as RpcStub<Overseer>, { selectedChatId: 1 });
+-    expect(toggle().getAttribute('aria-pressed')).toBe('false');
++    expect(toggle().getAttribute('aria-checked')).toBe('false');
+   });
+ 
+   it('clears a new chat draft Fast preference when a ready catalog loses capability or removes the model', async () => {
+@@ -461,14 +467,14 @@ describe('per-chat Fast requests', () => {
+     };
+     await chooseFast();
+     for (const models of [[{ ...fastModel, supportsFast: false }, slowModel], []]) {
+-      await act(async () => toggle().click());
+-      expect(toggle().getAttribute('aria-pressed')).toBe('true');
++      await act(async () => clickFast());
++      expect(toggle().getAttribute('aria-checked')).toBe('true');
+       const changed = { ...server.overseer, listModels: async () => models } as unknown as RpcStub<Overseer>;
+       await renderChat(changed);
+       expect(toggle().disabled).toBe(true);
+       await renderChat({ ...changed, listModels: async () => [fastModel, slowModel] } as unknown as RpcStub<Overseer>);
+       if (toggle().disabled) await chooseFast();
+-      expect(toggle().getAttribute('aria-pressed')).toBe('false');
++      expect(toggle().getAttribute('aria-checked')).toBe('false');
+     }
+   });
+ 
+@@ -479,15 +485,15 @@ describe('per-chat Fast requests', () => {
+     await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent?.includes('Subscription'))!.click());
+     await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Select model"]')!.click());
+     await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent?.includes('Fast model'))!.click());
+-    await act(async () => toggle().click());
++    await act(async () => clickFast());
+     let reject!: (error: Error) => void;
+     const pending = new Promise<AiChatAuthorInfo[]>((_resolve, rejectPromise) => { reject = rejectPromise; });
+     await renderChat({ ...server.overseer, listModels: () => pending } as unknown as RpcStub<Overseer>);
+-    expect(toggle().getAttribute('aria-pressed')).toBe('true');
++    expect(toggle().getAttribute('aria-checked')).toBe('true');
+     await act(async () => reject(new Error('Synthetic catalog unavailable')));
+-    expect(toggle().getAttribute('aria-pressed')).toBe('true');
++    expect(toggle().getAttribute('aria-checked')).toBe('true');
+     await renderChat({ ...server.overseer, listModels: async () => [fastModel, slowModel] } as unknown as RpcStub<Overseer>);
+-    expect(toggle().getAttribute('aria-pressed')).toBe('true');
++    expect(toggle().getAttribute('aria-checked')).toBe('true');
+   });
+ 
+   it('restores saved Fast after navigating from a chat with an unsupported model', async () => {
+@@ -499,6 +505,6 @@ describe('per-chat Fast requests', () => {
+     await renderChat(server.overseer, { selectedChatId: 2 });
+     expect(toggle().disabled).toBe(true);
+     await renderChat(server.overseer, { selectedChatId: 1 });
+-    expect(toggle().getAttribute('aria-pressed')).toBe('true');
++    expect(toggle().getAttribute('aria-checked')).toBe('true');
+   });
+ });
